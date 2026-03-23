@@ -29,7 +29,7 @@ Designed for speed, autonomy, and real-world usability.
 ## ⚡ Quick Start
 
 ```bash
-git clone https://github.com/FatihMakes
+git clone github.com/FatihMakes/Mark-XXX.git
 cd mark-xxx
 python setup.py
 python main.py
