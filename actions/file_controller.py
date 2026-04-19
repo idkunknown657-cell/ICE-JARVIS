@@ -1,32 +1,83 @@
-# actions/file_controller.py
-# File management — create, delete, move, rename, list, find, organize
-
+import os
 import shutil
+import platform
 from pathlib import Path
 from datetime import datetime
-import send2trash
+
+try:
+    import send2trash
+    _SEND2TRASH = True
+except ImportError:
+    _SEND2TRASH = False
+
+_OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+
+_SAFE_ROOTS: list[Path] = [
+    Path.home(),
+]
+
+def _is_safe_path(target: Path) -> bool:
+    """Verilen path _SAFE_ROOTS içinde mi? Değilse işlemi reddet."""
+    try:
+        resolved = target.resolve()
+        return any(
+            resolved == root.resolve() or resolved.is_relative_to(root.resolve())
+            for root in _SAFE_ROOTS
+        )
+    except Exception:
+        return False
 
 def _get_desktop() -> Path:
-    """Returns desktop path — works on Windows, Mac, Linux."""
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_DESKTOP_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
     return Path.home() / "Desktop"
 
-
 def _get_downloads() -> Path:
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_DOWNLOAD_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
     return Path.home() / "Downloads"
+
+def _get_documents() -> Path:
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_DOCUMENTS_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
+    return Path.home() / "Documents"
+
+def _get_pictures() -> Path:
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_PICTURES_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
+    return Path.home() / "Pictures"
+
+def _get_music() -> Path:
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_MUSIC_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
+    return Path.home() / "Music"
+
+def _get_videos() -> Path:
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_VIDEOS_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
+    return Path.home() / "Videos"
 
 
 def _resolve_path(raw: str) -> Path:
-    """
-    Resolves a path from user input.
-    Supports shortcuts: 'desktop', 'downloads', 'documents', 'home'
-    """
-    shortcuts = {
-        "desktop":   Path.home() / "Desktop",
-        "downloads": Path.home() / "Downloads",
-        "documents": Path.home() / "Documents",
-        "pictures":  Path.home() / "Pictures",
-        "music":     Path.home() / "Music",
-        "videos":    Path.home() / "Videos",
+    shortcuts: dict[str, Path] = {
+        "desktop":   _get_desktop(),
+        "downloads": _get_downloads(),
+        "documents": _get_documents(),
+        "pictures":  _get_pictures(),
+        "music":     _get_music(),
+        "videos":    _get_videos(),
         "home":      Path.home(),
     }
     lower = raw.strip().lower()
@@ -34,20 +85,30 @@ def _resolve_path(raw: str) -> Path:
         return shortcuts[lower]
     return Path(raw).expanduser()
 
-
-def _format_size(bytes_size: int) -> str:
-    """Converts bytes to human readable format."""
+def _format_size(b: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if bytes_size < 1024:
-            return f"{bytes_size:.1f} {unit}"
-        bytes_size /= 1024
-    return f"{bytes_size:.1f} TB"
+        if b < 1024:
+            return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
+def _safe_trash(target: Path) -> str:
+
+    if not _SEND2TRASH:
+        return (
+            "send2trash is not installed. "
+            "Run: pip install send2trash — "
+            "Permanent deletion is disabled for safety."
+        )
+    send2trash.send2trash(str(target))
+    return f"Moved to Trash: {target.name}"
 
 
 def list_files(path: str = "desktop", show_hidden: bool = False) -> str:
-    """Lists files and folders in a directory."""
     try:
         target = _resolve_path(path)
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         if not target.exists():
             return f"Path not found: {target}"
         if not target.is_dir():
@@ -64,7 +125,7 @@ def list_files(path: str = "desktop", show_hidden: bool = False) -> str:
                 items.append(f"📄 {item.name} ({size})")
 
         if not items:
-            return f"Directory is empty: {target}"
+            return f"Directory is empty: {target.name}/"
 
         return f"Contents of {target.name}/ ({len(items)} items):\n" + "\n".join(items)
 
@@ -74,10 +135,12 @@ def list_files(path: str = "desktop", show_hidden: bool = False) -> str:
         return f"Error listing files: {e}"
 
 
-def create_file(path: str, content: str = "") -> str:
-    """Creates a new file with optional content."""
+def create_file(path: str, name: str = "", content: str = "") -> str:
     try:
-        target = Path(path).expanduser()
+        base   = _resolve_path(path)
+        target = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return f"File created: {target.name}"
@@ -85,40 +148,36 @@ def create_file(path: str, content: str = "") -> str:
         return f"Could not create file: {e}"
 
 
-def create_folder(path: str) -> str:
-    """Creates a new folder (and parent folders if needed)."""
+def create_folder(path: str, name: str = "") -> str:
     try:
-        target = Path(path).expanduser()
+        base   = _resolve_path(path)
+        target = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         target.mkdir(parents=True, exist_ok=True)
-        return f"Folder created: {target}"
+        return f"Folder created: {target.name}"
     except Exception as e:
         return f"Could not create folder: {e}"
 
 
-def delete_file(path: str, confirm: bool = True) -> str:
-    """
-    Deletes a file or folder.
-    Moves to Recycle Bin on Windows if possible, otherwise permanent delete.
-    """
+def delete_file(path: str, name: str = "") -> str:
     try:
-        target = Path(path).expanduser()
+        base   = _resolve_path(path)
+        target = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         if not target.exists():
-            return f"Not found: {path}"
+            return f"Not found: {target.name}"
 
-        try:
+        # Güvenli dizin kontrolü — kritik kullanıcı klasörlerini koru
+        protected = {
+            _get_desktop(), _get_downloads(), _get_documents(),
+            _get_pictures(), _get_music(), _get_videos(), Path.home()
+        }
+        if target.resolve() in {p.resolve() for p in protected}:
+            return f"Protected directory, cannot delete: {target.name}"
 
-            send2trash.send2trash(str(target))
-            return f"Moved to Recycle Bin: {target.name}"
-        except ImportError:
-            pass
-
-        # Fallback: permanent delete
-        if target.is_dir():
-            shutil.rmtree(target)
-            return f"Folder deleted permanently: {target.name}"
-        else:
-            target.unlink()
-            return f"File deleted permanently: {target.name}"
+        return _safe_trash(target)
 
     except PermissionError:
         return f"Permission denied: {path}"
@@ -126,14 +185,20 @@ def delete_file(path: str, confirm: bool = True) -> str:
         return f"Could not delete: {e}"
 
 
-def move_file(source: str, destination: str) -> str:
-    """Moves a file or folder to a new location."""
+def move_file(path: str, name: str = "", destination: str = "") -> str:
     try:
-        src  = Path(source).expanduser()
-        dst  = _resolve_path(destination)
+        base   = _resolve_path(path)
+        src    = (base / name) if name else base
+        dst    = _resolve_path(destination) if destination else None
 
         if not src.exists():
-            return f"Source not found: {source}"
+            return f"Source not found: {src.name}"
+        if dst is None:
+            return "No destination specified."
+        if not _is_safe_path(src):
+            return f"Access denied (source): {src}"
+        if not _is_safe_path(dst):
+            return f"Access denied (destination): {dst}"
 
         if dst.is_dir():
             dst = dst / src.name
@@ -146,14 +211,20 @@ def move_file(source: str, destination: str) -> str:
         return f"Could not move: {e}"
 
 
-def copy_file(source: str, destination: str) -> str:
-    """Copies a file or folder."""
+def copy_file(path: str, name: str = "", destination: str = "") -> str:
     try:
-        src = Path(source).expanduser()
-        dst = _resolve_path(destination)
+        base = _resolve_path(path)
+        src  = (base / name) if name else base
+        dst  = _resolve_path(destination) if destination else None
 
         if not src.exists():
-            return f"Source not found: {source}"
+            return f"Source not found: {src.name}"
+        if dst is None:
+            return "No destination specified."
+        if not _is_safe_path(src):
+            return f"Access denied (source): {src}"
+        if not _is_safe_path(dst):
+            return f"Access denied (destination): {dst}"
 
         if dst.is_dir():
             dst = dst / src.name
@@ -171,16 +242,20 @@ def copy_file(source: str, destination: str) -> str:
         return f"Could not copy: {e}"
 
 
-def rename_file(path: str, new_name: str) -> str:
-    """Renames a file or folder."""
+def rename_file(path: str, name: str = "", new_name: str = "") -> str:
     try:
-        target   = Path(path).expanduser()
-        new_path = target.parent / new_name
-
+        base     = _resolve_path(path)
+        target   = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         if not target.exists():
-            return f"Not found: {path}"
+            return f"Not found: {target.name}"
+        if not new_name:
+            return "No new name provided."
+
+        new_path = target.parent / new_name
         if new_path.exists():
-            return f"A file named '{new_name}' already exists."
+            return f"A file named '{new_name}' already exists here."
 
         target.rename(new_path)
         return f"Renamed: {target.name} → {new_name}"
@@ -189,28 +264,33 @@ def rename_file(path: str, new_name: str) -> str:
         return f"Could not rename: {e}"
 
 
-def read_file(path: str, max_chars: int = 3000) -> str:
-    """Reads and returns the content of a text file."""
+def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
     try:
-        target = Path(path).expanduser()
+        base   = _resolve_path(path)
+        target = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         if not target.exists():
-            return f"File not found: {path}"
+            return f"File not found: {target.name}"
         if not target.is_file():
-            return f"Not a file: {path}"
+            return f"Not a file: {target.name}"
 
         content = target.read_text(encoding="utf-8", errors="ignore")
         if len(content) > max_chars:
-            content = content[:max_chars] + f"\n\n... (truncated, {len(content)} total chars)"
+            content = content[:max_chars] + f"\n\n[Truncated — {len(content)} total chars]"
         return content
 
     except Exception as e:
         return f"Could not read file: {e}"
 
 
-def write_file(path: str, content: str, append: bool = False) -> str:
-    """Writes or appends content to a file."""
+def write_file(path: str, name: str = "", content: str = "",
+               append: bool = False) -> str:
     try:
-        target = Path(path).expanduser()
+        base   = _resolve_path(path)
+        target = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         target.parent.mkdir(parents=True, exist_ok=True)
         mode = "a" if append else "w"
         with open(target, mode, encoding="utf-8") as f:
@@ -221,28 +301,35 @@ def write_file(path: str, content: str, append: bool = False) -> str:
         return f"Could not write file: {e}"
 
 
-def find_files(name: str = "", extension: str = "", path: str = "home",
-               max_results: int = 20) -> str:
-    """
-    Searches for files by name or extension.
-    Example: find_files(extension=".pdf", path="documents")
-    """
+def find_files(name: str = "", extension: str = "",
+               path: str = "home", max_results: int = 20) -> str:
     try:
         search_path = _resolve_path(path)
+        if not _is_safe_path(search_path):
+            return f"Access denied: {search_path}"
         if not search_path.exists():
             return f"Search path not found: {path}"
 
-        results = []
-        pattern = f"*{extension}" if extension else "*"
+        results    = []
+        dir_count  = 0
+        max_dirs   = 500  # performans + güvenlik limiti
 
-        for item in search_path.rglob(pattern):
-            if item.is_file():
-                if name and name.lower() not in item.name.lower():
-                    continue
-                size = _format_size(item.stat().st_size)
-                results.append(f"📄 {item.name} ({size}) — {item.parent}")
-                if len(results) >= max_results:
+        for item in search_path.rglob("*"):
+            if item.is_dir():
+                dir_count += 1
+                if dir_count > max_dirs:
                     break
+                continue
+            if not item.is_file():
+                continue
+            if extension and item.suffix.lower() != extension.lower():
+                continue
+            if name and name.lower() not in item.name.lower():
+                continue
+            size = _format_size(item.stat().st_size)
+            results.append(f"📄 {item.name} ({size}) — {item.parent}")
+            if len(results) >= max_results:
+                break
 
         if not results:
             query = name or extension or "files"
@@ -254,10 +341,12 @@ def find_files(name: str = "", extension: str = "", path: str = "home",
         return f"Search error: {e}"
 
 
-def get_largest_files(path: str = "home", count: int = 10) -> str:
-    """Returns the largest files in a directory."""
+def get_largest_files(path: str = "downloads", count: int = 10) -> str:
+    count = min(count, 50)  # maksimum 50
     try:
         search_path = _resolve_path(path)
+        if not _is_safe_path(search_path):
+            return f"Access denied: {search_path}"
         if not search_path.exists():
             return f"Path not found: {path}"
 
@@ -275,7 +364,7 @@ def get_largest_files(path: str = "home", count: int = 10) -> str:
         if not top:
             return "No files found."
 
-        lines = [f"Top {len(top)} largest files in {search_path.name}/:\n"]
+        lines = [f"Top {len(top)} largest files in {search_path.name}/:"]
         for size, f in top:
             lines.append(f"  {_format_size(size):>10}  {f.name}  ({f.parent})")
 
@@ -286,59 +375,49 @@ def get_largest_files(path: str = "home", count: int = 10) -> str:
 
 
 def get_disk_usage(path: str = "home") -> str:
-    """Returns disk usage information."""
     try:
         target = _resolve_path(path)
         usage  = shutil.disk_usage(target)
-        total  = _format_size(usage.total)
-        used   = _format_size(usage.used)
-        free   = _format_size(usage.free)
         pct    = usage.used / usage.total * 100
-
         return (
-            f"Disk usage for {target}:\n"
-            f"  Total : {total}\n"
-            f"  Used  : {used} ({pct:.1f}%)\n"
-            f"  Free  : {free}"
+            f"Disk usage ({target}):\n"
+            f"  Total : {_format_size(usage.total)}\n"
+            f"  Used  : {_format_size(usage.used)} ({pct:.1f}%)\n"
+            f"  Free  : {_format_size(usage.free)}"
         )
     except Exception as e:
         return f"Could not get disk usage: {e}"
 
 
 def organize_desktop() -> str:
-    """
-    Organizes the desktop by grouping files into folders by type.
-    Creates folders: Images, Documents, Videos, Music, Archives, Others
-    """
+    type_map = {
+        "Images":    {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "Documents": {".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx",
+                      ".ppt", ".pptx", ".csv", ".odt", ".ods", ".odp"},
+        "Videos":    {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+        "Music":     {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"},
+        "Archives":  {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
+        "Code":      {".py", ".js", ".ts", ".html", ".css", ".json", ".xml",
+                      ".cpp", ".java", ".cs", ".go", ".rs", ".sh"},
+    }
+
+    desktop = _get_desktop()
+    moved, skipped = [], []
+
     try:
-        desktop = _get_desktop()
-        type_map = {
-            "Images":    [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico"],
-            "Documents": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv"],
-            "Videos":    [".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm"],
-            "Music":     [".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma"],
-            "Archives":  [".zip", ".rar", ".7z", ".tar", ".gz"],
-            "Code":      [".py", ".js", ".html", ".css", ".json", ".xml", ".ts", ".cpp", ".java"],
-        }
-
-        moved    = []
-        skipped  = []
-
         for item in desktop.iterdir():
-
+            # Klasörlere, gizli dosyalara ve organize klasörlerine dokunma
             if item.is_dir() or item.name.startswith("."):
+                continue
+            if item.name in {k for k in type_map}:
                 continue
 
             ext        = item.suffix.lower()
-            target_dir = None
-
-            for folder, extensions in type_map.items():
-                if ext in extensions:
+            target_dir = desktop / "Others"
+            for folder, exts in type_map.items():
+                if ext in exts:
                     target_dir = desktop / folder
                     break
-
-            if target_dir is None:
-                target_dir = desktop / "Others"
 
             target_dir.mkdir(exist_ok=True)
             new_path = target_dir / item.name
@@ -350,133 +429,115 @@ def organize_desktop() -> str:
             shutil.move(str(item), str(new_path))
             moved.append(f"{item.name} → {target_dir.name}/")
 
-        result = f"Desktop organized. {len(moved)} files moved."
+        result = f"Desktop organized: {len(moved)} files moved."
         if moved:
-            result += "\n" + "\n".join(moved[:10])
-            if len(moved) > 10:
-                result += f"\n... and {len(moved)-10} more."
+            preview = moved[:8]
+            result += "\n" + "\n".join(preview)
+            if len(moved) > 8:
+                result += f"\n... and {len(moved) - 8} more."
         if skipped:
-            result += f"\n{len(skipped)} files skipped (already exist)."
-
+            result += f"\n{len(skipped)} file(s) skipped (name conflict)."
         return result
 
     except Exception as e:
         return f"Could not organize desktop: {e}"
 
 
-def get_file_info(path: str) -> str:
-    """Returns detailed information about a file."""
+def get_file_info(path: str, name: str = "") -> str:
     try:
-        target = Path(path).expanduser()
+        base   = _resolve_path(path)
+        target = (base / name) if name else base
+        if not _is_safe_path(target):
+            return f"Access denied: {target}"
         if not target.exists():
-            return f"Not found: {path}"
+            return f"Not found: {target.name}"
 
         stat = target.stat()
         info = {
-            "Name":     target.name,
-            "Type":     "Folder" if target.is_dir() else "File",
-            "Size":     _format_size(stat.st_size),
-            "Location": str(target.parent),
-            "Created":  datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M"),
-            "Modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-            "Extension": target.suffix or "None",
+            "Name":      target.name,
+            "Type":      "Folder" if target.is_dir() else "File",
+            "Size":      _format_size(stat.st_size),
+            "Location":  str(target.parent),
+            "Created":   datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M"),
+            "Modified":  datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "Extension": target.suffix or "—",
         }
-
         return "\n".join(f"  {k}: {v}" for k, v in info.items())
 
     except Exception as e:
         return f"Could not get file info: {e}"
 
 def file_controller(
-    parameters: dict,
+    parameters: dict = None,
     response=None,
     player=None,
-    session_memory=None
+    session_memory=None,
 ) -> str:
-    action  = (parameters or {}).get("action", "").lower().strip()
-    path    = (parameters or {}).get("path", "desktop")
-    name    = (parameters or {}).get("name", "")
-    content = (parameters or {}).get("content", "")
+    params = parameters or {}
+    action = params.get("action", "").lower().strip()
+    path   = params.get("path", "desktop")
+    name   = params.get("name", "")
 
-    def _full_path(p: str, n: str) -> str:
-        base = _resolve_path(p)
-        if n:
-            return str(base / n)
-        return str(base)
-
-    result = "Unknown action."
+    if player:
+        player.write_log(f"[file] {action} {name or path}")
 
     try:
         if action == "list":
-            result = list_files(path)
+            return list_files(path)
 
         elif action == "create_file":
-            full = _full_path(path, name)
-            result = create_file(full, content=content)
+            return create_file(path, name=name, content=params.get("content", ""))
 
         elif action == "create_folder":
-            full = _full_path(path, name)
-            result = create_folder(full)
+            return create_folder(path, name=name)
 
         elif action == "delete":
-            full = _full_path(path, name)
-            result = delete_file(full)
+            return delete_file(path, name=name)
 
         elif action == "move":
-            full = _full_path(path, name)
-            result = move_file(full, parameters.get("destination", ""))
+            return move_file(path, name=name, destination=params.get("destination", ""))
 
         elif action == "copy":
-            full = _full_path(path, name)
-            result = copy_file(full, parameters.get("destination", ""))
+            return copy_file(path, name=name, destination=params.get("destination", ""))
 
         elif action == "rename":
-            full = _full_path(path, name)
-            result = rename_file(full, parameters.get("new_name", ""))
+            return rename_file(path, name=name, new_name=params.get("new_name", ""))
 
         elif action == "read":
-            full = _full_path(path, name)
-            result = read_file(full)
+            return read_file(path, name=name)
 
         elif action == "write":
-            full = _full_path(path, name)
-            result = write_file(
-                full,
-                content=content,
-                append=parameters.get("append", False)
+            return write_file(
+                path, name=name,
+                content=params.get("content", ""),
+                append=params.get("append", False)
             )
 
         elif action == "find":
-            result = find_files(
-                name=name or parameters.get("name", ""),
-                extension=parameters.get("extension", ""),
+            return find_files(
+                name=name or params.get("name", ""),
+                extension=params.get("extension", ""),
                 path=path,
-                max_results=parameters.get("max_results", 20)
+                max_results=min(int(params.get("max_results", 20)), 50),
             )
 
         elif action == "largest":
-            result = get_largest_files(
+            return get_largest_files(
                 path=path,
-                count=parameters.get("count", 10)
+                count=int(params.get("count", 10)),
             )
 
         elif action == "disk_usage":
-            result = get_disk_usage(path)
+            return get_disk_usage(path)
 
         elif action == "organize_desktop":
-            result = organize_desktop()
+            return organize_desktop()
 
         elif action == "info":
-            full = _full_path(path, name)
-            result = get_file_info(full)
+            return get_file_info(path, name=name)
 
         else:
-            result = f"Unknown action: '{action}'"
+            return f"Unknown action: '{action}'"
 
     except Exception as e:
-        result = f"File controller error: {e}"
-
-    if player:
-        player.write_log(f"[file] {result[:60]}")
-
-    return result
+        return f"File controller error ({action}): {e}"

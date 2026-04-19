@@ -1,5 +1,3 @@
-# actions/weather_report.py
-
 import webbrowser
 from urllib.parse import quote_plus
 
@@ -7,54 +5,45 @@ from urllib.parse import quote_plus
 def weather_action(
     parameters: dict,
     player=None,
-    session_memory=None
-):
-    """
-    Weather report action.
-    Opens a Google weather search and gives a short spoken confirmation.
-    """
+    session_memory=None,
+) -> str:
+    city     = parameters.get("city")
+    when     = parameters.get("time", "today")  
 
-    city = parameters.get("city")
-    time = parameters.get("time")
-    if not city or not isinstance(city, str):
+    if not city or not isinstance(city, str) or not city.strip():
         msg = "Sir, the city is missing for the weather report."
-        _speak_and_log(msg, player)
+        _log(msg, player)
         return msg
 
     city = city.strip()
+    when = (when or "today").strip()
 
-    if not time or not isinstance(time, str):
-        time = "today"
-    else:
-        time = time.strip()
-
-    search_query = f"weather in {city} {time}"
-    encoded_query = quote_plus(search_query)
-    url = f"https://www.google.com/search?q={encoded_query}"
+    search_query  = f"weather in {city} {when}"
+    url           = f"https://www.google.com/search?q={quote_plus(search_query)}"
 
     try:
-        webbrowser.open(url)
-    except Exception:
-        msg = f"Sir, I couldn't open the browser for the weather report."
-        _speak_and_log(msg, player)
+        opened = webbrowser.open(url)
+        if not opened:
+            raise RuntimeError("webbrowser.open returned False")
+    except Exception as e:
+        msg = f"Sir, I couldn't open the browser for the weather report: {e}"
+        _log(msg, player)
         return msg
 
-    msg = f"Showing the weather for {city}, {time}, sir."
-    _speak_and_log(msg, player)
+    msg = f"Showing the weather for {city}, {when}, sir."
+    _log(msg, player)
 
     if session_memory:
         try:
-            session_memory.set_last_search(
-                query=search_query,
-                response=msg
-            )
+            session_memory.set_last_search(query=search_query, response=msg)
         except Exception:
-            pass  
+            pass
 
     return msg
 
 
-def _speak_and_log(message: str, player=None):
+def _log(message: str, player=None) -> None:
+    print(f"[Weather] {message}")
     if player:
         try:
             player.write_log(f"JARVIS: {message}")

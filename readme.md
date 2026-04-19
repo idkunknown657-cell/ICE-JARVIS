@@ -1,59 +1,83 @@
-# 🤖 MARK XXX
+# 🤖 MARK XXXVII (37)
+### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
 
-**Watch The Detailed Video To Set-up This Model**: https://www.youtube.com/watch?v=-YjbWjv1tJg
+> 📺 **[Watch the full setup video on YouTube](https://www.youtube.com/watch?v=BhOsnGC_sAA)**
 
-### Next-Generation Personal AI Assistant — By FatihMakes
+A real-time voice AI that can hear, see, understand, and control your computer — on any OS. Supporting Windows, macOS, and Linux. Local execution. Zero subscriptions. Engineered for total autonomy.
 
-A real-time voice AI that can hear, see, understand, and control your Windows computer.
-Local execution. Zero subscriptions(Unless you want to increase request by buying requests from Google AI Studio).
-Built for intelligent automation.
+---
 
 ## ✨ Overview
 
-**MARK XXX** is an advanced voice-driven AI assistant designed to turn your computer into an interactive intelligent system.
+MARK XXXVII is the most versatile evolution of the Jarvis project. It transforms your operating system into a living, breathing intelligent entity. Through natural voice commands, Mark 37 analyzes your screen, manages your files, and executes complex workflows across different environments.
 
-Speak naturally — it listens, understands context, responds with a human-like voice, and executes tasks across your system automatically.
+It's not just an assistant — it's an extension of your digital life.
 
-Designed for speed, autonomy, and real-world usability.
-
+---
 
 ## 🚀 Capabilities
 
-* **Real-time voice interaction** — Natural conversation with instant response
-* **System control** — Launch apps, manage files, execute commands
-* **Autonomous task execution** — Plans and completes multi-step workflows
-* **Visual awareness** — Screen analysis and webcam understanding
-* **Persistent memory** — Learns preferences and remembers context
-* **Integrated tools** — Web search, weather, reminders, messaging, code help, image generation
+### Core Features
+| Feature | Description |
+|---|---|
+| 🎙️ Real-time Voice | Ultra-low latency conversation in any language |
+| 🖥️ System Control | Launch apps, manage files, execute terminal commands |
+| 🧩 Autonomous Tasks | High-level planning for complex, multi-step goals |
+| 👁️ Visual Awareness | Real-time screen processing and webcam vision |
+| 🧠 Persistent Memory | Deeply remembers your projects, preferences, and personal context |
+| 🔒 Privacy First | Physical mute button (F4 / UI) and fully local control |
+| ⌨️ Keyboard & Voice | Switch seamlessly between typing and speaking |
+
+---
+
+## 🆕 What's New in XXXVII
+
+- 🐧🍎 **Cross-Platform Support** *(Experimental)* — Now runs on Windows, macOS, and Linux. Core features work across all platforms; some OS-specific tasks may vary during the testing phase.
+- 💤 **Graceful Shutdown** — Tell Jarvis to "Shut down" or "Close" and it exits the session properly.
+- 🧠 **Strengthened Memory** — Improved long-term retention and context recall; better understanding of relationships and history.
+- 🔧 **Action Core Optimizations** — Major bugs in action scripts fixed for smoother system execution.
+- ⚡ **Optimized Performance** — Faster response times and refined tool-calling logic.
+
+---
 
 ## ⚡ Quick Start
 
 ```bash
-git clone github.com/FatihMakes/Mark-XXX.git
-cd mark-xxx
-python setup.py
+git clone https://github.com/FatihMakes/Mark-XXXVII.git
+cd Mark-XXXVII
+pip install -r requirements.txt
+playwright install
 python main.py
 ```
 
-Enter your free Gemini API key on first launch.
-System ready in minutes.
+> ⚠️ **Installation Note:** Due to the new cross-platform integration, OS-specific libraries are not all bundled in `requirements.txt` to keep the install lightweight. If you encounter a `ModuleNotFoundError`, simply run `pip install <module_name>` for your specific system.
 
-If you got some problems or questions to ask or just want to support;
-
-YouTube Account: [text](https://www.youtube.com/@FatihMakes)
-Instagram Account: [text](https://www.instagram.com/fatihmakes/)
+---
 
 ## 📋 Requirements
 
-* Windows 10 / 11
-* Python 3.10 or newer
-* Microphone
-* Gemini API key
+| Requirement | Details |
+|---|---|
+| **OS** | Windows 10/11, macOS, or Linux |
+| **Python** | 3.11 or 3.12 |
+| **Microphone** | Required for voice commands |
+| **API Key** | Free Gemini API key |
+
+---
 
 ## ⚠️ License
 
 Personal and non-commercial use only.
-Licensed under **Creative Commons BY-NC 4.0**.
+Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**.
 
-Engineered by a 17-year-old building a real JARVIS-style assistant.
-⭐ Star the repository to support the project.
+---
+
+## 👤 Connect with the Creator
+
+Engineered by an 18-year-old developer building a real JARVIS-style assistant.
+⭐ **Star the repository to support the journey to Mark 100.**
+
+| Platform | Link |
+|---|---|
+| YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
+| Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |

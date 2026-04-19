@@ -180,7 +180,9 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
     elif tool == "web_search":
         from actions.web_search import web_search
         return web_search(parameters=parameters, player=None) or "Done."
-
+    elif tool == "game_updater":
+        from actions.game_updater import game_updater
+        return game_updater(parameters=parameters, player=None, speak=speak) or "Done."
     elif tool == "browser_control":
         from actions.browser_control import browser_control
         return browser_control(parameters=parameters, player=None) or "Done."
@@ -188,10 +190,6 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
     elif tool == "file_controller":
         from actions.file_controller import file_controller
         return file_controller(parameters=parameters, player=None) or "Done."
-
-    elif tool == "cmd_control":
-        from actions.cmd_control import cmd_control
-        return cmd_control(parameters=parameters, player=None) or "Done."
 
     elif tool == "code_helper":
         from actions.code_helper import code_helper

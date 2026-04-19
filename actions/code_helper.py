@@ -1,16 +1,3 @@
-# actions/code_helper.py
-# AI-powered code assistant — writes, edits, explains, runs, builds, debugs, and optimizes code.
-#
-# Actions:
-#   write        → Describe what you want, Gemini writes it, saves to file
-#   edit         → Read existing file, apply natural language change
-#   explain      → Explain what a piece of code or file does
-#   run          → Execute a script file, return output
-#   build        → Write → Run → Fix loop (max 3 attempts), speaks when done
-#   screen_debug → Screenshot al, ekrandaki kodu/hatayı Gemini ile analiz et ve düzelt
-#   optimize     → Mevcut kodu Gemini ile optimize et (performans, okunabilirlik, best practices)
-#   auto         → (default) Intent auto-detected from context
-
 import subprocess
 import sys
 import json
@@ -126,7 +113,6 @@ def _detect_intent(description: str, file_path: str, code: str) -> str:
     if any(k in desc for k in screen_kw):
         return "screen_debug"
 
-    # Optimize keywords
     optimize_kw = ["optimize", "refactor", "clean up", "improve", "temizle",
                    "iyileştir", "daha iyi", "make it better", "hızlandır"]
     if any(k in desc for k in optimize_kw) and (code or file_path):

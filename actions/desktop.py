@@ -1,244 +1,325 @@
-# actions/desktop.py
-# AI-powered desktop & wallpaper management
-#
-# Flow for unknown tasks:
-#   User request → Gemini generates Python/pyautogui code → Safety check → Execute
-#
-# Built-in: wallpaper change, icon arrangement, desktop cleanup, organize by type
-
 import os
 import sys
 import json
 import shutil
 import subprocess
-import ctypes
 import tempfile
-import pyautogui
+import platform
 from pathlib import Path
 from datetime import datetime
 
+try:
+    import pyautogui
+    _PYAUTOGUI = True
+except ImportError:
+    _PYAUTOGUI = False
 
-def get_base_dir():
+_OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+
+
+def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-
-
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    path = _get_base_dir() / "config" / "api_keys.json"
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
-
-
+    
 def _get_desktop() -> Path:
+    if _OS == "Linux":
+        xdg = os.environ.get("XDG_DESKTOP_DIR", "")
+        if xdg and Path(xdg).exists():
+            return Path(xdg)
     return Path.home() / "Desktop"
 
+def _build_sandbox() -> dict:
+    import time
 
-BLOCKED_KEYWORDS = [
-    "os.remove", "shutil.rmtree", "shutil.rm",
-    "subprocess.run", "subprocess.Popen", "subprocess.call",
-    "os.system", "exec(", "eval(",
-    "import os", "import subprocess",
-    "__import__", "open(",
-    "sys.exit", "quit()",
-]
+    safe_builtins = {
+        "print": print,
+        "len": len, "str": str, "int": int, "float": float,
+        "bool": bool, "list": list, "dict": dict, "tuple": tuple,
+        "range": range, "enumerate": enumerate, "sorted": sorted,
+        "isinstance": isinstance, "hasattr": hasattr, "getattr": getattr,
+        "max": max, "min": min, "sum": sum, "abs": abs,
+        "zip": zip, "map": map, "filter": filter,
+    }
+
+    sandbox = {
+        "__builtins__": safe_builtins,
+        "Path": Path,
+        "time": time,
+        "shutil": type("shutil", (), {
+            "copy2":      shutil.copy2,
+            "copytree":   shutil.copytree,
+            "disk_usage": shutil.disk_usage,
+        })(),
+        "os_path": os.path,  
+    }
+
+    if _PYAUTOGUI:
+        sandbox["pyautogui"] = pyautogui
+
+    if _OS == "Windows":
+        try:
+            import ctypes
+            import winreg
+            sandbox["ctypes"] = ctypes
+            sandbox["winreg"] = type("winreg", (), {
+                # Sadece okuma
+                "OpenKey":      winreg.OpenKey,
+                "QueryValueEx": winreg.QueryValueEx,
+                "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
+            })()
+        except ImportError:
+            pass
+
+    return sandbox
 
 
-def _is_safe_code(code: str) -> tuple[bool, str]:
-    code_lower = code.lower()
-    for keyword in BLOCKED_KEYWORDS:
-        if keyword.lower() in code_lower:
-            return False, f"Blocked operation: '{keyword}'"
-    return True, "OK"
+def _execute_generated_code(code: str, player=None) -> str:
+    if not code or code.strip() == "UNSAFE":
+        return "This action cannot be performed safely."
+
+    # Kod temizleme
+    if code.startswith("```"):
+        lines = code.split("\n")
+        code  = "\n".join(lines[1:-1]).strip()
+
+    sandbox      = _build_sandbox()
+    output_lines = []
+    sandbox["__builtins__"]["print"] = lambda *a: output_lines.append(" ".join(str(x) for x in a))
+
+    try:
+        exec(compile(code, "<jarvis_desktop>", "exec"), sandbox)
+        return "\n".join(output_lines) if output_lines else "Done."
+    except Exception as e:
+        print(f"[Desktop] Exec error: {e}\nCode:\n{code[:300]}")
+        return f"Execution error: {e}"
 
 
 def _ask_gemini_for_desktop_action(task: str) -> str:
-    """
-    Asks Gemini to generate safe Python/pyautogui code
-    to accomplish a desktop-related task.
-    """
-    import google.generativeai as genai
 
+    import google.generativeai as genai
     genai.configure(api_key=_get_api_key())
     model = genai.GenerativeModel("gemini-2.5-flash")
 
     desktop = str(_get_desktop())
 
-    prompt = f"""You are a Windows desktop automation expert.
-Generate safe Python code using ONLY these allowed modules:
-- pyautogui (mouse, keyboard, screenshots)
-- pathlib.Path (already imported as Path)
-- shutil (ONLY: copy2, copytree, move, disk_usage)
-- os.path (ONLY: exists, join, dirname, basename, splitext)
-- time (sleep only)
-- ctypes (Windows API calls only)
-- winreg (registry READ only)
+    os_specific = ""
+    if _OS == "Windows":
+        os_specific = "- ctypes (Windows API calls, read-only)\n- winreg (registry READ only)"
+    elif _OS == "Darwin":
+        os_specific = "- subprocess is NOT available; use pyautogui or Path only"
+    else:
+        os_specific = "- subprocess is NOT available; use pyautogui or Path only"
 
+    prompt = f"""You are a desktop automation assistant.
+Current OS: {_OS}
 Desktop path: {desktop}
 
-Rules:
-- Output ONLY the Python code. No explanation, no markdown, no backticks.
-- NO file deletion (os.remove, shutil.rmtree, unlink, etc.)
+Generate safe Python code to accomplish the task below.
+Allowed modules ONLY:
+- pyautogui (mouse, keyboard — if needed)
+- pathlib.Path (file/folder inspection only, no deletion)
+- shutil.copy2, shutil.copytree, shutil.disk_usage (NO move, NO rmtree)
+- os_path (os.path equivalent, read-only)
+- time.sleep
+{os_specific}
+
+Hard rules:
+- NO file deletion (no unlink, no rmtree, no remove)
 - NO subprocess calls
-- NO exec() or eval()
-- NO file write operations
-- If task cannot be done safely, output exactly: UNSAFE
+- NO exec() or eval() inside the code
+- NO import statements (modules are pre-injected)
+- NO file write operations except explicitly requested
+- If task cannot be done safely with these tools, output exactly: UNSAFE
 
-Task: {task}
+Output ONLY the Python code. No explanation, no markdown, no backticks.
 
-Python code:"""
+Task: {task}"""
 
     try:
         response = model.generate_content(prompt)
         code = response.text.strip()
         if code.startswith("```"):
             lines = code.split("\n")
-            code = "\n".join(lines[1:-1]).strip()
+            code  = "\n".join(lines[1:-1]).strip()
         return code
     except Exception as e:
         return f"ERROR: {e}"
 
-
-def _execute_generated_code(code: str) -> str:
-    """Safely executes Gemini-generated desktop automation code."""
-    safe, reason = _is_safe_code(code)
-    if not safe:
-        return f"⛔ Blocked for safety: {reason}"
-
-    allowed_globals = {
-        "pyautogui": pyautogui,
-        "Path": Path,
-        "shutil": shutil,
-        "ctypes": ctypes,
-        "time": __import__("time"),
-        "os": type("os", (), {
-            "path": os.path,
-            "listdir": os.listdir,
-            "getcwd": os.getcwd,
-            "environ": os.environ,
-        })(),
-        "__builtins__": {
-            "print": print,
-            "len": len,
-            "str": str,
-            "int": int,
-            "float": float,
-            "bool": bool,
-            "list": list,
-            "dict": dict,
-            "range": range,
-            "enumerate": enumerate,
-            "sorted": sorted,
-            "isinstance": isinstance,
-            "hasattr": hasattr,
-            "getattr": getattr,
-            "max": max,
-            "min": min,
-            "sum": sum,
-        }
-    }
-
-    output_lines = []
-    allowed_globals["print"] = lambda *args: output_lines.append(" ".join(str(a) for a in args))
-
-    try:
-        exec(code, allowed_globals)
-        return "\n".join(output_lines) if output_lines else "Task completed successfully."
-    except Exception as e:
-        return f"Execution error: {e}\n\nCode attempted:\n{code[:200]}"
-
 def set_wallpaper(image_path: str) -> str:
-    """Sets desktop wallpaper from a local image path."""
     path = Path(image_path).expanduser().resolve()
     if not path.exists():
         return f"Image not found: {image_path}"
-    if path.suffix.lower() not in [".jpg", ".jpeg", ".png", ".bmp"]:
-        return f"Unsupported format: {path.suffix}. Use jpg, png or bmp."
+    if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
+        return f"Unsupported format: {path.suffix}. Use jpg, png, bmp or webp."
 
     try:
-        if sys.platform == "win32":
-
-            abs_path = str(path.resolve())
-            ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
+        if _OS == "Windows":
+            import ctypes
+            if path.suffix.lower() in {".webp", ".png"}:
+                try:
+                    from PIL import Image
+                    bmp_path = Path(tempfile.mktemp(suffix=".bmp"))
+                    Image.open(path).convert("RGB").save(bmp_path, "BMP")
+                    path = bmp_path
+                except ImportError:
+                    pass 
+            ctypes.windll.user32.SystemParametersInfoW(20, 0, str(path), 3)
             return f"Wallpaper set: {path.name}"
 
-        elif sys.platform == "darwin":
-            script = f'tell application "Finder" to set desktop picture to POSIX file "{path}"'
-            subprocess.run(["osascript", "-e", script])
+        elif _OS == "Darwin":
+            script = (
+                f'tell application "System Events" to tell every desktop to '
+                f'set picture to POSIX file "{path}"'
+            )
+            subprocess.run(["osascript", "-e", script], capture_output=True)
             return f"Wallpaper set: {path.name}"
 
         else:
-            subprocess.run(["gsettings", "set", "org.gnome.desktop.background",
-                          "picture-uri", f"file://{path}"])
+            desktop_env = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            uri = f"file://{path}"
+
+            if "gnome" in desktop_env or "unity" in desktop_env:
+                subprocess.run([
+                    "gsettings", "set", "org.gnome.desktop.background",
+                    "picture-uri", uri
+                ], capture_output=True)
+                subprocess.run([
+                    "gsettings", "set", "org.gnome.desktop.background",
+                    "picture-uri-dark", uri
+                ], capture_output=True)
+
+            elif "kde" in desktop_env:
+                # KDE Plasma
+                script = f"""
+var allDesktops = desktops();
+for (var i = 0; i < allDesktops.length; i++) {{
+    d = allDesktops[i];
+    d.wallpaperPlugin = "org.kde.image";
+    d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
+    d.writeConfig("Image", "file://{path}");
+}}
+"""
+                subprocess.run(
+                    ["qdbus", "org.kde.plasmashell", "/PlasmaShell",
+                     "org.kde.PlasmaShell.evaluateScript", script],
+                    capture_output=True
+                )
+
+            elif "xfce" in desktop_env:
+                subprocess.run([
+                    "xfconf-query", "-c", "xfce4-desktop",
+                    "-p", "/backdrop/screen0/monitor0/workspace0/last-image",
+                    "-s", str(path)
+                ], capture_output=True)
+
+            else:
+                result = subprocess.run(
+                    ["feh", "--bg-scale", str(path)],
+                    capture_output=True
+                )
+                if result.returncode != 0:
+                    return (
+                        f"Could not set wallpaper automatically on {desktop_env}. "
+                        f"Try manually or install 'feh'."
+                    )
+
             return f"Wallpaper set: {path.name}"
 
     except Exception as e:
         return f"Could not set wallpaper: {e}"
 
 
-def set_wallpaper_from_web(url: str) -> str:
-    """Downloads an image from URL and sets it as wallpaper."""
+def set_wallpaper_from_url(url: str) -> str:
     try:
         import urllib.request
         suffix = Path(url.split("?")[0]).suffix or ".jpg"
         tmp    = Path(tempfile.mktemp(suffix=suffix))
         urllib.request.urlretrieve(url, str(tmp))
         result = set_wallpaper(str(tmp))
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
         return result
     except Exception as e:
         return f"Could not download wallpaper: {e}"
 
 
 def get_current_wallpaper() -> str:
-    """Returns the current wallpaper path."""
     try:
-        if sys.platform == "win32":
+        if _OS == "Windows":
             import winreg
-            key  = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                  r"Control Panel\Desktop")
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop"
+            )
             val, _ = winreg.QueryValueEx(key, "Wallpaper")
+            winreg.CloseKey(key)
             return f"Current wallpaper: {val}"
+
+        elif _OS == "Darwin":
+            script = (
+                'tell application "System Events" to get picture of desktop 1'
+            )
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True
+            )
+            return f"Current wallpaper: {result.stdout.strip()}"
+
         else:
-            return "Wallpaper path retrieval not supported on this OS."
+            desktop_env = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            if "gnome" in desktop_env or "unity" in desktop_env:
+                result = subprocess.run(
+                    ["gsettings", "get", "org.gnome.desktop.background", "picture-uri"],
+                    capture_output=True, text=True
+                )
+                return f"Current wallpaper: {result.stdout.strip()}"
+            return "Wallpaper path retrieval not supported for this desktop environment."
+
     except Exception as e:
         return f"Could not get wallpaper: {e}"
 
-
 FILE_TYPE_MAP = {
-    "Images":    [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"],
-    "Documents": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".odt"],
-    "Videos":    [".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"],
-    "Music":     [".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"],
-    "Archives":  [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"],
-    "Code":      [".py", ".js", ".html", ".css", ".json", ".xml", ".ts", ".cpp", ".java", ".cs", ".php"],
-    "Executables": [".exe", ".msi", ".bat", ".cmd", ".sh"],
+    "Images":      {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+    "Documents":   {".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx",
+                    ".ppt", ".pptx", ".csv", ".odt", ".ods", ".odp"},
+    "Videos":      {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+    "Music":       {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"},
+    "Archives":    {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
+    "Code":        {".py", ".js", ".ts", ".html", ".css", ".json", ".xml",
+                    ".cpp", ".java", ".cs", ".go", ".rs", ".sh", ".php"},
+    "Executables": {".exe", ".msi", ".bat", ".cmd", ".sh", ".appimage", ".deb", ".rpm"},
+}
+
+_SKIP_EXTENSIONS = {
+    "Windows": {".lnk", ".url"},
+    "Darwin":  {".webloc"},
+    "Linux":   {".desktop"},
 }
 
 
 def organize_desktop(mode: str = "by_type") -> str:
-    """
-    Organizes desktop files.
-    mode: 'by_type' — groups by file type (Images, Documents, etc.)
-          'by_date'  — groups by month (2024-01, 2024-02, etc.)
-    """
-    desktop = _get_desktop()
-    moved   = []
-    skipped = []
+    desktop       = _get_desktop()
+    skip_exts     = _SKIP_EXTENSIONS.get(_OS, set())
+    moved, skipped = [], []
 
     for item in desktop.iterdir():
         if item.is_dir() or item.name.startswith("."):
             continue
-
-        if item.suffix.lower() == ".lnk":
+        if item.suffix.lower() in skip_exts:
             continue
 
         if mode == "by_date":
-            mtime      = datetime.fromtimestamp(item.stat().st_mtime)
+            mtime       = datetime.fromtimestamp(item.stat().st_mtime)
             folder_name = mtime.strftime("%Y-%m")
         else:
-            ext        = item.suffix.lower()
+            ext         = item.suffix.lower()
             folder_name = "Others"
             for folder, exts in FILE_TYPE_MAP.items():
                 if ext in exts:
@@ -256,31 +337,34 @@ def organize_desktop(mode: str = "by_type") -> str:
         shutil.move(str(item), str(new_path))
         moved.append(f"{item.name} → {folder_name}/")
 
-    result = f"Desktop organized ({mode}). {len(moved)} files moved."
+    result = f"Desktop organized ({mode}): {len(moved)} files moved."
     if moved:
-        preview = moved[:8]
-        result += "\n" + "\n".join(preview)
+        result += "\n" + "\n".join(moved[:8])
         if len(moved) > 8:
-            result += f"\n... and {len(moved)-8} more."
+            result += f"\n... and {len(moved) - 8} more."
     if skipped:
-        result += f"\n{len(skipped)} files skipped (name conflict)."
+        result += f"\n{len(skipped)} file(s) skipped (name conflict)."
     return result
 
 
 def list_desktop() -> str:
-    """Lists everything on the desktop."""
     desktop = _get_desktop()
     items   = []
-
     for item in sorted(desktop.iterdir()):
         if item.name.startswith("."):
             continue
         if item.is_dir():
-            count = len(list(item.iterdir()))
+            try:
+                count = len(list(item.iterdir()))
+            except PermissionError:
+                count = "?"
             items.append(f"📁 {item.name}/ ({count} items)")
         else:
-            size = item.stat().st_size
-            size_str = f"{size/1024:.1f} KB" if size < 1024*1024 else f"{size/1024/1024:.1f} MB"
+            size     = item.stat().st_size
+            size_str = (
+                f"{size / 1024:.1f} KB" if size < 1024 * 1024
+                else f"{size / 1024 / 1024:.1f} MB"
+            )
             items.append(f"📄 {item.name} ({size_str})")
 
     if not items:
@@ -289,11 +373,8 @@ def list_desktop() -> str:
 
 
 def clean_desktop() -> str:
-    """
-    Moves all files on desktop into a 'Desktop Archive' folder
-    with today's date — fast cleanup without deleting anything.
-    """
     desktop     = _get_desktop()
+    skip_exts   = _SKIP_EXTENSIONS.get(_OS, set())
     today       = datetime.now().strftime("%Y-%m-%d")
     archive_dir = desktop / f"Desktop Archive {today}"
     archive_dir.mkdir(exist_ok=True)
@@ -302,116 +383,98 @@ def clean_desktop() -> str:
     for item in desktop.iterdir():
         if item.is_dir() or item.name.startswith("."):
             continue
-        if item.suffix.lower() == ".lnk":
+        if item.suffix.lower() in skip_exts:
             continue
         new_path = archive_dir / item.name
         if not new_path.exists():
             shutil.move(str(item), str(new_path))
             moved += 1
 
-    return f"Desktop cleaned. {moved} files moved to '{archive_dir.name}'."
+    return f"Desktop cleaned: {moved} files archived to '{archive_dir.name}'."
 
 
 def get_desktop_stats() -> str:
-    """Returns stats about the desktop."""
-    desktop     = _get_desktop()
-    files       = [i for i in desktop.iterdir() if i.is_file()]
-    folders     = [i for i in desktop.iterdir() if i.is_dir()]
-    total_size  = sum(f.stat().st_size for f in files)
-    size_str    = f"{total_size/1024:.1f} KB" if total_size < 1024*1024 else f"{total_size/1024/1024:.1f} MB"
-
+    desktop    = _get_desktop()
+    files      = [i for i in desktop.iterdir() if i.is_file()]
+    folders    = [i for i in desktop.iterdir() if i.is_dir()]
+    total_size = sum(f.stat().st_size for f in files if f.exists())
+    size_str   = (
+        f"{total_size / 1024:.1f} KB" if total_size < 1024 * 1024
+        else f"{total_size / 1024 / 1024:.1f} MB"
+    )
     return (
-        f"Desktop stats:\n"
+        f"Desktop stats ({_OS}):\n"
         f"  Files   : {len(files)}\n"
         f"  Folders : {len(folders)}\n"
-        f"  Total size: {size_str}"
+        f"  Size    : {size_str}\n"
+        f"  Path    : {desktop}"
     )
 
-
 def desktop_control(
-    parameters: dict,
+    parameters: dict = None,
     response=None,
     player=None,
-    session_memory=None
+    session_memory=None,
 ) -> str:
     """
-    Called from main.py.
-
     parameters:
-        action      : wallpaper | wallpaper_url | current_wallpaper |
-                      organize | clean | list | stats |
-                      task (AI-powered — anything else)
-
-        path        : image path for 'wallpaper'
-        url         : image URL for 'wallpaper_url'
-        mode        : 'by_type' or 'by_date' for 'organize'
-        task        : Natural language description for AI-powered actions.
-                      Example: "arrange icons by size"
-                               "show me what's on my desktop"
-                               "move all screenshots to a folder"
+        action : wallpaper | wallpaper_url | current_wallpaper |
+                 organize  | clean | list | stats |
+                 task (AI-powered)
+        path   : image path for 'wallpaper'
+        url    : image URL for 'wallpaper_url'
+        mode   : 'by_type' or 'by_date' for 'organize'
+        task   : natural language description for AI-powered actions
     """
-    action = (parameters or {}).get("action", "").lower().strip()
-    task   = (parameters or {}).get("task", "").strip()
+    params = parameters or {}
+    action = params.get("action", "").lower().strip()
+    task   = params.get("task", "").strip()
 
-    result = "Unknown action."
+    if player:
+        player.write_log(f"[desktop] {action or task[:40]}")
 
     try:
         if action == "wallpaper":
-            path   = parameters.get("path", "")
-            result = set_wallpaper(path) if path else "No image path provided."
+            path = params.get("path", "")
+            return set_wallpaper(path) if path else "No image path provided."
 
         elif action == "wallpaper_url":
-            url    = parameters.get("url", "")
-            result = set_wallpaper_from_web(url) if url else "No URL provided."
+            url = params.get("url", "")
+            return set_wallpaper_from_url(url) if url else "No URL provided."
 
         elif action == "current_wallpaper":
-            result = get_current_wallpaper()
+            return get_current_wallpaper()
 
         elif action == "organize":
-            mode   = parameters.get("mode", "by_type")
-            result = organize_desktop(mode)
+            return organize_desktop(params.get("mode", "by_type"))
 
         elif action == "clean":
-            result = clean_desktop()
+            return clean_desktop()
 
         elif action == "list":
-            result = list_desktop()
+            return list_desktop()
 
         elif action == "stats":
-            result = get_desktop_stats()
+            return get_desktop_stats()
 
         elif action == "task" or task:
-            actual_task = task or parameters.get("description", "")
+            actual_task = task or params.get("description", "")
             if not actual_task:
-                return "Please describe what you want to do on the desktop, sir."
+                return "Please describe what you want to do on the desktop."
 
-            print(f"[Desktop] 🤖 Asking Gemini: {actual_task}")
+            print(f"[Desktop] Asking Gemini: {actual_task}")
             if player:
                 player.write_log("[Desktop] Generating action...")
 
             code = _ask_gemini_for_desktop_action(actual_task)
-
-            if code == "UNSAFE":
-                result = "I cannot perform that desktop action safely, sir."
-            elif code.startswith("ERROR:"):
-                result = f"Could not generate action: {code}"
-            else:
-                print(f"[Desktop] ✅ Generated code:\n{code[:200]}")
-                result = _execute_generated_code(code)
+            return _execute_generated_code(code, player=player)
 
         else:
-            full_task = task or action
-            if full_task:
-                code   = _ask_gemini_for_desktop_action(full_task)
-                result = _execute_generated_code(code) if code not in ("UNSAFE",) else "Cannot do that safely."
-            else:
-                result = "No action or task specified."
+            if action:
+                code = _ask_gemini_for_desktop_action(action)
+                return _execute_generated_code(code, player=player)
+            return "No action or task specified."
 
     except Exception as e:
-        result = f"Desktop control error: {e}"
-
-    print(f"[Desktop] {result[:100]}")
-    if player:
-        player.write_log(f"[desktop] {result[:60]}")
-
-    return result
+        print(f"[Desktop] Error: {e}")
+        return f"Desktop control error: {e}"

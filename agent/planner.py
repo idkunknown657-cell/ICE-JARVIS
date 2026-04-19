@@ -22,7 +22,6 @@ ABSOLUTE RULES:
 - NEVER reference previous step results in parameters. Every step is independent.
 - Use web_search for ANY information retrieval, research, or current data.
 - Use file_controller to save content to disk.
-- Use cmd_control to open files or run system commands.
 - Max 5 steps. Use the minimum steps needed.
 
 AVAILABLE TOOLS AND THEIR PARAMETERS:
@@ -36,6 +35,13 @@ web_search
   items: list of strings (optional, for compare mode)
   aspect: string (optional, for compare mode)
 
+game_updater
+  action: "update" | "install" | "list" | "download_status" | "schedule" (required)
+  platform: "steam" | "epic" | "both" (optional, default: both)
+  game_name: string (optional)
+  app_id: string (optional)
+  shutdown_when_done: boolean (optional)
+
 browser_control
   action: "go_to" | "search" | "click" | "type" | "scroll" | "get_text" | "press" | "close" (required)
   url: string (for go_to)
@@ -48,10 +54,6 @@ file_controller
   path: string — use "desktop" for Desktop folder
   name: string — filename
   content: string — file content (for write/create_file)
-
-cmd_control
-  task: string (required) — natural language description of what to do
-  visible: boolean (optional)
 
 computer_settings
   action: string (required)
@@ -108,32 +110,45 @@ code_helper
 dev_agent
   description: string (required)
   language: string (optional)
-
 EXAMPLES:
 
-Goal: "makine mühendisliği hakkında araştırma yap ve not defterine kaydet"
+Goal: "research mechanical engineering and save it to a notepad file"
 Steps:
-  1. web_search | query: "mechanical engineering overview definition history"
-  2. web_search | query: "mechanical engineering applications and future trends"
-  3. file_controller | action: write, path: desktop, name: makine_muhendisligi.txt, content: "MAKINE MUHENDISLIGI ARASTIRMASI\n\nBu dosya web arastirmasi sonuclari ile doldurulacak."
-  4. cmd_control | task: "open makine_muhendisligi.txt on desktop with notepad"
 
-Goal: "Bitcoin fiyatı nedir"
-Steps:
-  1. web_search | query: "Bitcoin price today USD"
+web_search | query: "mechanical engineering overview definition history"
+web_search | query: "mechanical engineering applications and future trends"
+file_controller | action: write, path: desktop, name: mechanical_engineering.txt, content: "MECHANICAL ENGINEERING RESEARCH\n\nThis file will be filled with web research results."
 
-Goal: "Masaüstündeki dosyaları listele ve en büyük 5 dosyayı bul"
+Goal: "What is the price of Bitcoin"
 Steps:
-  1. file_controller | action: list, path: desktop
-  2. file_controller | action: largest, path: desktop, count: 5
 
-Goal: "WhatsApp'tan Ahmet'e yarın toplantı var de"
-Steps:
-  1. send_message | receiver: Ahmet, message_text: "Yarın toplantı var", platform: WhatsApp
+web_search | query: "Bitcoin price today USD"
 
-Goal: "Saati aç ve 30 dakika sonraya hatırlatıcı kur"
+Goal: "List the files on the desktop and find the largest 5 files"
 Steps:
-  1. reminder | date: [today], time: [now+30min], message: "Hatırlatıcı"
+
+file_controller | action: list, path: desktop
+file_controller | action: largest, path: desktop, count: 5
+
+Goal: "Install PUBG from Steam"
+Steps:
+
+game_updater | action: install, platform: steam, game_name: "PUBG"
+
+Goal: "Update all my Steam games"
+Steps:
+
+game_updater | action: update, platform: steam
+
+Goal: "Send John a message on WhatsApp saying there is a meeting tomorrow"
+Steps:
+
+send_message | receiver: John, message_text: "There is a meeting tomorrow", platform: WhatsApp
+
+Goal: "Open the clock and set a reminder for 30 minutes later"
+Steps:
+
+reminder | date: [today], time: [now+30min], message: "Reminder"
 
 OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 {
@@ -245,7 +260,6 @@ Create a REVISED plan for the remaining work only. Do not repeat completed steps
         text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
         plan     = json.loads(text)
 
-        # generated_code kontrolü
         for step in plan.get("steps", []):
             if step.get("tool") == "generated_code":
                 step["tool"] = "web_search"
