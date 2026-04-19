@@ -43,8 +43,8 @@ It's not just an assistant — it's an extension of your digital life.
 ## ⚡ Quick Start
 
 ```bash
-git clone https://github.com/FatihMakes/Mark-XXXVII.git
-cd Mark-XXXVII
+git clone https://github.com/FatihMakes/Jarvis-MK37.git
+cd Jarvis-MK37
 pip install -r requirements.txt
 playwright install
 python main.py
@@ -75,7 +75,7 @@ Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licens
 ## 👤 Connect with the Creator
 
 Engineered by an 18-year-old developer building a real JARVIS-style assistant.
-⭐ **Star the repository to support the journey to Mark 100.**
+⭐ **Star the repository to support the journey to Mark 85.**
 
 | Platform | Link |
 |---|---|
