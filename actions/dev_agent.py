@@ -13,21 +13,10 @@ def get_base_dir():
 
 
 BASE_DIR         = get_base_dir()
-API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
-MODEL_PLANNER    = "gemini-2.5-flash"
-MODEL_WRITER     = "gemini-2.5-flash"
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
-
-def _get_model(model_name: str):
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    return genai.GenerativeModel(model_name)
+from core.llm_client import call_llm_text as _llm
 
 
 def _strip_fences(text: str) -> str:
@@ -97,26 +86,28 @@ class RateLimitError(Exception):
 
 
 def _plan_project(description: str, language: str) -> dict:
-    model = _get_model(MODEL_PLANNER)
-
-    prompt = f"""You are a senior software architect. Create a minimal, complete file plan for this project.
+    system = (
+        "You are a senior software architect. "
+        "Return ONLY valid JSON — no markdown, no explanation."
+    )
+    prompt = f"""Create a minimal, complete file plan for this project.
 
 Language: {language}
 Description: {description}
 
-Return ONLY valid JSON — no markdown, no explanation:
+Return ONLY valid JSON:
 {{
   "project_name": "snake_case_name",
   "entry_point": "main.py",
   "files": [
     {{
       "path": "main.py",
-      "description": "Entry point — what it does and which modules it imports",
-      "imports": ["utils.helpers", "core.engine"]
+      "description": "Entry point",
+      "imports": ["utils.helpers"]
     }},
     {{
       "path": "utils/helpers.py",
-      "description": "Helper utilities — what functions it exposes",
+      "description": "Helpers",
       "imports": []
     }}
   ],
@@ -124,25 +115,16 @@ Return ONLY valid JSON — no markdown, no explanation:
   "dependencies": ["requests"]
 }}
 
-Critical rules:
-1. List files in DEPENDENCY ORDER — files with no imports come first, entry point comes last.
-2. The "imports" field must list every other project module this file imports (dot-notation, e.g. "utils.helpers").
-3. Keep it minimal — only files truly needed.
-4. Entry point must be in the files list.
-5. Use relative paths only (e.g. "utils/helpers.py", not absolute paths).
-6. Standard library modules (os, sys, json, etc.) do NOT go in "dependencies".
+Rules: dependency order, relative paths, entry point last, stdlib NOT in dependencies.
 
 JSON:"""
 
     try:
-        response = model.generate_content(prompt)
-        raw = _strip_fences(response.text)
+        raw = _strip_fences(_llm(prompt, system=system))
         return json.loads(raw)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Planner returned invalid JSON: {e}\nRaw: {response.text[:300]}")
+        raise ValueError(f"Planner returned invalid JSON: {e}")
     except Exception as e:
-        if _is_rate_limit(e):
-            raise RateLimitError(str(e))
         raise
 
 def _write_file(
@@ -153,80 +135,43 @@ def _write_file(
     project_dir: Path,
     already_written: dict[str, str],
 ) -> str:
-    model = _get_model(MODEL_WRITER)
-
-    file_path = file_info["path"]
-    file_desc = file_info.get("description", "")
+    file_path    = file_info["path"]
+    file_desc    = file_info.get("description", "")
     file_imports = file_info.get("imports", [])
 
     file_list = "\n".join(
         f"  [{i+1}] {f['path']}: {f.get('description', '')}"
         for i, f in enumerate(all_files)
     )
-
-    dependency_context = ""
+    dep_ctx = ""
     for dep_dotted in file_imports:
         dep_path = dep_dotted.replace(".", "/") + ".py"
         if dep_path in already_written:
-            code_snippet = already_written[dep_path][:2000]
-            dependency_context += f"\n\n--- {dep_path} (you must import from this) ---\n{code_snippet}"
+            dep_ctx += f"\n\n--- {dep_path} ---\n{already_written[dep_path][:2000]}"
 
-    lang_rules = ""
-    if language.lower() == "python":
-        lang_rules = """
-Python-specific rules:
-- Use type hints for all function signatures.
-- Add docstrings for all public functions and classes.
-- Use if __name__ == "__main__": guard in the entry point.
-- For relative imports within the project, use: from utils.helpers import foo  (match the project structure exactly).
-- Do NOT use implicit relative imports (from . import ...) unless it's a proper package with __init__.py.
-- If this is a package subdirectory, create __init__.py files where needed."""
-    elif language.lower() in ("javascript", "typescript", "js", "ts"):
-        lang_rules = """
-JS/TS-specific rules:
-- Use ES modules (import/export), not CommonJS (require).
-- Add JSDoc comments for all exported functions.
-- Handle promise rejections with try/catch in async functions."""
-
-    prompt = f"""You are a senior {language} developer writing production-quality code for a real project.
-
-Project goal: {project_description}
-
-Complete project file structure (in dependency order):
-{file_list}
-
-{f"Dependencies this file must import from other project files:{dependency_context}" if dependency_context else ""}
-
-Your task: Write the complete, working code for: {file_path}
-Purpose of this file: {file_desc}
-{f"This file imports from: {', '.join(file_imports)}" if file_imports else "This file has no project-internal imports."}
-
-{lang_rules}
-
-General rules:
-- Output ONLY raw code. Absolutely no explanation, no markdown, no triple backticks.
-- Write COMPLETE, RUNNABLE code — no placeholders, no "# TODO", no "pass" stubs.
-- Every import must either be from the standard library, listed dependencies, or the project files shown above.
-- Match import paths EXACTLY to the file paths in the project structure (e.g. if file is "utils/helpers.py", import as "from utils.helpers import ...").
-- Use proper error handling (try/except) where I/O or network calls are made.
-- The code must work correctly when the project entry point is run from the project root directory.
-
-Code for {file_path}:"""
+    system = (
+        f"You are a senior {language} developer. "
+        "Output ONLY raw code — no explanation, no markdown, no backticks."
+    )
+    prompt = (
+        f"Project goal: {project_description}\n\n"
+        f"Files (dependency order):\n{file_list}\n"
+        f"{dep_ctx}\n\n"
+        f"Write complete code for: {file_path}\n"
+        f"Purpose: {file_desc}\n"
+        f"{'Imports from: ' + ', '.join(file_imports) if file_imports else 'No project-internal imports.'}\n\n"
+        f"Rules: COMPLETE & RUNNABLE code, no placeholders, match import paths exactly.\n\n"
+        f"Code for {file_path}:"
+    )
 
     try:
-        response = model.generate_content(prompt)
-        code = _strip_fences(response.text)
-
+        code      = _strip_fences(_llm(prompt, system=system))
         full_path = project_dir / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(code, encoding="utf-8")
-
         print(f"[DevAgent] ✅ Written: {file_path} ({len(code)} chars)")
         return code
-
     except Exception as e:
-        if _is_rate_limit(e):
-            raise RateLimitError(str(e))
         raise
 
 def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
@@ -350,13 +295,10 @@ def _fix_files(
     entry_point: str,
 ) -> dict[str, str]:
 
-    model = _get_model(MODEL_PLANNER)
-
     error_file, error_line = _parse_traceback(error_output, list(file_codes.keys()))
     error_type = _classify_error(error_output)
 
     files_to_fix: list[str] = []
-
     if error_file:
         files_to_fix.append(error_file)
         if error_type == "import_error":
@@ -370,61 +312,40 @@ def _fix_files(
 
     updated_codes: dict[str, str] = {}
 
+    system = f"You are an expert {language} debugger. Return ONLY the complete fixed code — no explanation, no markdown, no backticks."
+
     for fix_path in files_to_fix:
         current_code = file_codes.get(fix_path, "")
-
         other_ctx = ""
         for fp, code in file_codes.items():
             if fp != fix_path and code:
-                snippet = code[:1500] + ("..." if len(code) > 1500 else "")
-                other_ctx += f"\n--- {fp} ---\n{snippet}\n"
+                other_ctx += f"\n--- {fp} ---\n{code[:1500]}\n"
 
-        line_hint = f"\nError appears to be near line {error_line} in this file." if (
-            error_line and fix_path == error_file
-        ) else ""
+        line_hint = (
+            f"\nError near line {error_line} in this file."
+            if error_line and fix_path == error_file else ""
+        )
 
-        prompt = f"""You are an expert {language} debugger. Fix the broken file below.
-
-Project goal: {project_description}
-
-All project files:
-{chr(10).join(f"  - {f['path']}: {f.get('description', '')}" for f in all_files)}
-
-Other files for context (read-only — fix only the target file):
-{other_ctx[:3500]}
-
-File to fix: {fix_path}{line_hint}
-Error type: {error_type}
-
-Error output:
-{error_output[:2500]}
-
-Current (broken) code:
-{current_code}
-
-Rules:
-- Output ONLY the complete fixed code. No explanation, no markdown, no backticks.
-- Fix ALL errors visible in the error output.
-- Keep all existing correct logic — do not remove working features.
-- Ensure import paths match the actual project file structure exactly.
-- Do NOT introduce new bugs or remove error handling.
-
-Fixed code for {fix_path}:"""
+        prompt = (
+            f"Project goal: {project_description}\n\n"
+            f"All files:\n"
+            + "\n".join(f"  - {f['path']}: {f.get('description', '')}" for f in all_files)
+            + f"\n\nOther files (context):\n{other_ctx[:3500]}\n\n"
+            f"File to fix: {fix_path}{line_hint}\n"
+            f"Error type: {error_type}\n\n"
+            f"Error output:\n{error_output[:2500]}\n\n"
+            f"Current code:\n{current_code}\n\n"
+            f"Fixed code for {fix_path}:"
+        )
 
         try:
-            response = model.generate_content(prompt)
-            fixed = _strip_fences(response.text)
-
+            fixed     = _strip_fences(_llm(prompt, system=system))
             full_path = project_dir / fix_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(fixed, encoding="utf-8")
-
             updated_codes[fix_path] = fixed
             print(f"[DevAgent] 🔧 Fixed: {fix_path}")
-
         except Exception as e:
-            if _is_rate_limit(e):
-                raise RateLimitError(str(e))
             print(f"[DevAgent] ⚠️ Could not fix {fix_path}: {e}")
 
     return updated_codes

@@ -23,11 +23,6 @@ def _get_base_dir() -> Path:
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-def _get_api_key() -> str:
-    path = _get_base_dir() / "config" / "api_keys.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-    
 def _get_desktop() -> Path:
     if _OS == "Linux":
         xdg = os.environ.get("XDG_DESKTOP_DIR", "")
@@ -102,49 +97,29 @@ def _execute_generated_code(code: str, player=None) -> str:
 
 
 def _ask_gemini_for_desktop_action(task: str) -> str:
+    from core.llm_client import call_llm_text
 
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel("gemini-2.5-flash")
-
-    desktop = str(_get_desktop())
-
+    desktop     = str(_get_desktop())
     os_specific = ""
     if _OS == "Windows":
         os_specific = "- ctypes (Windows API calls, read-only)\n- winreg (registry READ only)"
-    elif _OS == "Darwin":
-        os_specific = "- subprocess is NOT available; use pyautogui or Path only"
     else:
         os_specific = "- subprocess is NOT available; use pyautogui or Path only"
 
-    prompt = f"""You are a desktop automation assistant.
-Current OS: {_OS}
-Desktop path: {desktop}
-
-Generate safe Python code to accomplish the task below.
-Allowed modules ONLY:
-- pyautogui (mouse, keyboard — if needed)
-- pathlib.Path (file/folder inspection only, no deletion)
-- shutil.copy2, shutil.copytree, shutil.disk_usage (NO move, NO rmtree)
-- os_path (os.path equivalent, read-only)
-- time.sleep
-{os_specific}
-
-Hard rules:
-- NO file deletion (no unlink, no rmtree, no remove)
-- NO subprocess calls
-- NO exec() or eval() inside the code
-- NO import statements (modules are pre-injected)
-- NO file write operations except explicitly requested
-- If task cannot be done safely with these tools, output exactly: UNSAFE
-
-Output ONLY the Python code. No explanation, no markdown, no backticks.
-
-Task: {task}"""
-
+    system = (
+        "You are a desktop automation code generator. "
+        "Output ONLY raw Python code — no explanation, no markdown, no backticks."
+    )
+    prompt = (
+        f"Current OS: {_OS}\nDesktop path: {desktop}\n\n"
+        f"Allowed modules: pyautogui, pathlib.Path, shutil.copy2, shutil.disk_usage, time.sleep\n"
+        f"{os_specific}\n\n"
+        f"Rules: NO deletion, NO subprocess, NO exec/eval, NO imports.\n"
+        f"If unsafe, output exactly: UNSAFE\n\n"
+        f"Task: {task}"
+    )
     try:
-        response = model.generate_content(prompt)
-        code = response.text.strip()
+        code = call_llm_text(prompt, system=system).strip()
         if code.startswith("```"):
             lines = code.split("\n")
             code  = "\n".join(lines[1:-1]).strip()

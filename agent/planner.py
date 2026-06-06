@@ -1,7 +1,13 @@
+"""
+MARK XL — Task Planner
+Replaces google.generativeai with local Ollama via core.llm_client.
+"""
 import json
 import re
 import sys
 from pathlib import Path
+
+from core.llm_client import call_llm_text
 
 
 def get_base_dir() -> Path:
@@ -10,11 +16,10 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+BASE_DIR = get_base_dir()
 
 
-PLANNER_PROMPT = """You are the planning module of MARK XXV, a personal AI assistant.
+PLANNER_PROMPT = """You are the planning module of MARK XL, a personal AI assistant.
 Your job: break any user goal into a sequence of steps using ONLY the tools listed below.
 
 ABSOLUTE RULES:
@@ -110,45 +115,6 @@ code_helper
 dev_agent
   description: string (required)
   language: string (optional)
-EXAMPLES:
-
-Goal: "research mechanical engineering and save it to a notepad file"
-Steps:
-
-web_search | query: "mechanical engineering overview definition history"
-web_search | query: "mechanical engineering applications and future trends"
-file_controller | action: write, path: desktop, name: mechanical_engineering.txt, content: "MECHANICAL ENGINEERING RESEARCH\n\nThis file will be filled with web research results."
-
-Goal: "What is the price of Bitcoin"
-Steps:
-
-web_search | query: "Bitcoin price today USD"
-
-Goal: "List the files on the desktop and find the largest 5 files"
-Steps:
-
-file_controller | action: list, path: desktop
-file_controller | action: largest, path: desktop, count: 5
-
-Goal: "Install PUBG from Steam"
-Steps:
-
-game_updater | action: install, platform: steam, game_name: "PUBG"
-
-Goal: "Update all my Steam games"
-Steps:
-
-game_updater | action: update, platform: steam
-
-Goal: "Send John a message on WhatsApp saying there is a meeting tomorrow"
-Steps:
-
-send_message | receiver: John, message_text: "There is a meeting tomorrow", platform: WhatsApp
-
-Goal: "Open the clock and set a reminder for 30 minutes later"
-Steps:
-
-reminder | date: [today], time: [now+30min], message: "Reminder"
 
 OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 {
@@ -166,45 +132,28 @@ OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 """
 
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
-
 def create_plan(goal: str, context: str = "") -> dict:
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-lite",
-        system_instruction=PLANNER_PROMPT
-    )
-
     user_input = f"Goal: {goal}"
     if context:
         user_input += f"\n\nContext: {context}"
 
     try:
-        response = model.generate_content(user_input)
-        text     = response.text.strip()
-        text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        text = call_llm_text(user_input, system=PLANNER_PROMPT)
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
 
         plan = json.loads(text)
-
         if "steps" not in plan or not isinstance(plan["steps"], list):
             raise ValueError("Invalid plan structure")
 
         for step in plan["steps"]:
-            if step.get("tool") in ("generated_code",):
-                print(f"[Planner] ⚠️ generated_code detected in step {step.get('step')} — replacing with web_search")
-                desc = step.get("description", goal)
-                step["tool"] = "web_search"
-                step["parameters"] = {"query": desc[:200]}
+            if step.get("tool") == "generated_code":
+                print(f"[Planner] ⚠️ generated_code in step {step.get('step')} — replacing with web_search")
+                step["tool"]       = "web_search"
+                step["parameters"] = {"query": step.get("description", goal)[:200]}
 
         print(f"[Planner] ✅ Plan: {len(plan['steps'])} steps")
         for s in plan["steps"]:
             print(f"  Step {s['step']}: [{s['tool']}] {s['description']}")
-
         return plan
 
     except json.JSONDecodeError as e:
@@ -218,32 +167,23 @@ def create_plan(goal: str, context: str = "") -> dict:
 def _fallback_plan(goal: str) -> dict:
     print("[Planner] 🔄 Fallback plan")
     return {
-        "goal": goal,
+        "goal":  goal,
         "steps": [
             {
-                "step": 1,
-                "tool": "web_search",
+                "step":        1,
+                "tool":        "web_search",
                 "description": f"Search for: {goal}",
-                "parameters": {"query": goal},
-                "critical": True
+                "parameters":  {"query": goal},
+                "critical":    True,
             }
-        ]
+        ],
     }
 
 
 def replan(goal: str, completed_steps: list, failed_step: dict, error: str) -> dict:
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=PLANNER_PROMPT
-    )
-
     completed_summary = "\n".join(
         f"  - Step {s['step']} ({s['tool']}): DONE" for s in completed_steps
     )
-
     prompt = f"""Goal: {goal}
 
 Already completed:
@@ -255,14 +195,13 @@ Error: {error}
 Create a REVISED plan for the remaining work only. Do not repeat completed steps."""
 
     try:
-        response = model.generate_content(prompt)
-        text     = response.text.strip()
-        text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
-        plan     = json.loads(text)
+        text = call_llm_text(prompt, system=PLANNER_PROMPT)
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        plan = json.loads(text)
 
         for step in plan.get("steps", []):
             if step.get("tool") == "generated_code":
-                step["tool"] = "web_search"
+                step["tool"]       = "web_search"
                 step["parameters"] = {"query": step.get("description", goal)[:200]}
 
         print(f"[Planner] 🔄 Revised plan: {len(plan['steps'])} steps")

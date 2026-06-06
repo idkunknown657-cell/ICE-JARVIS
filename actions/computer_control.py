@@ -40,11 +40,12 @@ def _load_config() -> dict:
         return {}
 
 def _get_os() -> str:
-    return _load_config().get("os_system", "windows").lower()
+    import platform
+    s = platform.system().lower()
+    if s == "darwin":
+        return "mac"
+    return s  # "windows" or "linux"
 
-
-def _get_api_key() -> str:
-    return _load_config().get("gemini_api_key", "")
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),
@@ -297,23 +298,27 @@ def _focus_window(title: str) -> str:
     return f"focus_window: unknown OS '{os_name}'"
 
 def _screen_find(description: str) -> tuple[int, int] | None:
-    api_key = _get_api_key()
-    if not api_key:
-        print("[ComputerControl] ⚠️ No API key for screen_find")
-        return None
-
     try:
-        from google import genai
-        from google.genai import types as gtypes
+        import base64
+        import requests as _req
+        import json as _json
+
+        cfg_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+        try:
+            cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+
+        ollama_url   = cfg.get("llm_url", "http://localhost:11434").rstrip("/")
+        vision_model = cfg.get("vision_model") or cfg.get("llm_model", "llava")
 
         _require_pyautogui()
         w, h  = pyautogui.size()
         img   = pyautogui.screenshot()
         buf   = io.BytesIO()
         img.save(buf, format="PNG")
-        image_bytes = buf.getvalue()
+        b64   = base64.b64encode(buf.getvalue()).decode("ascii")
 
-        client = genai.Client(api_key=api_key)
         prompt = (
             f"This is a screenshot of a {w}×{h} pixel screen. "
             f"Locate the UI element described as: '{description}'. "
@@ -321,15 +326,18 @@ def _screen_find(description: str) -> tuple[int, int] | None:
             f"If the element is not visible, reply: NOT_FOUND"
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[
-                gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                prompt,
-            ],
+        resp = _req.post(
+            f"{ollama_url}/api/chat",
+            json={
+                "model":  vision_model,
+                "stream": False,
+                "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+            },
+            timeout=30,
         )
+        resp.raise_for_status()
+        text = (resp.json().get("message", {}).get("content") or "").strip()
 
-        text = (response.text or "").strip()
         if "NOT_FOUND" in text.upper():
             return None
 

@@ -48,11 +48,6 @@ HEADERS = {
 _YT_VIDEO_FILTER = "EgIQAQ%3D%3D"
 
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
-
 def _open_url(url: str) -> None:
     try:
         if is_mac():
@@ -158,26 +153,20 @@ def _get_transcript(video_id: str) -> str | None:
 
 
 def _summarize_with_gemini(transcript: str, video_url: str) -> str:
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=(
-            "You are JARVIS, an AI assistant. "
-            "Summarize YouTube video transcripts clearly and concisely. "
-            "Structure: 1-sentence overview, then 3-5 key points. "
-            "Be direct. Address the user as 'sir'. "
-            "Match the language of the transcript."
-        )
+    from core.llm_client import call_llm_text
+    system = (
+        "You are JARVIS, an AI assistant. "
+        "Summarize YouTube video transcripts clearly and concisely. "
+        "Structure: 1-sentence overview, then 3-5 key points. "
+        "Be direct. Address the user as 'sir'. "
+        "Match the language of the transcript."
     )
-
-    max_chars = 80000
+    max_chars = 12000
     truncated = transcript[:max_chars] + ("..." if len(transcript) > max_chars else "")
-    response  = model.generate_content(
-        f"Please summarize this YouTube video transcript:\n\n{truncated}"
+    return call_llm_text(
+        f"Please summarize this YouTube video transcript:\n\n{truncated}",
+        system=system,
     )
-    return response.text.strip()
 
 
 def _save_summary(content: str, video_url: str) -> str:

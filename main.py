@@ -1,20 +1,55 @@
-import asyncio
-import re
-import threading
+"""
+MARK XL — Local LLM Edition
+STT (Whisper / Vosk)  +  Ollama LLM  +  TTS (EdgeTTS / Kokoro / ElevenLabs)
+All Gemini / Google-AI dependencies removed.
+"""
+# ── Bootstrap: auto-install base UI packages before anything else ──────────
+# Uses only stdlib so it works even on a completely fresh Python install.
+import importlib.util as _ilu
+import os              as _os
+import subprocess      as _sp
+import sys             as _sys
+
+_BASE_PKGS = [
+    ("PyQt6",       "PyQt6"),
+    ("psutil",      "psutil"),
+    ("numpy",       "numpy"),
+    ("sounddevice", "sounddevice"),
+    ("PIL",         "pillow"),
+    ("requests",    "requests"),
+]
+
+def _bootstrap() -> None:
+    need = [pkg for mod, pkg in _BASE_PKGS if _ilu.find_spec(mod) is None]
+    if not need:
+        return
+    print(f"\n[MARK XL] First-run setup — installing: {', '.join(need)}")
+    print("[MARK XL] This happens only once.\n")
+    _sp.run([_sys.executable, "-m", "pip", "install", *need], check=True)
+    print("\n[MARK XL] Base packages ready — restarting…\n")
+    # Replace current process with a fresh one (picks up newly installed packages)
+    _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+_bootstrap()
+# ───────────────────────────────────────────────────────────────────────────
+
 import json
+import queue
+import re
 import sys
+import threading
 import traceback
+from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import sounddevice as sd
-from google import genai
-from google.genai import types
-from ui import JarvisUI
-from memory.memory_manager import (
-    load_memory, update_memory, format_memory_for_prompt,
-)
 
-from actions.file_processor import file_processor
+from ui import JarvisUI
+from memory.memory_manager import load_memory, update_memory, format_memory_for_prompt
+from core.llm_client import call_llm, call_llm_stream, get_llm_settings
+
+from actions.file_processor    import file_processor
 from actions.flight_finder     import flight_finder
 from actions.open_app          import open_app
 from actions.weather_report    import weather_action
@@ -33,42 +68,28 @@ from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 
 
-def get_base_dir():
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
 
 
-BASE_DIR        = get_base_dir()
+BASE_DIR        = _get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-CHANNELS            = 1
-SEND_SAMPLE_RATE    = 16000
-RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE          = 1024
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+SAMPLE_RATE_IN = 16_000
+BLOCK_SIZE     = 1_024
+CHANNELS       = 1
 
-
-def _load_system_prompt() -> str:
-    try:
-        return PROMPT_PATH.read_text(encoding="utf-8")
-    except Exception:
-        return (
-            "You are JARVIS, Tony Stark's AI assistant. "
-            "Be concise, direct, and always use the provided tools to complete tasks. "
-            "Never simulate or guess results — always call the appropriate tool."
-        )
-
-_CTRL_RE = re.compile(r"<ctrl\d+>", re.IGNORECASE)
-
-def _clean_transcript(text: str) -> str:    
-    text = _CTRL_RE.sub("", text)
-    text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
-    return text.strip()
+# ---------------------------------------------------------------------------
+# Tool declarations (Gemini format kept for readability;
+# converted to OpenAI/Ollama format by _to_ollama_tools())
+# ---------------------------------------------------------------------------
 
 TOOL_DECLARATIONS = [
     {
@@ -81,10 +102,7 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "app_name": {
-                    "type": "STRING",
-                    "description": "Exact name of the application (e.g. 'WhatsApp', 'Chrome', 'Spotify')"
-                }
+                "app_name": {"type": "STRING", "description": "Exact name of the application"}
             },
             "required": ["app_name"]
         }
@@ -108,9 +126,7 @@ TOOL_DECLARATIONS = [
         "description": "Gives the weather report to user",
         "parameters": {
             "type": "OBJECT",
-            "properties": {
-                "city": {"type": "STRING", "description": "City name"}
-            },
+            "properties": {"city": {"type": "STRING", "description": "City name"}},
             "required": ["city"]
         }
     },
@@ -149,9 +165,9 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action": {"type": "STRING", "description": "play | summarize | get_info | trending (default: play)"},
+                "action": {"type": "STRING", "description": "play | summarize | get_info | trending"},
                 "query":  {"type": "STRING", "description": "Search query for play action"},
-                "save":   {"type": "BOOLEAN", "description": "Save summary to Notepad (summarize only)"},
+                "save":   {"type": "BOOLEAN", "description": "Save summary to Notepad"},
                 "region": {"type": "STRING", "description": "Country code for trending e.g. TR, US"},
                 "url":    {"type": "STRING", "description": "Video URL for get_info action"},
             },
@@ -164,14 +180,13 @@ TOOL_DECLARATIONS = [
             "Captures and analyzes the screen or webcam image. "
             "MUST be called when user asks what is on screen, what you see, "
             "analyze my screen, look at camera, etc. "
-            "You have NO visual ability without this tool. "
-            "After calling this tool, stay SILENT — the vision module speaks directly."
+            "You have NO visual ability without this tool."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "angle": {"type": "STRING", "description": "'screen' to capture display, 'camera' for webcam. Default: 'screen'"},
-                "text":  {"type": "STRING", "description": "The question or instruction about the captured image"}
+                "angle": {"type": "STRING", "description": "'screen' or 'camera'. Default: 'screen'"},
+                "text":  {"type": "STRING", "description": "The question about the captured image"}
             },
             "required": ["text"]
         }
@@ -181,15 +196,14 @@ TOOL_DECLARATIONS = [
         "description": (
             "Controls the computer: volume, brightness, window management, keyboard shortcuts, "
             "typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, "
-            "scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. "
-            "Use for ANY single computer control command. NEVER route to agent_task."
+            "scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action":      {"type": "STRING", "description": "The action to perform"},
-                "description": {"type": "STRING", "description": "Natural language description of what to do"},
-                "value":       {"type": "STRING", "description": "Optional value: volume level, text to type, etc."}
+                "description": {"type": "STRING", "description": "Natural language description"},
+                "value":       {"type": "STRING", "description": "Optional value"}
             },
             "required": []
         }
@@ -198,27 +212,25 @@ TOOL_DECLARATIONS = [
         "name": "browser_control",
         "description": (
             "Controls any web browser. Use for: opening websites, searching the web, "
-            "clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. "
-            "Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', "
-            "'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously."
+            "clicking elements, filling forms, scrolling, screenshots, navigation."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action":      {"type": "STRING", "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"},
-                "browser":     {"type": "STRING", "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."},
+                "browser":     {"type": "STRING", "description": "chrome | edge | firefox | opera | operagx | brave | vivaldi | safari"},
                 "url":         {"type": "STRING", "description": "URL for go_to / new_tab action"},
-                "query":       {"type": "STRING", "description": "Search query for search action"},
-                "engine":      {"type": "STRING", "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"},
+                "query":       {"type": "STRING", "description": "Search query"},
+                "engine":      {"type": "STRING", "description": "google | bing | duckduckgo | yandex"},
                 "selector":    {"type": "STRING", "description": "CSS selector for click/type"},
                 "text":        {"type": "STRING", "description": "Text to click or type"},
                 "description": {"type": "STRING", "description": "Element description for smart_click/smart_type"},
                 "direction":   {"type": "STRING", "description": "up | down for scroll"},
-                "amount":      {"type": "INTEGER", "description": "Scroll amount in pixels (default: 500)"},
-                "key":         {"type": "STRING", "description": "Key name for press action (e.g. Enter, Escape, F5)"},
+                "amount":      {"type": "INTEGER", "description": "Scroll amount in pixels"},
+                "key":         {"type": "STRING", "description": "Key name for press"},
                 "path":        {"type": "STRING", "description": "Save path for screenshot"},
                 "incognito":   {"type": "BOOLEAN", "description": "Open in private/incognito mode"},
-                "clear_first": {"type": "BOOLEAN", "description": "Clear field before typing (default: true)"},
+                "clear_first": {"type": "BOOLEAN", "description": "Clear field before typing"},
             },
             "required": ["action"]
         }
@@ -235,7 +247,7 @@ TOOL_DECLARATIONS = [
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
                 "content":     {"type": "STRING", "description": "Content for create_file/write"},
                 "name":        {"type": "STRING", "description": "File name to search for"},
-                "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf)"},
+                "extension":   {"type": "STRING", "description": "File extension to search"},
                 "count":       {"type": "INTEGER", "description": "Number of results for largest"},
             },
             "required": ["action"]
@@ -262,28 +274,28 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "write | edit | explain | run | build | auto (default: auto)"},
-                "description": {"type": "STRING", "description": "What the code should do or what change to make"},
-                "language":    {"type": "STRING", "description": "Programming language (default: python)"},
+                "action":      {"type": "STRING", "description": "write | edit | explain | run | build | auto"},
+                "description": {"type": "STRING", "description": "What the code should do"},
+                "language":    {"type": "STRING", "description": "Programming language"},
                 "output_path": {"type": "STRING", "description": "Where to save the file"},
-                "file_path":   {"type": "STRING", "description": "Path to existing file for edit/explain/run/build"},
+                "file_path":   {"type": "STRING", "description": "Path to existing file"},
                 "code":        {"type": "STRING", "description": "Raw code string for explain"},
-                "args":        {"type": "STRING", "description": "CLI arguments for run/build"},
-                "timeout":     {"type": "INTEGER", "description": "Execution timeout in seconds (default: 30)"},
+                "args":        {"type": "STRING", "description": "CLI arguments"},
+                "timeout":     {"type": "INTEGER", "description": "Execution timeout in seconds"},
             },
             "required": ["action"]
         }
     },
     {
         "name": "dev_agent",
-        "description": "Builds complete multi-file projects from scratch: plans, writes files, installs deps, opens VSCode, runs and fixes errors.",
+        "description": "Builds complete multi-file projects from scratch.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "description":  {"type": "STRING", "description": "What the project should do"},
-                "language":     {"type": "STRING", "description": "Programming language (default: python)"},
+                "language":     {"type": "STRING", "description": "Programming language"},
                 "project_name": {"type": "STRING", "description": "Optional project folder name"},
-                "timeout":      {"type": "INTEGER", "description": "Run timeout in seconds (default: 30)"},
+                "timeout":      {"type": "INTEGER", "description": "Run timeout in seconds"},
             },
             "required": ["description"]
         }
@@ -293,13 +305,13 @@ TOOL_DECLARATIONS = [
         "description": (
             "Executes complex multi-step tasks requiring multiple different tools. "
             "Examples: 'research X and save to file', 'find and organize files'. "
-            "DO NOT use for single commands. NEVER use for Steam/Epic — use game_updater."
+            "DO NOT use for single commands."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "goal":     {"type": "STRING", "description": "Complete description of what to accomplish"},
-                "priority": {"type": "STRING", "description": "low | normal | high (default: normal)"}
+                "priority": {"type": "STRING", "description": "low | normal | high"}
             },
             "required": ["goal"]
         }
@@ -317,13 +329,13 @@ TOOL_DECLARATIONS = [
                 "keys":        {"type": "STRING", "description": "Key combination e.g. 'ctrl+c'"},
                 "key":         {"type": "STRING", "description": "Single key e.g. 'enter'"},
                 "direction":   {"type": "STRING", "description": "up | down | left | right"},
-                "amount":      {"type": "INTEGER", "description": "Scroll amount (default: 3)"},
+                "amount":      {"type": "INTEGER", "description": "Scroll amount"},
                 "seconds":     {"type": "NUMBER",  "description": "Seconds to wait"},
                 "title":       {"type": "STRING",  "description": "Window title for focus_window"},
-                "description": {"type": "STRING",  "description": "Element description for screen_find/screen_click"},
+                "description": {"type": "STRING",  "description": "Element description"},
                 "type":        {"type": "STRING",  "description": "Data type for random_data"},
-                "field":       {"type": "STRING",  "description": "Field for user_data: name|email|city"},
-                "clear_first": {"type": "BOOLEAN", "description": "Clear field before typing (default: true)"},
+                "field":       {"type": "STRING",  "description": "Field for user_data"},
+                "clear_first": {"type": "BOOLEAN", "description": "Clear field before typing"},
                 "path":        {"type": "STRING",  "description": "Save path for screenshot"},
             },
             "required": ["action"]
@@ -333,21 +345,18 @@ TOOL_DECLARATIONS = [
         "name": "game_updater",
         "description": (
             "THE ONLY tool for ANY Steam or Epic Games request. "
-            "Use for: installing, downloading, updating games, listing installed games, "
-            "checking download status, scheduling updates. "
-            "ALWAYS call directly for any Steam/Epic/game request. "
-            "NEVER use agent_task, browser_control, or web_search for Steam/Epic."
+            "Use for: installing, downloading, updating games, listing installed games."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":    {"type": "STRING",  "description": "update | install | list | download_status | schedule | cancel_schedule | schedule_status (default: update)"},
-                "platform":  {"type": "STRING",  "description": "steam | epic | both (default: both)"},
-                "game_name": {"type": "STRING",  "description": "Game name (partial match supported)"},
-                "app_id":    {"type": "STRING",  "description": "Steam AppID for install (optional)"},
-                "hour":      {"type": "INTEGER", "description": "Hour for scheduled update 0-23 (default: 3)"},
-                "minute":    {"type": "INTEGER", "description": "Minute for scheduled update 0-59 (default: 0)"},
-                "shutdown_when_done": {"type": "BOOLEAN", "description": "Shut down PC when download finishes"},
+                "action":    {"type": "STRING",  "description": "update | install | list | download_status | schedule | cancel_schedule | schedule_status"},
+                "platform":  {"type": "STRING",  "description": "steam | epic | both"},
+                "game_name": {"type": "STRING",  "description": "Game name"},
+                "app_id":    {"type": "STRING",  "description": "Steam AppID"},
+                "hour":      {"type": "INTEGER", "description": "Hour for scheduled update 0-23"},
+                "minute":    {"type": "INTEGER", "description": "Minute for scheduled update 0-59"},
+                "shutdown_when_done": {"type": "BOOLEAN", "description": "Shut down PC when done"},
             },
             "required": []
         }
@@ -360,9 +369,9 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "origin":      {"type": "STRING",  "description": "Departure city or airport code"},
                 "destination": {"type": "STRING",  "description": "Arrival city or airport code"},
-                "date":        {"type": "STRING",  "description": "Departure date (any format)"},
+                "date":        {"type": "STRING",  "description": "Departure date"},
                 "return_date": {"type": "STRING",  "description": "Return date for round trips"},
-                "passengers":  {"type": "INTEGER", "description": "Number of passengers (default: 1)"},
+                "passengers":  {"type": "INTEGER", "description": "Number of passengers"},
                 "cabin":       {"type": "STRING",  "description": "economy | premium | business | first"},
                 "save":        {"type": "BOOLEAN", "description": "Save results to Notepad"},
             },
@@ -374,89 +383,46 @@ TOOL_DECLARATIONS = [
         "description": (
             "Shuts down the assistant completely. "
             "Call this when the user expresses intent to end the conversation, "
-            "close the assistant, say goodbye, or stop Jarvis. "
-            "The user can say this in ANY language."
+            "close the assistant, say goodbye, or stop Jarvis."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "file_processor",
+        "description": (
+            "Processes any file that the user has uploaded or dropped onto the interface. "
+            "Supports: images, PDFs, Word docs, CSV/Excel, JSON, code files, audio, video, archives."
         ),
         "parameters": {
             "type": "OBJECT",
-            "properties": {},
+            "properties": {
+                "file_path":   {"type": "STRING",  "description": "Full path to the uploaded file"},
+                "action":      {"type": "STRING",  "description": "What to do with the file"},
+                "instruction": {"type": "STRING",  "description": "Free-form instruction"},
+                "format":      {"type": "STRING",  "description": "Target format for conversion"},
+                "width":       {"type": "INTEGER", "description": "Target width for image resize"},
+                "height":      {"type": "INTEGER", "description": "Target height for image resize"},
+                "scale":       {"type": "NUMBER",  "description": "Scale factor"},
+                "quality":     {"type": "INTEGER", "description": "Quality 1-100"},
+                "start":       {"type": "STRING",  "description": "Start time for trim"},
+                "end":         {"type": "STRING",  "description": "End time for trim"},
+                "timestamp":   {"type": "STRING",  "description": "Timestamp for video frame extraction"},
+                "column":      {"type": "STRING",  "description": "Column name for CSV filter/sort"},
+                "value":       {"type": "STRING",  "description": "Filter value"},
+                "condition":   {"type": "STRING",  "description": "Filter condition"},
+                "ascending":   {"type": "BOOLEAN", "description": "Sort order"},
+                "save":        {"type": "BOOLEAN", "description": "Save result to file"},
+                "destination": {"type": "STRING",  "description": "Output folder for archive extract"},
+            },
+            "required": []
         }
     },
-    {
-    "name": "file_processor",
-    "description": (
-        "Processes any file that the user has uploaded or dropped onto the interface. "
-        "Use this when the user refers to an uploaded file and wants an action on it. "
-        "Supports: images (describe/ocr/resize/compress/convert), "
-        "PDFs (summarize/extract_text/to_word), "
-        "Word docs & text files (summarize/fix/reformat/translate), "
-        "CSV/Excel (analyze/stats/filter/sort/convert), "
-        "JSON/XML (validate/format/analyze), "
-        "code files (explain/review/fix/optimize/run/document/test), "
-        "audio (transcribe/trim/convert/info), "
-        "video (trim/extract_audio/extract_frame/compress/transcribe/info), "
-        "archives (list/extract), "
-        "presentations (summarize/extract_text). "
-        "ALWAYS call this tool when a file has been uploaded and the user gives a command about it. "
-        "If the user's command is ambiguous, pick the most logical action for that file type."
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "file_path": {
-                "type": "STRING",
-                "description": "Full path to the uploaded file. Leave empty to use the currently uploaded file."
-            },
-            "action": {
-                "type": "STRING",
-                "description": (
-                    "What to do with the file. Examples by type:\n"
-                    "image: describe | ocr | resize | compress | convert | info\n"
-                    "pdf: summarize | extract_text | to_word | info\n"
-                    "docx/txt: summarize | fix | reformat | translate_hint | word_count | to_bullet\n"
-                    "csv/excel: analyze | stats | filter | sort | convert | info\n"
-                    "json: validate | format | analyze | to_csv\n"
-                    "code: explain | review | fix | optimize | run | document | test\n"
-                    "audio: transcribe | trim | convert | info\n"
-                    "video: trim | extract_audio | extract_frame | compress | transcribe | info | convert\n"
-                    "archive: list | extract\n"
-                    "pptx: summarize | extract_text | analyze"
-                )
-            },
-            "instruction": {
-                "type": "STRING",
-                "description": "Free-form instruction if action doesn't cover it. E.g. 'translate this to Turkish', 'find all email addresses'"
-            },
-            "format": {
-                "type": "STRING",
-                "description": "Target format for conversion. E.g. 'mp3', 'pdf', 'csv', 'png'"
-            },
-            "width":     {"type": "INTEGER", "description": "Target width for image resize"},
-            "height":    {"type": "INTEGER", "description": "Target height for image resize"},
-            "scale":     {"type": "NUMBER",  "description": "Scale factor for image resize (e.g. 0.5)"},
-            "quality":   {"type": "INTEGER", "description": "Quality 1-100 for image/video compress"},
-            "start":     {"type": "STRING",  "description": "Start time for trim: seconds or HH:MM:SS"},
-            "end":       {"type": "STRING",  "description": "End time for trim: seconds or HH:MM:SS"},
-            "timestamp": {"type": "STRING",  "description": "Timestamp for video frame extraction HH:MM:SS"},
-            "column":    {"type": "STRING",  "description": "Column name for CSV filter/sort"},
-            "value":     {"type": "STRING",  "description": "Filter value for CSV filter"},
-            "condition": {"type": "STRING",  "description": "Filter condition: equals|contains|gt|lt"},
-            "ascending": {"type": "BOOLEAN", "description": "Sort order for CSV sort (default: true)"},
-            "save":      {"type": "BOOLEAN", "description": "Save result to file (default: true)"},
-            "destination": {"type": "STRING", "description": "Output folder for archive extract"},
-        },
-        "required": []
-    }
-},
     {
         "name": "save_memory",
         "description": (
             "Save an important personal fact about the user to long-term memory. "
-            "Call this silently whenever the user reveals something worth remembering: "
-            "name, age, city, job, preferences, hobbies, relationships, projects, or future plans. "
-            "Do NOT call for: weather, reminders, searches, or one-time commands. "
-            "Do NOT announce that you are saving — just call it silently. "
-            "Values must be in English regardless of the conversation language."
+            "Call this silently whenever the user reveals something worth remembering. "
+            "Do NOT announce that you are saving — just call it silently."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -464,223 +430,438 @@ TOOL_DECLARATIONS = [
                 "category": {
                     "type": "STRING",
                     "description": (
-                        "identity — name, age, birthday, city, job, language, nationality | "
-                        "preferences — favorite food/color/music/film/game/sport, hobbies | "
-                        "projects — active projects, goals, things being built | "
-                        "relationships — friends, family, partner, colleagues | "
-                        "wishes — future plans, things to buy, travel dreams | "
-                        "notes — habits, schedule, anything else worth remembering"
+                        "identity | preferences | projects | relationships | wishes | notes"
                     )
                 },
-                "key":   {"type": "STRING", "description": "Short snake_case key (e.g. name, favorite_food, sister_name)"},
-                "value": {"type": "STRING", "description": "Concise value in English (e.g. Fatih, pizza, older sister)"},
+                "key":   {"type": "STRING", "description": "Short snake_case key"},
+                "value": {"type": "STRING", "description": "Concise value in English"},
             },
             "required": ["category", "key", "value"]
         }
     },
 ]
 
-class JarvisLive:
 
-    def __init__(self, ui: JarvisUI):
-        self.ui             = ui
-        self.session        = None
-        self.audio_in_queue = None
-        self.out_queue      = None
-        self._loop          = None
-        self._is_speaking   = False
-        self._speaking_lock = threading.Lock()
-        self.ui.on_text_command = self._on_text_command
-        self._turn_done_event: asyncio.Event | None = None
+# ---------------------------------------------------------------------------
+# Convert Gemini-style declarations to OpenAI/Ollama format
+# ---------------------------------------------------------------------------
 
-    def _on_text_command(self, text: str):
-        if not self._loop or not self.session:
-            return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"parts": [{"text": text}]},
-                turn_complete=True
-            ),
-            self._loop
+_TYPE_MAP = {
+    "OBJECT": "object", "STRING": "string", "ARRAY": "array",
+    "INTEGER": "integer", "BOOLEAN": "boolean", "NUMBER": "number",
+}
+
+
+def _convert_type(t: str) -> str:
+    return _TYPE_MAP.get(t, t.lower()) if isinstance(t, str) else t
+
+
+def _convert_props(props: dict) -> dict:
+    out = {}
+    for k, v in props.items():
+        nv = dict(v)
+        if "type" in nv:
+            nv["type"] = _convert_type(nv["type"])
+        if "items" in nv and isinstance(nv["items"], dict):
+            nv["items"] = {"type": _convert_type(nv["items"].get("type", "string"))}
+        out[k] = nv
+    return out
+
+
+def _to_ollama_tools(decls: list) -> list:
+    tools = []
+    for d in decls:
+        params = d.get("parameters", {})
+        new_params: dict = {
+            "type":       "object",
+            "properties": _convert_props(params.get("properties", {})),
+        }
+        req = params.get("required")
+        if req:
+            new_params["required"] = req
+        tools.append({
+            "type": "function",
+            "function": {
+                "name":        d["name"],
+                "description": d["description"],
+                "parameters":  new_params,
+            },
+        })
+    return tools
+
+
+OLLAMA_TOOLS = _to_ollama_tools(TOOL_DECLARATIONS)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_config() -> dict:
+    try:
+        with open(API_CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _load_system_prompt() -> str:
+    try:
+        return PROMPT_PATH.read_text(encoding="utf-8")
+    except Exception:
+        return (
+            "You are JARVIS, Tony Stark's AI assistant. "
+            "Be concise, direct, and always use the provided tools to complete tasks. "
+            "Never simulate or guess results — always call the appropriate tool."
         )
 
-    def set_speaking(self, value: bool):
+
+# ---------------------------------------------------------------------------
+# Voice Activity Detection (used for Whisper listen loop)
+# ---------------------------------------------------------------------------
+
+class _VADBuffer:
+    """Energy-based VAD: buffers audio until end of utterance."""
+
+    def __init__(
+        self,
+        sample_rate:   int   = 16_000,
+        silence_sec:   float = 1.2,
+        threshold:     float = 0.015,
+        min_speech_sec: float = 0.4,
+        max_speech_sec: float = 30.0,
+    ):
+        self._sr       = sample_rate
+        self._sil_n    = int(silence_sec * sample_rate)
+        self._thresh   = threshold
+        self._min_n    = int(min_speech_sec * sample_rate)
+        self._max_n    = int(max_speech_sec * sample_rate)
+        self._buf:     list[np.ndarray] = []
+        self._in_spch  = False
+        self._sil_cnt  = 0
+
+    def process(self, chunk: np.ndarray) -> np.ndarray | None:
+        """
+        Feed one audio chunk (float32 mono).
+        Returns complete utterance when speech ends, otherwise None.
+        """
+        rms       = float(np.sqrt(np.mean(chunk ** 2)))
+        total_n   = sum(len(c) for c in self._buf)
+
+        if rms > self._thresh:
+            self._in_spch = True
+            self._sil_cnt = 0
+            self._buf.append(chunk.copy())
+        elif self._in_spch:
+            self._buf.append(chunk.copy())
+            self._sil_cnt += len(chunk)
+
+            if self._sil_cnt >= self._sil_n or total_n >= self._max_n:
+                audio          = np.concatenate(self._buf)
+                self._buf      = []
+                self._in_spch  = False
+                self._sil_cnt  = 0
+                if len(audio) >= self._min_n:
+                    return audio
+        return None
+
+
+# ---------------------------------------------------------------------------
+# JarvisLocal
+# ---------------------------------------------------------------------------
+
+class JarvisLocal:
+    """
+    Main assistant class.
+    Replaces JarvisLive (Gemini Live API) with:
+      STT (Whisper/Vosk) → Ollama LLM (tool calling) → TTS (Edge/Kokoro/ElevenLabs)
+    """
+
+    def __init__(self, ui: JarvisUI):
+        self.ui               = ui
+        self._config          = _load_config()
+        self._stt             = None
+        self._tts             = None
+        self._speaking        = False
+        self._speaking_lock   = threading.Lock()
+        self._text_queue:     queue.Queue = queue.Queue()
+        self._tts_queue:      queue.Queue = queue.Queue()
+        self._conversation:   list[dict]  = []
+
+        self.ui.on_text_command = self._on_text_command
+
+    # ------------------------------------------------------------------
+    # System prompt
+    # ------------------------------------------------------------------
+
+    def _build_system_prompt(self) -> str:
+        memory  = load_memory()
+        mem_str = format_memory_for_prompt(memory)
+        sys_p   = _load_system_prompt()
+        now     = datetime.now()
+        time_ctx = (
+            f"[CURRENT DATE & TIME]\n"
+            f"Right now it is: {now.strftime('%A, %B %d, %Y — %I:%M %p')}\n"
+            f"Use this to calculate exact times for reminders.\n\n"
+        )
+        parts = [time_ctx]
+        if mem_str:
+            parts.append(mem_str)
+        parts.append(sys_p)
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Speaking state & TTS
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # TTS queue worker — plays sentences sequentially, no overlaps
+    # ------------------------------------------------------------------
+
+    def _tts_worker(self) -> None:
+        while True:
+            text = self._tts_queue.get()
+            n_got = 1   # how many queue items we consumed this round
+
+            try:
+                if text and self._tts:
+                    # ── Kokoro: merge buffered sentences into one inference call ──
+                    # Each separate Kokoro call costs ~0.5–1 s startup.
+                    # Draining the queue here combines "Hello. How are you?" into
+                    # one call instead of two, eliminating the gap between them.
+                    from core.tts import KokoroTTSEngine
+                    engine = getattr(self._tts, "_engine", None)
+                    if isinstance(engine, KokoroTTSEngine):
+                        while True:
+                            try:
+                                nxt = self._tts_queue.get_nowait()
+                                if nxt:
+                                    text = text.rstrip() + " " + nxt.lstrip()
+                                n_got += 1
+                            except queue.Empty:
+                                break
+
+                    with self._speaking_lock:
+                        self._speaking = True
+                    self.ui.set_state("SPEAKING")
+                    self._tts.speak(text)
+
+            except Exception as e:
+                print(f"[TTS] speak error: {e}")
+            finally:
+                for _ in range(n_got):
+                    self._tts_queue.task_done()
+                if self._tts_queue.empty():
+                    with self._speaking_lock:
+                        self._speaking = False
+                    if not self.ui.muted:
+                        self.ui.set_state("LISTENING")
+
+    def set_speaking(self, value: bool) -> None:
         with self._speaking_lock:
-            self._is_speaking = value
+            self._speaking = value
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-    def speak(self, text: str):
-        if not self._loop or not self.session:
+    def speak(self, text: str) -> None:
+        if not text or not self._tts:
             return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"parts": [{"text": text}]},
-                turn_complete=True
-            ),
-            self._loop
-        )
+        with self._speaking_lock:
+            self._speaking = True
+        self._tts_queue.put(text)
 
-    def speak_error(self, tool_name: str, error: str):
+    def speak_error(self, tool_name: str, error) -> None:
         short = str(error)[:120]
         self.ui.write_log(f"ERR: {tool_name} — {short}")
-        self.speak(f"Sir, {tool_name} encountered an error. {short}")
+        self.speak(f"{tool_name} encountered an error.")
 
-    def _build_config(self) -> types.LiveConnectConfig:
-        from datetime import datetime
+    # ------------------------------------------------------------------
+    # Live reconfigure (called when user clicks Apply in Configure panel)
+    # ------------------------------------------------------------------
 
-        memory     = load_memory()
-        mem_str    = format_memory_for_prompt(memory)
-        sys_prompt = _load_system_prompt()
+    def reconfigure(self, new_config: dict) -> None:
+        """Non-blocking: spawns a background thread to install + reload."""
+        threading.Thread(
+            target=self._do_reconfigure, args=(new_config,), daemon=True
+        ).start()
 
-        now      = datetime.now()
-        time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
-        time_ctx = (
-            f"[CURRENT DATE & TIME]\n"
-            f"Right now it is: {time_str}\n"
-            f"Use this to calculate exact times for reminders.\n\n"
-        )
+    def _do_reconfigure(self, new_config: dict) -> None:
+        old_stt_engine = self._config.get("stt_engine", "whisper").lower()
+        old_llm_model  = self._config.get("llm_model", "")
+        new_stt_engine = new_config.get("stt_engine", "whisper").lower()
+        self._config = new_config
 
-        parts = [time_ctx]
-        if mem_str:
-            parts.append(mem_str)
-        parts.append(sys_prompt)
+        # Install any packages required by the new config
+        try:
+            from core.installer import install_for_config
+            install_for_config(new_config, log=self.ui.write_log)
+        except Exception as e:
+            self.ui.write_log(f"ERR: Dependency install — {e}")
 
-        return types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            output_audio_transcription={},
-            input_audio_transcription={},
-            system_instruction="\n".join(parts),
-            tools=[{"function_declarations": TOOL_DECLARATIONS}],
-            session_resumption=types.SessionResumptionConfig(),
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Charon"
-                    )
-                )
-            ),
-        )
+        # TTS: always hot-reload (runs in queue worker, safe to swap)
+        try:
+            from core.tts import create_tts_player
+            self._tts = create_tts_player(new_config)
+            self.ui.write_log("SYS: TTS reconfigured.")
+        except Exception as e:
+            self.ui.write_log(f"ERR: TTS reconfigure — {e}")
 
-    async def _execute_tool(self, fc) -> types.FunctionResponse:
-        name = fc.name
-        args = dict(fc.args or {})
+        # STT: hot-reload if same engine type; full restart needed if engine changed
+        if old_stt_engine == new_stt_engine:
+            try:
+                stt_language = new_config.get("stt_language", "auto")
+                if new_stt_engine == "vosk":
+                    from core.stt import VoskSTT
+                    self._stt = VoskSTT(new_config.get("vosk_model_path"), language=stt_language)
+                else:
+                    from core.stt import WhisperSTT
+                    self._stt = WhisperSTT(new_config.get("stt_model", "base"), language=stt_language)
+                self.ui.write_log("SYS: STT reconfigured.")
+            except Exception as e:
+                self.ui.write_log(f"ERR: STT reconfigure — {e}")
+        else:
+            self.ui.write_log("SYS: STT engine changed — restart required.")
 
+        # LLM warmup if model changed
+        if new_config.get("llm_model", "") != old_llm_model:
+            self.ui.write_log("SYS: Warming up new LLM model…")
+            from core.llm_client import warmup_model
+            warmup_model()
+            self.ui.write_log("SYS: New LLM model ready.")
+
+        if old_stt_engine == new_stt_engine:
+            self.speak("Configuration applied.")
+        else:
+            self.speak("LLM and TTS updated. Restart for speech engine change.")
+
+    # ------------------------------------------------------------------
+    # Text command (from UI input box)
+    # ------------------------------------------------------------------
+
+    def _on_text_command(self, text: str) -> None:
+        self._text_queue.put(text)
+
+    # ------------------------------------------------------------------
+    # Tool execution (routing unchanged from original)
+    # ------------------------------------------------------------------
+
+    def _execute_tool(self, name: str, args: dict) -> str:
         print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
+        # save_memory is handled silently
         if name == "save_memory":
             category = args.get("category", "notes")
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
                 update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                print(f"[Memory] 💾 {category}/{key} = {value}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
-            return types.FunctionResponse(
-                id=fc.id, name=name,
-                response={"result": "ok", "silent": True}
-            )
+            return "__SILENT__"
 
-        loop   = asyncio.get_event_loop()
         result = "Done."
-
         try:
             if name == "open_app":
-                r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
+                r = open_app(parameters=args, response=None, player=self.ui)
                 result = r or f"Opened {args.get('app_name')}."
 
             elif name == "weather_report":
-                r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
+                r = weather_action(parameters=args, player=self.ui)
                 result = r or "Weather delivered."
 
             elif name == "browser_control":
-                r = await loop.run_in_executor(None, lambda: browser_control(parameters=args, player=self.ui))
+                r = browser_control(parameters=args, player=self.ui)
                 result = r or "Done."
 
             elif name == "file_controller":
-                r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
+                r = file_controller(parameters=args, player=self.ui)
                 result = r or "Done."
 
             elif name == "send_message":
-                r = await loop.run_in_executor(None, lambda: send_message(parameters=args, response=None, player=self.ui, session_memory=None))
+                r = send_message(parameters=args, response=None, player=self.ui, session_memory=None)
                 result = r or f"Message sent to {args.get('receiver')}."
 
             elif name == "reminder":
-                r = await loop.run_in_executor(None, lambda: reminder(parameters=args, response=None, player=self.ui))
+                r = reminder(parameters=args, response=None, player=self.ui)
                 result = r or "Reminder set."
 
             elif name == "youtube_video":
-                r = await loop.run_in_executor(None, lambda: youtube_video(parameters=args, response=None, player=self.ui))
+                r = youtube_video(parameters=args, response=None, player=self.ui)
                 result = r or "Done."
 
             elif name == "screen_process":
-                threading.Thread(
-                    target=screen_process,
-                    kwargs={"parameters": args, "response": None,
-                            "player": self.ui, "session_memory": None},
-                    daemon=True
-                ).start()
-                result = "Vision module activated. Stay completely silent — vision module will speak directly."
+                # Synchronous call — returns analysis text which the LLM can speak
+                r = screen_process(parameters=args, response=None, player=self.ui, session_memory=None)
+                result = r if isinstance(r, str) and r else "Screen analyzed."
 
             elif name == "computer_settings":
-                r = await loop.run_in_executor(None, lambda: computer_settings(parameters=args, response=None, player=self.ui))
+                r = computer_settings(parameters=args, response=None, player=self.ui)
                 result = r or "Done."
 
             elif name == "desktop_control":
-                r = await loop.run_in_executor(None, lambda: desktop_control(parameters=args, player=self.ui))
+                r = desktop_control(parameters=args, player=self.ui)
                 result = r or "Done."
 
             elif name == "code_helper":
-                r = await loop.run_in_executor(None, lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
+                r = code_helper(parameters=args, player=self.ui, speak=self.speak)
                 result = r or "Done."
 
             elif name == "dev_agent":
-                r = await loop.run_in_executor(None, lambda: dev_agent(parameters=args, player=self.ui, speak=self.speak))
+                r = dev_agent(parameters=args, player=self.ui, speak=self.speak)
                 result = r or "Done."
 
             elif name == "agent_task":
                 from agent.task_queue import get_queue, TaskPriority
-                priority_map = {"low": TaskPriority.LOW, "normal": TaskPriority.NORMAL, "high": TaskPriority.HIGH}
-                priority = priority_map.get(args.get("priority", "normal").lower(), TaskPriority.NORMAL)
-                task_id  = get_queue().submit(goal=args.get("goal", ""), priority=priority, speak=self.speak)
-                result   = f"Task started (ID: {task_id})."
+                priority_map = {
+                    "low": TaskPriority.LOW,
+                    "normal": TaskPriority.NORMAL,
+                    "high": TaskPriority.HIGH,
+                }
+                priority = priority_map.get(
+                    args.get("priority", "normal").lower(), TaskPriority.NORMAL
+                )
+                task_id = get_queue().submit(
+                    goal=args.get("goal", ""), priority=priority, speak=self.speak
+                )
+                result = f"Task started (ID: {task_id})."
 
             elif name == "web_search":
-                r = await loop.run_in_executor(None, lambda: web_search_action(parameters=args, player=self.ui))
+                r = web_search_action(parameters=args, player=self.ui)
                 result = r or "Done."
+
             elif name == "file_processor":
                 if not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
-                r = await loop.run_in_executor(
-                    None,
-                    lambda: file_processor(parameters=args, player=self.ui, speak=self.speak)
-                )
+                r = file_processor(parameters=args, player=self.ui, speak=self.speak)
                 result = r or "Done."
 
             elif name == "computer_control":
-                r = await loop.run_in_executor(None, lambda: computer_control(parameters=args, player=self.ui))
+                r = computer_control(parameters=args, player=self.ui)
                 result = r or "Done."
 
             elif name == "game_updater":
-                r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
+                r = game_updater(parameters=args, player=self.ui, speak=self.speak)
                 result = r or "Done."
 
             elif name == "flight_finder":
-                r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
+                r = flight_finder(parameters=args, player=self.ui)
                 result = r or "Done."
 
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
-                self.speak("Goodbye, sir.")
+
                 def _shutdown():
                     import time, os
-                    time.sleep(1)
+                    self.speak("Goodbye.")
+                    time.sleep(2.5)
                     os._exit(0)
+
                 threading.Thread(target=_shutdown, daemon=True).start()
+                return "Shutting down."
 
             else:
                 result = f"Unknown tool: {name}"
@@ -694,188 +875,317 @@ class JarvisLive:
             self.ui.set_state("LISTENING")
 
         print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
-        return types.FunctionResponse(
-            id=fc.id, name=name,
-            response={"result": result}
-        )
+        return result
 
-    async def _send_realtime(self):
-        while True:
-            msg = await self.out_queue.get()
-            await self.session.send_realtime_input(media=msg)
+    # ------------------------------------------------------------------
+    # LLM processing loop
+    # ------------------------------------------------------------------
 
-    async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
-        loop = asyncio.get_event_loop()
+    def _process_message(self, user_text: str) -> None:
+        """
+        Full turn:
+          user_text → Ollama stream (with tools) → execute tools → final spoken response
+
+        Streaming means TTS starts on the first complete sentence (~1-2 s),
+        not after the full response is ready.
+        """
+        self.ui.set_state("THINKING")
+        self.ui.write_log(f"You: {user_text}")
+
+        self._conversation.append({"role": "user", "content": user_text})
+
+        MAX_HISTORY = 30
+        if len(self._conversation) > MAX_HISTORY:
+            self._conversation = self._conversation[-MAX_HISTORY:]
+
+        messages = [
+            {"role": "system", "content": self._build_system_prompt()}
+        ] + list(self._conversation)
+
+        MAX_TOOL_ROUNDS = 6
+        for _round in range(MAX_TOOL_ROUNDS):
+            final_content    = ""
+            final_tool_calls: list = []
+
+            try:
+                for event in call_llm_stream(messages, OLLAMA_TOOLS):
+                    if event["type"] == "sentence":
+                        self.speak(event["text"])
+                    elif event["type"] == "done":
+                        final_content    = event["content"]
+                        final_tool_calls = event["tool_calls"]
+            except RuntimeError as e:
+                self.speak_error("LLM", e)
+                return
+
+            if not final_tool_calls:
+                # Final text response — TTS already started sentence-by-sentence
+                if final_content:
+                    assistant_msg = {"role": "assistant", "content": final_content}
+                    messages.append(assistant_msg)
+                    self._conversation.append(assistant_msg)
+                    self.ui.write_log(f"Jarvis: {final_content}")
+                break
+
+            # ------- tool calls -------
+            assistant_msg = {
+                "role":       "assistant",
+                "content":    final_content or "",
+                "tool_calls": final_tool_calls,
+            }
+            messages.append(assistant_msg)
+            self._conversation.append(assistant_msg)
+
+            all_silent = True
+            for tc in final_tool_calls:
+                fn    = tc.get("function", {})
+                tname = fn.get("name", "")
+                targs = fn.get("arguments", {})
+                if isinstance(targs, str):
+                    try:
+                        targs = json.loads(targs)
+                    except Exception:
+                        targs = {}
+
+                tc_id = tc.get("id", "")
+                self.ui.write_log(f"SYS: ▶ {tname}")
+                result = self._execute_tool(tname, targs)
+
+                if result != "__SILENT__":
+                    all_silent = False
+
+                tool_msg: dict = {
+                    "role":    "tool",
+                    "content": "Done." if result == "__SILENT__" else str(result),
+                }
+                if tc_id:
+                    tool_msg["tool_call_id"] = tc_id
+
+                messages.append(tool_msg)
+                self._conversation.append(tool_msg)
+
+            # Even if all tools were silent (e.g. save_memory only),
+            # always do one more LLM round so the assistant can verbally respond.
+
+        if not self.ui.muted:
+            self.ui.set_state("LISTENING")
+
+    # ------------------------------------------------------------------
+    # STT listening loops
+    # ------------------------------------------------------------------
+
+    def _listen_whisper(self) -> None:
+        """Mic → VAD → Whisper → LLM loop."""
+        vad = _VADBuffer()
+        q: queue.Queue = queue.Queue(maxsize=200)
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted:
-                data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
+                is_speaking = self._speaking
+            if not is_speaking and not self.ui.muted:
+                try:
+                    q.put_nowait(indata.copy())
+                except queue.Full:
+                    pass
 
         try:
             with sd.InputStream(
-                samplerate=SEND_SAMPLE_RATE,
+                samplerate=SAMPLE_RATE_IN,
                 channels=CHANNELS,
-                dtype="int16",
-                blocksize=CHUNK_SIZE,
+                dtype="float32",
+                blocksize=BLOCK_SIZE,
                 callback=callback,
             ):
-                print("[JARVIS] 🎤 Mic stream open")
+                self.ui.write_log("SYS: Mic active (Whisper STT).")
                 while True:
-                    await asyncio.sleep(0.1)
+                    try:
+                        chunk = q.get(timeout=0.1)
+                        audio = vad.process(chunk.flatten())
+                        if audio is not None:
+                            self.ui.set_state("THINKING")
+                            text = self._stt.transcribe(audio)
+                            if text.strip():
+                                self._process_message(text)
+                    except queue.Empty:
+                        pass
         except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
-            raise
-
-    async def _receive_audio(self):
-        print("[JARVIS] 👂 Recv started")
-        out_buf, in_buf = [], []
-
-        try:
-            while True:
-                async for response in self.session.receive():
-
-                    if response.data:
-                        if self._turn_done_event and self._turn_done_event.is_set():
-                            self._turn_done_event.clear()
-                        self.audio_in_queue.put_nowait(response.data)
-
-                    if response.server_content:
-                        sc = response.server_content
-
-                        if sc.output_transcription and sc.output_transcription.text:
-                            txt = _clean_transcript(sc.output_transcription.text)
-                            if txt:
-                                out_buf.append(txt)
-
-                        if sc.input_transcription and sc.input_transcription.text:
-                            txt = _clean_transcript(sc.input_transcription.text)
-                            if txt:
-                                in_buf.append(txt)
-
-                        if sc.turn_complete:
-                            if self._turn_done_event:
-                                self._turn_done_event.set()
-
-                            full_in = " ".join(in_buf).strip()
-                            if full_in:
-                                self.ui.write_log(f"You: {full_in}")
-                            in_buf = []
-
-                            full_out = " ".join(out_buf).strip()
-                            if full_out:
-                                self.ui.write_log(f"Jarvis: {full_out}")
-                            out_buf = []
-
-                    if response.tool_call:
-                        fn_responses = []
-                        for fc in response.tool_call.function_calls:
-                            print(f"[JARVIS] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
-                            fn_responses.append(fr)
-                        await self.session.send_tool_response(
-                            function_responses=fn_responses
-                        )
-        except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
+            print(f"[STT-Whisper] Mic error: {e}")
             traceback.print_exc()
-            raise
 
-    async def _play_audio(self):
-        print("[JARVIS] 🔊 Play started")
+    def _listen_vosk(self) -> None:
+        """Mic → Vosk streaming → LLM loop."""
+        q: queue.Queue = queue.Queue(maxsize=200)
 
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-        )
-        stream.start()
+        def callback(indata, frames, time_info, status):
+            with self._speaking_lock:
+                is_speaking = self._speaking
+            if not is_speaking and not self.ui.muted:
+                try:
+                    q.put_nowait(indata.copy())
+                except queue.Full:
+                    pass
 
         try:
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        self.audio_in_queue.get(),
-                        timeout=0.1
-                    )
-                except asyncio.TimeoutError:
-                    if (
-                        self._turn_done_event
-                        and self._turn_done_event.is_set()
-                        and self.audio_in_queue.empty()
-                    ):
-                        self.set_speaking(False)
-                        self._turn_done_event.clear()
-                    continue
-                self.set_speaking(True)
-                await asyncio.to_thread(stream.write, chunk)
+            with sd.InputStream(
+                samplerate=SAMPLE_RATE_IN,
+                channels=CHANNELS,
+                dtype="int16",
+                blocksize=4096,
+                callback=callback,
+            ):
+                self.ui.write_log("SYS: Mic active (Vosk STT).")
+                while True:
+                    try:
+                        chunk = q.get(timeout=0.1)
+                        text, is_final = self._stt.process_chunk(chunk.tobytes())
+                        if is_final and text.strip():
+                            self._process_message(text)
+                    except queue.Empty:
+                        pass
         except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
-            raise
-        finally:
-            self.set_speaking(False)
-            stream.stop()
-            stream.close()
+            print(f"[STT-Vosk] Mic error: {e}")
+            traceback.print_exc()
 
-    async def run(self):
-        client = genai.Client(
-            api_key=_get_api_key(),
-            http_options={"api_version": "v1beta"}
-        )
+    # ------------------------------------------------------------------
+    # Text command loop (UI input box)
+    # ------------------------------------------------------------------
 
+    def _text_command_loop(self) -> None:
         while True:
             try:
-                print("[JARVIS] 🔌 Connecting...")
-                self.ui.set_state("THINKING")
-                config = self._build_config()
+                text = self._text_queue.get(timeout=0.5)
+                if text.strip():
+                    self._process_message(text)
+            except queue.Empty:
+                pass
 
-                async with (
-                    client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
-                    asyncio.TaskGroup() as tg,
-                ):
-                    self.session        = session
-                    self._loop          = asyncio.get_event_loop()
-                    self.audio_in_queue = asyncio.Queue()
-                    self.out_queue      = asyncio.Queue(maxsize=10)
-                    self._turn_done_event = asyncio.Event()
+    # ------------------------------------------------------------------
+    # Entry point
+    # ------------------------------------------------------------------
 
-                    print("[JARVIS] ✅ Connected.")
-                    self.ui.set_state("LISTENING")
-                    self.ui.write_log("SYS: JARVIS online.")
+    def run(self) -> None:
+        """Initialise STT + TTS, then start the main listen loop."""
+        try:
+            # -- Wire reconfigure callback --
+            self.ui.on_reconfigure = self.reconfigure
 
-                    tg.create_task(self._send_realtime())
-                    tg.create_task(self._listen_audio())
-                    tg.create_task(self._receive_audio())
-                    tg.create_task(self._play_audio())
+            # -- Ollama auto-start --
+            from core.llm_client import ensure_ollama_running, warmup_model
+            self.ui.write_log("SYS: Checking Ollama…")
+            if ensure_ollama_running():
+                self.ui.write_log("SYS: Ollama OK.")
+            else:
+                self.ui.write_log("ERR: Ollama unavailable. Start it manually: ollama serve")
+                self.speak("Ollama is not running. Please start it manually.")
 
-            except Exception as e:
-                print(f"[JARVIS] ⚠️ {e}")
-                traceback.print_exc()
-            self.set_speaking(False)
-            self.ui.set_state("THINKING")
-            print("[JARVIS] 🔄 Reconnecting in 3s...")
-            await asyncio.sleep(3)
+            # -- LLM warmup (parallel with STT/TTS loading) --
+            _warmup_done = threading.Event()
+            def _do_warmup():
+                try:
+                    warmup_model()
+                finally:
+                    _warmup_done.set()
+            threading.Thread(target=_do_warmup, daemon=True).start()
 
-def main():
+            # -- STT --
+            stt_engine   = self._config.get("stt_engine",   "whisper").lower()
+            stt_language = self._config.get("stt_language", "auto")
+            stt_model    = self._config.get("stt_model", "base")
+            self.ui.write_log(f"SYS: Loading {stt_engine.upper()} STT…")
+            if stt_engine == "whisper":
+                self.ui.write_log(f"SYS: Whisper '{stt_model}' — downloading if not cached…")
+            elif stt_engine == "vosk":
+                self.ui.write_log("SYS: Vosk — downloading model if not cached…")
+
+            if stt_engine == "vosk":
+                from core.stt import VoskSTT
+                self._stt = VoskSTT(
+                    self._config.get("vosk_model_path"),
+                    language=stt_language,
+                )
+            else:
+                from core.stt import WhisperSTT
+                self._stt  = WhisperSTT(stt_model, language=stt_language)
+
+            self.ui.write_log("SYS: STT ready.")
+
+            # -- TTS --
+            tts_engine = self._config.get("tts_engine", "edgetts").lower()
+            self.ui.write_log(f"SYS: Loading {tts_engine.upper()} TTS…")
+            if tts_engine == "kokoro":
+                self.ui.write_log("SYS: Kokoro — downloading model (~330 MB) if not cached…")
+            from core.tts import create_tts_player
+            self._tts = create_tts_player(self._config)
+            self.ui.write_log("SYS: TTS ready.")
+
+            # -- Wait for LLM warmup to finish --
+            self.ui.write_log("SYS: Loading LLM into memory…")
+            _warmup_done.wait(timeout=120)
+            self.ui.write_log("SYS: LLM ready.")
+
+            # Welcome
+            self.ui.write_log("SYS: JARVIS online.")
+            self.ui.set_state("LISTENING")
+
+            # TTS queue worker (sequential, no overlap)
+            threading.Thread(target=self._tts_worker, daemon=True).start()
+
+            self.speak("JARVIS online. All systems ready.")
+
+            # Text-command handler (runs in background)
+            threading.Thread(target=self._text_command_loop, daemon=True).start()
+
+            # STT loop (blocking — keeps this thread alive)
+            if stt_engine == "vosk":
+                self._listen_vosk()
+            else:
+                self._listen_whisper()
+
+        except Exception as e:
+            self.ui.write_log(f"ERR: Init failed — {e}")
+            traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Entry
+# ---------------------------------------------------------------------------
+
+def main() -> None:
     ui = JarvisUI("face.png")
 
     def runner():
+        # 1. Wait until the user completes the setup overlay (first run)
+        #    or config already exists (subsequent runs).
         ui.wait_for_api_key()
-        jarvis = JarvisLive(ui)
+
+        # 2. Install any missing engine packages before loading engines.
+        #    Progress is streamed to the log panel in real time.
+        ui.write_log("SYS: Checking dependencies…")
+        cfg = _load_config()
+        _install_done = threading.Event()
+
+        def _do_install():
+            try:
+                from core.installer import install_for_config
+                install_for_config(cfg, log=ui.write_log)
+            except Exception as e:
+                ui.write_log(f"ERR: Dependency install — {e}")
+            finally:
+                _install_done.set()
+
+        threading.Thread(target=_do_install, daemon=True).start()
+        _install_done.wait()   # blocks runner thread; UI remains responsive
+
+        # 3. Start the assistant (loads STT / TTS / LLM).
+        jarvis = JarvisLocal(ui)
         try:
-            asyncio.run(jarvis.run())
+            jarvis.run()
         except KeyboardInterrupt:
-            print("\n🔴 Shutting down...")
+            print("\n[MARK XL] Shutting down…")
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()
+
 
 if __name__ == "__main__":
     main()

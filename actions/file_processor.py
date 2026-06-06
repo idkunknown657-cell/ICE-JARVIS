@@ -25,18 +25,19 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
-import google.generativeai as genai
-
-
-def _get_api_key() -> str:
-    config_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
-    with open(config_path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+from core.llm_client import call_llm_text as _llm_text
 
 
 def _gemini_client():
-    genai.configure(api_key=_get_api_key())
-    return genai.GenerativeModel("gemini-2.5-flash")
+    # Compatibility shim — returns an object with .generate_content()
+    class _Shim:
+        def generate_content(self, prompt: str) -> "_R":
+            class _R:
+                pass
+            r = _R()
+            r.text = _llm_text(prompt)
+            return r
+    return _Shim()
 
 
 def _detect_type(path: Path) -> str:
