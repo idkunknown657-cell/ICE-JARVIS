@@ -14,6 +14,13 @@ _os.environ.setdefault("GRPC_VERBOSITY",         "ERROR")
 # from the namespace).  Let transformers auto-detect the available backends.
 _os.environ.setdefault("USE_TF",                 "0")
 _os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# Offline mode — use cached models, no HuggingFace network calls on startup.
+# On first run the model isn't cached yet; tts.py / stt.py detect this and
+# temporarily clear these flags to allow the one-time download, then they
+# stay in effect for every subsequent launch (fully offline).
+_os.environ.setdefault("HF_HUB_OFFLINE",      "1")
+_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+_os.environ.setdefault("HF_DATASETS_OFFLINE",  "1")
 import warnings as _warnings
 _warnings.filterwarnings("ignore", category=UserWarning)
 _warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -562,10 +569,10 @@ class _VADBuffer:
     def __init__(
         self,
         sample_rate:    int   = 16_000,
-        silence_sec:    float = 1.0,    # silence after last word → send to STT (1.0s = fast enough + won't cut mid-sentence with hysteresis)
-        speech_thresh:  float = 0.015,  # RMS above this = speech  (raised from 0.010 to kill background noise false-positives)
-        silence_thresh: float = 0.008,  # RMS below this = silence (hysteresis gap — much lower bar than speech_thresh to avoid mid-sentence cuts)
-        min_speech_sec: float = 0.4,
+        silence_sec:    float = 0.7,    # silence after last word → send to STT
+        speech_thresh:  float = 0.008,  # RMS above this = speech  (0.008 catches voice at 3-4 m; raise if mic picks up too much room noise)
+        silence_thresh: float = 0.004,  # RMS below this = silence (half of speech_thresh — hysteresis prevents mid-sentence cuts)
+        min_speech_sec: float = 0.3,
         max_speech_sec: float = 30.0,
     ):
         self._sr            = sample_rate
@@ -582,12 +589,11 @@ class _VADBuffer:
         Feed one audio chunk (float32 mono).
         Returns complete utterance when speech ends, otherwise None.
 
-        Uses hysteresis thresholds so the detector doesn't flicker on quiet
-        consonants or brief mid-sentence pauses:
-          - speech starts when RMS > speech_thresh
-          - speech ends only when RMS < silence_thresh  (lower bar)
-        This prevents natural pauses ("I just... wanted to say") from
-        triggering a premature cut.
+        Uses hysteresis thresholds so the detector doesn't flicker:
+          - speech starts when RMS > speech_thresh  (0.008 = ~3-4 m range)
+          - speech ends only when RMS < silence_thresh  (0.004 = half of start)
+        The gap between the two thresholds prevents mid-sentence cuts on
+        natural pauses and quiet consonants.
         """
         rms     = float(np.sqrt(np.mean(chunk ** 2)))
         total_n = sum(len(c) for c in self._buf)
@@ -922,12 +928,16 @@ class JarvisLocal:
 
     def _process_message(self, user_text: str) -> None:
         """
-        Full turn:
-          user_text → Ollama stream (with tools) → execute tools → final spoken response
+        Full turn: user_text → LLM stream → TTS (overlapped) → tool execution
 
-        The complete LLM response is collected first, then sent to TTS in one call.
-        This gives TTS engines (Kokoro, ElevenLabs) the full text so they can
-        apply natural prosody across sentence boundaries — no choppy pauses.
+        Streaming TTS: sentence events are piped to the TTS queue AS they
+        arrive from the LLM, so Kokoro starts synthesising sentence 1 while
+        the LLM is still generating sentence 2.  This cuts perceived latency
+        from (LLM_total + TTS_total) down to roughly max(LLM_total, TTS_total).
+
+        Tool-call responses never emit sentence events, so the TTS overlap
+        only kicks in for pure conversational replies — which is exactly when
+        it matters most.
         """
         self.ui.set_state("THINKING")
         self.ui.write_log(f"You: {user_text}")
@@ -942,23 +952,44 @@ class JarvisLocal:
             {"role": "system", "content": self._build_system_prompt()}
         ] + list(self._conversation)
 
+        # Tools whose output needs a second LLM round to summarise/interpret.
+        # Everything else returns a user-ready string → speak directly.
+        _NEEDS_LLM_ROUND = {"web_search", "screen_process", "agent_task"}
+
         MAX_TOOL_ROUNDS = 6
         for _round in range(MAX_TOOL_ROUNDS):
             final_content    = ""
             final_tool_calls: list = []
+            # Sentences already queued to TTS during streaming (may be empty
+            # for tool-call rounds where the model emits no content).
+            _streamed: list[str] = []
 
             try:
                 for event in call_llm_stream(messages, OLLAMA_TOOLS):
-                    if event["type"] == "done":
+                    if event["type"] == "sentence":
+                        # ── Overlap TTS with LLM generation ─────────────────
+                        # Queue this sentence immediately; the TTS worker
+                        # synthesises it while the LLM is still generating
+                        # the next one.
+                        _streamed.append(event["text"])
+                        self.speak(event["text"])
+                    elif event["type"] == "done":
                         final_content    = event["content"]
                         final_tool_calls = event["tool_calls"]
             except RuntimeError as e:
                 self.speak_error("LLM", e)
                 return
 
+            # ── No tool calls: pure conversational reply ─────────────────────
             if not final_tool_calls:
-                # Full response ready — send complete text to TTS in one call
-                if final_content:
+                if _streamed:
+                    # Sentences already queued to TTS — just update history/log.
+                    assistant_msg = {"role": "assistant", "content": final_content}
+                    messages.append(assistant_msg)
+                    self._conversation.append(assistant_msg)
+                    self.ui.write_log(f"Jarvis: {final_content}")
+                elif final_content:
+                    # Very short response (no sentence boundary) — speak now.
                     assistant_msg = {"role": "assistant", "content": final_content}
                     messages.append(assistant_msg)
                     self._conversation.append(assistant_msg)
@@ -966,7 +997,7 @@ class JarvisLocal:
                     self.speak(final_content)
                 break
 
-            # ------- tool calls -------
+            # ── Tool calls present ────────────────────────────────────────────
             assistant_msg = {
                 "role":       "assistant",
                 "content":    final_content or "",
@@ -975,16 +1006,12 @@ class JarvisLocal:
             messages.append(assistant_msg)
             self._conversation.append(assistant_msg)
 
-            # ── Fast path: save_memory-only round with verbal content ──────
-            # When the LLM calls ONLY save_memory (silent) AND also returned
-            # verbal content in the same response, speak the content directly
-            # instead of burning another full LLM round just to get a reply.
+            # ── Fast path: save_memory + verbal content in same round ────────
             _only_memory = all(
                 tc.get("function", {}).get("name") == "save_memory"
                 for tc in final_tool_calls
             )
             if _only_memory and final_content:
-                # Execute the memory saves silently
                 for tc in final_tool_calls:
                     fn    = tc.get("function", {})
                     targs = fn.get("arguments", {})
@@ -994,15 +1021,18 @@ class JarvisLocal:
                         except Exception:
                             targs = {}
                     self._execute_tool("save_memory", targs)
-                # Use the verbal content that came alongside the saves
-                assistant_msg = {"role": "assistant", "content": final_content}
-                messages.append(assistant_msg)
-                self._conversation.append(assistant_msg)
+                assistant_msg2 = {"role": "assistant", "content": final_content}
+                messages.append(assistant_msg2)
+                self._conversation.append(assistant_msg2)
                 self.ui.write_log(f"Jarvis: {final_content}")
-                self.speak(final_content)
+                if not _streamed:
+                    self.speak(final_content)
                 break
 
-            all_silent = True
+            # ── Execute tools ─────────────────────────────────────────────────
+            all_silent    = True
+            _tool_results: list[tuple[str, str]] = []
+
             for tc in final_tool_calls:
                 fn    = tc.get("function", {})
                 tname = fn.get("name", "")
@@ -1019,6 +1049,7 @@ class JarvisLocal:
 
                 if result != "__SILENT__":
                     all_silent = False
+                    _tool_results.append((tname, result))
 
                 tool_msg: dict = {
                     "role":    "tool",
@@ -1030,12 +1061,8 @@ class JarvisLocal:
                 messages.append(tool_msg)
                 self._conversation.append(tool_msg)
 
-            # ── Fast-ack for save_memory-only rounds ─────────────────────────
-            # When EVERY tool call was a silent save_memory, skip the extra LLM
-            # round entirely.  A brief instant acknowledgment feels better than
-            # waiting 2-3 s for an unnecessary follow-up inference.
+            # ── Fast-ack: every call was save_memory (silent) ────────────────
             if all_silent:
-                # Extract the saved name (if any) for a personalised ack.
                 _saved_name: str | None = None
                 for _tc in final_tool_calls:
                     _fn = _tc.get("function", {})
@@ -1055,6 +1082,16 @@ class JarvisLocal:
                 self._conversation.append(_amsg)
                 self.ui.write_log(f"Jarvis: {_ack}")
                 self.speak(_ack)
+                break
+
+            # ── Direct-result: speak tool output, skip LLM round ────────────
+            if _tool_results and not any(n in _NEEDS_LLM_ROUND for n, _ in _tool_results):
+                _, _reply = _tool_results[-1]
+                _amsg = {"role": "assistant", "content": _reply}
+                messages.append(_amsg)
+                self._conversation.append(_amsg)
+                self.ui.write_log(f"Jarvis: {_reply}")
+                self.speak(_reply)
                 break
 
         if not self.ui.muted:

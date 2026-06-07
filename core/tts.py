@@ -264,11 +264,25 @@ class KokoroTTSEngine:
 
         KPipeline = _import_kokoro_pipeline()
 
+        def _create_pipeline():
+            try:
+                return KPipeline(lang_code=lang, device=device)
+            except TypeError:
+                return KPipeline(lang_code=lang)   # older build — no device param
+
         try:
-            self._pipeline = KPipeline(lang_code=lang, device=device)
-        except TypeError:
-            # Older Kokoro build — no device parameter
-            self._pipeline = KPipeline(lang_code=lang)
+            self._pipeline = _create_pipeline()
+        except Exception as _first_err:
+            # Offline flag set but model not cached yet → download once
+            _e = str(_first_err).lower()
+            if any(k in _e for k in ("offline", "not found", "cache", "localentry", "does not exist")):
+                print("[TTS] Kokoro model not cached — downloading (internet required for first run)…")
+                os.environ.pop("HF_HUB_OFFLINE",      None)
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+                os.environ.pop("HF_DATASETS_OFFLINE",  None)
+                self._pipeline = _create_pipeline()
+            else:
+                raise
 
         print("[TTS] Kokoro compiling (first-time only)…")
         # Warmup: compiles PyTorch JIT graph so first real speak() call is instant.

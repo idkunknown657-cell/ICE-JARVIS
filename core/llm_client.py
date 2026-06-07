@@ -212,7 +212,7 @@ def call_llm(
             "model":      model,
             "messages":   messages,
             "stream":     False,
-            "max_tokens": 300,
+            "max_tokens": 150,
         }
         if tools:
             payload["tools"]       = tools
@@ -252,7 +252,7 @@ def call_llm(
         "messages":   messages,
         "stream":     False,
         "keep_alive": -1,
-        "options":    {"num_predict": 300, "num_gpu": 99},
+        "options":    {"num_predict": 150, "num_gpu": 99},
     }
     if tools:
         payload["tools"] = tools
@@ -353,7 +353,7 @@ def _stream_openai(
         "model":      model,
         "messages":   messages,
         "stream":     True,
-        "max_tokens": 300,
+        "max_tokens": 150,
     }
     if tools:
         payload["tools"]       = tools
@@ -479,8 +479,9 @@ def call_llm_stream(
         "messages":   messages,
         "stream":     True,
         "keep_alive": -1,
+        # 150 tokens ≈ 100 words ≈ 3-4 sentences — enough for any voice reply.
         # num_gpu:99 pushes all layers to GPU; num_thread removed (Ollama auto-tunes).
-        "options":    {"num_predict": 300, "num_gpu": 99},
+        "options":    {"num_predict": 150, "num_gpu": 99},
     }
     if tools:
         payload["tools"] = tools

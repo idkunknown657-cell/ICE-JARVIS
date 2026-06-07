@@ -12,6 +12,7 @@ class WhisperSTT:
     """Offline transcription using faster-whisper."""
 
     def __init__(self, model_name: str = "base", language: str | None = None):
+        import os
         from faster_whisper import WhisperModel
         print(f"[STT] Loading Whisper '{model_name}'…")
         try:
@@ -20,7 +21,21 @@ class WhisperSTT:
             compute = "float16" if device == "cuda" else "int8"
         except Exception:
             device, compute = "cpu", "int8"
-        self._model    = WhisperModel(model_name, device=device, compute_type=compute)
+
+        try:
+            self._model = WhisperModel(model_name, device=device, compute_type=compute)
+        except Exception as _first_err:
+            # Offline flag set but model not cached yet → download once, then offline forever
+            _e = str(_first_err).lower()
+            if any(k in _e for k in ("offline", "not found", "cache", "localentry", "does not exist")):
+                print(f"[STT] '{model_name}' not cached — downloading (internet required for first run)…")
+                os.environ.pop("HF_HUB_OFFLINE",      None)
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+                os.environ.pop("HF_DATASETS_OFFLINE",  None)
+                self._model = WhisperModel(model_name, device=device, compute_type=compute)
+            else:
+                raise
+
         self._language = None if (not language or language.strip().lower() == "auto") else language.strip().lower()
         print(f"[STT] Whisper '{model_name}' ready ({device})")
 
