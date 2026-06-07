@@ -14,23 +14,32 @@ class WhisperSTT:
     def __init__(self, model_name: str = "base", language: str | None = None):
         from faster_whisper import WhisperModel
         print(f"[STT] Loading Whisper '{model_name}'…")
-        self._model    = WhisperModel(model_name, device="cpu", compute_type="int8")
-        # None → auto-detect; explicit code (e.g. "tr", "de") forces that language
+        try:
+            import torch
+            device  = "cuda" if torch.cuda.is_available() else "cpu"
+            compute = "float16" if device == "cuda" else "int8"
+        except Exception:
+            device, compute = "cpu", "int8"
+        self._model    = WhisperModel(model_name, device=device, compute_type=compute)
         self._language = None if (not language or language.strip().lower() == "auto") else language.strip().lower()
-        print("[STT] Whisper ready.")
+        print(f"[STT] Whisper '{model_name}' ready ({device})")
 
     def transcribe(self, audio: np.ndarray) -> str:
-        """
-        Transcribe a float32 mono 16 kHz numpy array.
-        Returns transcript string (may be empty).
-        """
-        segments, _ = self._model.transcribe(
-            audio,
-            language=self._language,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 300},
-        )
-        return " ".join(s.text for s in segments).strip()
+        """Transcribe a float32 mono 16 kHz numpy array. Returns transcript string."""
+        try:
+            segments, _ = self._model.transcribe(
+                audio,
+                language=self._language,
+                beam_size=1,                       # greedy — 2-3x faster
+                best_of=1,
+                condition_on_previous_text=False,  # no hallucinations, faster
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 300},
+            )
+            return " ".join(s.text for s in segments).strip()
+        except Exception as e:
+            print(f"[STT] Transcription error: {e}")
+            raise
 
 
 class VoskSTT:
@@ -48,10 +57,7 @@ class VoskSTT:
         print("[STT] Vosk ready.")
 
     def process_chunk(self, audio_bytes: bytes) -> tuple[str, bool]:
-        """
-        Feed raw int16 LE PCM bytes.
-        Returns (text, is_final).
-        """
+        """Feed raw int16 LE PCM bytes. Returns (text, is_final)."""
         if self._rec.AcceptWaveform(audio_bytes):
             result = json.loads(self._rec.Result())
             return result.get("text", ""), True

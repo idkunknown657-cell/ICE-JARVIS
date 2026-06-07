@@ -3,10 +3,26 @@ MARK XL — Local LLM Edition
 STT (Whisper / Vosk)  +  Ollama LLM  +  TTS (EdgeTTS / Kokoro / ElevenLabs)
 All Gemini / Google-AI dependencies removed.
 """
+# ── Silence verbose logs + block heavy unused backends ─────────────────────
+import os as _os
+_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL",  "3")   # TensorFlow C++ noise
+_os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")   # oneDNN banner
+_os.environ.setdefault("GRPC_VERBOSITY",         "ERROR")
+# USE_TF=0 prevents transformers from importing TensorFlow (saves 4-8 s).
+# We intentionally do NOT set USE_TORCH or USE_JAX — forcing those values
+# breaks transformers' lazy-loader on some versions (AutoModel disappears
+# from the namespace).  Let transformers auto-detect the available backends.
+_os.environ.setdefault("USE_TF",                 "0")
+_os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+import warnings as _warnings
+_warnings.filterwarnings("ignore", category=UserWarning)
+_warnings.filterwarnings("ignore", category=DeprecationWarning)
+_warnings.filterwarnings("ignore", category=FutureWarning)
+# ───────────────────────────────────────────────────────────────────────────
+
 # ── Bootstrap: auto-install base UI packages before anything else ──────────
 # Uses only stdlib so it works even on a completely fresh Python install.
 import importlib.util as _ilu
-import os              as _os
 import subprocess      as _sp
 import sys             as _sys
 
@@ -95,14 +111,17 @@ TOOL_DECLARATIONS = [
     {
         "name": "open_app",
         "description": (
-            "Opens any application on the computer. "
-            "Use this whenever the user asks to open, launch, or start any app, "
-            "website, or program. Always call this tool — never just say you opened it."
+            "Opens or launches any application, website, or program on the computer. "
+            "ALWAYS use this when the user says: open, launch, start, run, pull up, "
+            "or 'open X real quick'. Examples: 'open WhatsApp', 'open Chrome', "
+            "'launch Spotify', 'open calculator', 'pull up WhatsApp'. "
+            "Do NOT use send_message just because the app is a messaging app — "
+            "if the user only says to open it, call open_app."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "app_name": {"type": "STRING", "description": "Exact name of the application"}
+                "app_name": {"type": "STRING", "description": "Name of the application or website to open"}
             },
             "required": ["app_name"]
         }
@@ -132,12 +151,17 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "send_message",
-        "description": "Sends a text message via WhatsApp, Telegram, or other messaging platform.",
+        "description": (
+            "Sends a message to a specific person via WhatsApp, Telegram, or similar. "
+            "ONLY use this when the user explicitly provides BOTH a recipient AND message content. "
+            "Example triggers: 'text John saying I am late', 'send a WhatsApp to mom that dinner is ready'. "
+            "Do NOT call this if the user only wants to open the app without sending a message."
+        ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "receiver":     {"type": "STRING", "description": "Recipient contact name"},
-                "message_text": {"type": "STRING", "description": "The message to send"},
+                "message_text": {"type": "STRING", "description": "The exact message text to send"},
                 "platform":     {"type": "STRING", "description": "Platform: WhatsApp, Telegram, etc."}
             },
             "required": ["receiver", "message_text", "platform"]
@@ -420,9 +444,16 @@ TOOL_DECLARATIONS = [
     {
         "name": "save_memory",
         "description": (
-            "Save an important personal fact about the user to long-term memory. "
-            "Call this silently whenever the user reveals something worth remembering. "
-            "Do NOT announce that you are saving — just call it silently."
+            "Save a personal fact about the user to permanent long-term memory. "
+            "MANDATORY: call this IMMEDIATELY (without asking) whenever the user states or corrects: "
+            "their name, age, city, job, school, language, nationality, a preference, a goal, or a relationship. "
+            "Examples: "
+            "'my name is Fatih' → (identity, name, Fatih) | "
+            "'not Travis, Fatih' → (identity, name, Fatih) | "
+            "'I am 22' → (identity, age, 22) | "
+            "'I live in Ankara' → (identity, city, Ankara) | "
+            "'I prefer dark mode' → (preferences, ui_theme, dark mode). "
+            "Call SILENTLY alongside your verbal reply — never announce that you are saving."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -430,10 +461,15 @@ TOOL_DECLARATIONS = [
                 "category": {
                     "type": "STRING",
                     "description": (
-                        "identity | preferences | projects | relationships | wishes | notes"
+                        "identity (name/age/city/job/school/nationality) | "
+                        "preferences (likes/dislikes/habits) | "
+                        "projects (active work/goals) | "
+                        "relationships (people in their life) | "
+                        "wishes (future plans/wants) | "
+                        "notes (anything else)"
                     )
                 },
-                "key":   {"type": "STRING", "description": "Short snake_case key"},
+                "key":   {"type": "STRING", "description": "Short snake_case key, e.g. 'name', 'age', 'favorite_color'"},
                 "value": {"type": "STRING", "description": "Concise value in English"},
             },
             "required": ["category", "key", "value"]
@@ -525,42 +561,51 @@ class _VADBuffer:
 
     def __init__(
         self,
-        sample_rate:   int   = 16_000,
-        silence_sec:   float = 1.2,
-        threshold:     float = 0.015,
+        sample_rate:    int   = 16_000,
+        silence_sec:    float = 1.0,    # silence after last word → send to STT (1.0s = fast enough + won't cut mid-sentence with hysteresis)
+        speech_thresh:  float = 0.015,  # RMS above this = speech  (raised from 0.010 to kill background noise false-positives)
+        silence_thresh: float = 0.008,  # RMS below this = silence (hysteresis gap — much lower bar than speech_thresh to avoid mid-sentence cuts)
         min_speech_sec: float = 0.4,
         max_speech_sec: float = 30.0,
     ):
-        self._sr       = sample_rate
-        self._sil_n    = int(silence_sec * sample_rate)
-        self._thresh   = threshold
-        self._min_n    = int(min_speech_sec * sample_rate)
-        self._max_n    = int(max_speech_sec * sample_rate)
-        self._buf:     list[np.ndarray] = []
-        self._in_spch  = False
-        self._sil_cnt  = 0
-
+        self._sr            = sample_rate
+        self._sil_n         = int(silence_sec * sample_rate)
+        self._speech_thresh = speech_thresh
+        self._sil_thresh    = silence_thresh
+        self._min_n         = int(min_speech_sec * sample_rate)
+        self._max_n         = int(max_speech_sec * sample_rate)
+        self._buf:          list[np.ndarray] = []
+        self._in_spch       = False
+        self._sil_cnt       = 0
     def process(self, chunk: np.ndarray) -> np.ndarray | None:
         """
         Feed one audio chunk (float32 mono).
         Returns complete utterance when speech ends, otherwise None.
-        """
-        rms       = float(np.sqrt(np.mean(chunk ** 2)))
-        total_n   = sum(len(c) for c in self._buf)
 
-        if rms > self._thresh:
+        Uses hysteresis thresholds so the detector doesn't flicker on quiet
+        consonants or brief mid-sentence pauses:
+          - speech starts when RMS > speech_thresh
+          - speech ends only when RMS < silence_thresh  (lower bar)
+        This prevents natural pauses ("I just... wanted to say") from
+        triggering a premature cut.
+        """
+        rms     = float(np.sqrt(np.mean(chunk ** 2)))
+        total_n = sum(len(c) for c in self._buf)
+
+        if rms > self._speech_thresh:
             self._in_spch = True
             self._sil_cnt = 0
             self._buf.append(chunk.copy())
         elif self._in_spch:
             self._buf.append(chunk.copy())
-            self._sil_cnt += len(chunk)
+            if rms < self._sil_thresh:
+                self._sil_cnt += len(chunk)
 
             if self._sil_cnt >= self._sil_n or total_n >= self._max_n:
-                audio          = np.concatenate(self._buf)
-                self._buf      = []
-                self._in_spch  = False
-                self._sil_cnt  = 0
+                audio         = np.concatenate(self._buf)
+                self._buf     = []
+                self._in_spch = False
+                self._sil_cnt = 0
                 if len(audio) >= self._min_n:
                     return audio
         return None
@@ -582,6 +627,7 @@ class JarvisLocal:
         self._config          = _load_config()
         self._stt             = None
         self._tts             = None
+        self._tts_ready       = threading.Event()   # set when TTS engine is loaded
         self._speaking        = False
         self._speaking_lock   = threading.Lock()
         self._text_queue:     queue.Queue = queue.Queue()
@@ -595,20 +641,28 @@ class JarvisLocal:
     # ------------------------------------------------------------------
 
     def _build_system_prompt(self) -> str:
+        # ── ORDER MATTERS for Ollama KV prefix caching ─────────────────────
+        # Ollama caches the KV attention state of any stable prompt prefix.
+        # By putting the STATIC JARVIS protocol text FIRST, Ollama reuses its
+        # cached KV for all those tokens on every request.  Only the small
+        # dynamic tail (memory + time, ~50-80 tokens) needs re-evaluation.
+        # This turns a 17-second first-token into a sub-second one after warmup.
+        #
+        # Rule: static content first → semi-static memory middle → dynamic time LAST.
+        sys_p   = _load_system_prompt()               # static — never changes mid-session
         memory  = load_memory()
-        mem_str = format_memory_for_prompt(memory)
-        sys_p   = _load_system_prompt()
+        mem_str = format_memory_for_prompt(memory)    # semi-static — changes only when user tells facts
         now     = datetime.now()
         time_ctx = (
             f"[CURRENT DATE & TIME]\n"
             f"Right now it is: {now.strftime('%A, %B %d, %Y — %I:%M %p')}\n"
-            f"Use this to calculate exact times for reminders.\n\n"
+            f"Use this to calculate exact times for reminders."
         )
-        parts = [time_ctx]
+        parts = [sys_p]
         if mem_str:
             parts.append(mem_str)
-        parts.append(sys_p)
-        return "\n".join(parts)
+        parts.append(time_ctx)
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # Speaking state & TTS
@@ -619,38 +673,22 @@ class JarvisLocal:
     # ------------------------------------------------------------------
 
     def _tts_worker(self) -> None:
+        # Block until TTS engine is loaded.  Queued items are preserved
+        # and played immediately once loading completes — nothing is lost.
+        self._tts_ready.wait(timeout=120)
+
         while True:
             text = self._tts_queue.get()
-            n_got = 1   # how many queue items we consumed this round
-
             try:
                 if text and self._tts:
-                    # ── Kokoro: merge buffered sentences into one inference call ──
-                    # Each separate Kokoro call costs ~0.5–1 s startup.
-                    # Draining the queue here combines "Hello. How are you?" into
-                    # one call instead of two, eliminating the gap between them.
-                    from core.tts import KokoroTTSEngine
-                    engine = getattr(self._tts, "_engine", None)
-                    if isinstance(engine, KokoroTTSEngine):
-                        while True:
-                            try:
-                                nxt = self._tts_queue.get_nowait()
-                                if nxt:
-                                    text = text.rstrip() + " " + nxt.lstrip()
-                                n_got += 1
-                            except queue.Empty:
-                                break
-
                     with self._speaking_lock:
                         self._speaking = True
                     self.ui.set_state("SPEAKING")
                     self._tts.speak(text)
-
             except Exception as e:
                 print(f"[TTS] speak error: {e}")
             finally:
-                for _ in range(n_got):
-                    self._tts_queue.task_done()
+                self._tts_queue.task_done()
                 if self._tts_queue.empty():
                     with self._speaking_lock:
                         self._speaking = False
@@ -704,6 +742,7 @@ class JarvisLocal:
         try:
             from core.tts import create_tts_player
             self._tts = create_tts_player(new_config)
+            self._tts_ready.set()   # ensure worker isn't blocked
             self.ui.write_log("SYS: TTS reconfigured.")
         except Exception as e:
             self.ui.write_log(f"ERR: TTS reconfigure — {e}")
@@ -886,15 +925,16 @@ class JarvisLocal:
         Full turn:
           user_text → Ollama stream (with tools) → execute tools → final spoken response
 
-        Streaming means TTS starts on the first complete sentence (~1-2 s),
-        not after the full response is ready.
+        The complete LLM response is collected first, then sent to TTS in one call.
+        This gives TTS engines (Kokoro, ElevenLabs) the full text so they can
+        apply natural prosody across sentence boundaries — no choppy pauses.
         """
         self.ui.set_state("THINKING")
         self.ui.write_log(f"You: {user_text}")
 
         self._conversation.append({"role": "user", "content": user_text})
 
-        MAX_HISTORY = 30
+        MAX_HISTORY = 10
         if len(self._conversation) > MAX_HISTORY:
             self._conversation = self._conversation[-MAX_HISTORY:]
 
@@ -909,9 +949,7 @@ class JarvisLocal:
 
             try:
                 for event in call_llm_stream(messages, OLLAMA_TOOLS):
-                    if event["type"] == "sentence":
-                        self.speak(event["text"])
-                    elif event["type"] == "done":
+                    if event["type"] == "done":
                         final_content    = event["content"]
                         final_tool_calls = event["tool_calls"]
             except RuntimeError as e:
@@ -919,12 +957,13 @@ class JarvisLocal:
                 return
 
             if not final_tool_calls:
-                # Final text response — TTS already started sentence-by-sentence
+                # Full response ready — send complete text to TTS in one call
                 if final_content:
                     assistant_msg = {"role": "assistant", "content": final_content}
                     messages.append(assistant_msg)
                     self._conversation.append(assistant_msg)
                     self.ui.write_log(f"Jarvis: {final_content}")
+                    self.speak(final_content)
                 break
 
             # ------- tool calls -------
@@ -935,6 +974,33 @@ class JarvisLocal:
             }
             messages.append(assistant_msg)
             self._conversation.append(assistant_msg)
+
+            # ── Fast path: save_memory-only round with verbal content ──────
+            # When the LLM calls ONLY save_memory (silent) AND also returned
+            # verbal content in the same response, speak the content directly
+            # instead of burning another full LLM round just to get a reply.
+            _only_memory = all(
+                tc.get("function", {}).get("name") == "save_memory"
+                for tc in final_tool_calls
+            )
+            if _only_memory and final_content:
+                # Execute the memory saves silently
+                for tc in final_tool_calls:
+                    fn    = tc.get("function", {})
+                    targs = fn.get("arguments", {})
+                    if isinstance(targs, str):
+                        try:
+                            targs = json.loads(targs)
+                        except Exception:
+                            targs = {}
+                    self._execute_tool("save_memory", targs)
+                # Use the verbal content that came alongside the saves
+                assistant_msg = {"role": "assistant", "content": final_content}
+                messages.append(assistant_msg)
+                self._conversation.append(assistant_msg)
+                self.ui.write_log(f"Jarvis: {final_content}")
+                self.speak(final_content)
+                break
 
             all_silent = True
             for tc in final_tool_calls:
@@ -964,8 +1030,32 @@ class JarvisLocal:
                 messages.append(tool_msg)
                 self._conversation.append(tool_msg)
 
-            # Even if all tools were silent (e.g. save_memory only),
-            # always do one more LLM round so the assistant can verbally respond.
+            # ── Fast-ack for save_memory-only rounds ─────────────────────────
+            # When EVERY tool call was a silent save_memory, skip the extra LLM
+            # round entirely.  A brief instant acknowledgment feels better than
+            # waiting 2-3 s for an unnecessary follow-up inference.
+            if all_silent:
+                # Extract the saved name (if any) for a personalised ack.
+                _saved_name: str | None = None
+                for _tc in final_tool_calls:
+                    _fn = _tc.get("function", {})
+                    if _fn.get("name") == "save_memory":
+                        _a = _fn.get("arguments", {})
+                        if isinstance(_a, str):
+                            try:
+                                _a = json.loads(_a)
+                            except Exception:
+                                _a = {}
+                        if isinstance(_a, dict) and _a.get("key") == "name" and _a.get("value"):
+                            _saved_name = str(_a["value"])
+                            break
+                _ack = f"Got it, {_saved_name}." if _saved_name else "Noted."
+                _amsg = {"role": "assistant", "content": _ack}
+                messages.append(_amsg)
+                self._conversation.append(_amsg)
+                self.ui.write_log(f"Jarvis: {_ack}")
+                self.speak(_ack)
+                break
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
@@ -1064,78 +1154,114 @@ class JarvisLocal:
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        """Initialise STT + TTS, then start the main listen loop."""
+        """
+        Startup strategy — optimised for minimum time-to-interactive:
+
+        1. LLM warmup + STT load  →  parallel, fast (~3s)
+        2. TTS load               →  parallel, slow (~20s for Kokoro)
+        3. Wait only for (1)      →  go online immediately
+        4. TTS finishes in BG     →  queued speech plays automatically
+        """
         try:
-            # -- Wire reconfigure callback --
             self.ui.on_reconfigure = self.reconfigure
 
-            # -- Ollama auto-start --
+            # ── Ollama ────────────────────────────────────────────────────
             from core.llm_client import ensure_ollama_running, warmup_model
             self.ui.write_log("SYS: Checking Ollama…")
             if ensure_ollama_running():
                 self.ui.write_log("SYS: Ollama OK.")
             else:
-                self.ui.write_log("ERR: Ollama unavailable. Start it manually: ollama serve")
-                self.speak("Ollama is not running. Please start it manually.")
+                self.ui.write_log("ERR: Ollama unavailable — run: ollama serve")
 
-            # -- LLM warmup (parallel with STT/TTS loading) --
-            _warmup_done = threading.Event()
-            def _do_warmup():
-                try:
-                    warmup_model()
-                finally:
-                    _warmup_done.set()
-            threading.Thread(target=_do_warmup, daemon=True).start()
-
-            # -- STT --
+            # ── Config ────────────────────────────────────────────────────
             stt_engine   = self._config.get("stt_engine",   "whisper").lower()
             stt_language = self._config.get("stt_language", "auto")
-            stt_model    = self._config.get("stt_model", "base")
-            self.ui.write_log(f"SYS: Loading {stt_engine.upper()} STT…")
-            if stt_engine == "whisper":
-                self.ui.write_log(f"SYS: Whisper '{stt_model}' — downloading if not cached…")
-            elif stt_engine == "vosk":
-                self.ui.write_log("SYS: Vosk — downloading model if not cached…")
+            stt_model    = self._config.get("stt_model",    "base")
+            tts_engine   = self._config.get("tts_engine",   "edgetts").lower()
 
-            if stt_engine == "vosk":
-                from core.stt import VoskSTT
-                self._stt = VoskSTT(
-                    self._config.get("vosk_model_path"),
-                    language=stt_language,
-                )
-            else:
-                from core.stt import WhisperSTT
-                self._stt  = WhisperSTT(stt_model, language=stt_language)
+            # ── Startup progress panel ────────────────────────────────────
+            self.ui.show_startup_panel()
 
-            self.ui.write_log("SYS: STT ready.")
+            _warmup_done = threading.Event()
+            _stt_done    = threading.Event()
 
-            # -- TTS --
-            tts_engine = self._config.get("tts_engine", "edgetts").lower()
-            self.ui.write_log(f"SYS: Loading {tts_engine.upper()} TTS…")
-            if tts_engine == "kokoro":
-                self.ui.write_log("SYS: Kokoro — downloading model (~330 MB) if not cached…")
-            from core.tts import create_tts_player
-            self._tts = create_tts_player(self._config)
-            self.ui.write_log("SYS: TTS ready.")
+            # ── LLM warmup thread ─────────────────────────────────────────
+            def _do_warmup():
+                try:
+                    # Pass the STATIC system prompt so Ollama evaluates and caches
+                    # its KV state during startup.  Real requests start with the same
+                    # static prefix → Ollama reuses cached KV → first token <1 s
+                    # instead of the ~17 s it takes to re-evaluate 300+ tokens cold.
+                    static_prompt = _load_system_prompt()
+                    warmup_model(system_prompt=static_prompt)
+                    self.ui.write_log("SYS: LLM ready.")
+                    self.ui.mark_startup_ready("llm")
+                except Exception as e:
+                    self.ui.write_log(f"ERR: LLM warmup — {e}")
+                    self.ui.mark_startup_ready("llm", error=True)
+                finally:
+                    _warmup_done.set()
 
-            # -- Wait for LLM warmup to finish --
-            self.ui.write_log("SYS: Loading LLM into memory…")
-            _warmup_done.wait(timeout=120)
-            self.ui.write_log("SYS: LLM ready.")
+            # ── STT load thread ───────────────────────────────────────────
+            def _do_stt():
+                try:
+                    self.ui.write_log(f"SYS: Loading {stt_engine.upper()} STT…")
+                    if stt_engine == "vosk":
+                        from core.stt import VoskSTT
+                        self._stt = VoskSTT(
+                            self._config.get("vosk_model_path"),
+                            language=stt_language,
+                        )
+                    else:
+                        from core.stt import WhisperSTT
+                        self._stt = WhisperSTT(stt_model, language=stt_language)
+                    self.ui.write_log("SYS: STT ready.")
+                    self.ui.mark_startup_ready("stt")
+                except Exception as e:
+                    self.ui.write_log(f"ERR: STT — {e}")
+                    self.ui.mark_startup_ready("stt", error=True)
+                finally:
+                    _stt_done.set()
 
-            # Welcome
+            # ── TTS load thread — does NOT block going online ─────────────
+            def _do_tts():
+                try:
+                    self.ui.write_log(f"SYS: Loading {tts_engine.upper()} TTS…")
+                    if tts_engine == "kokoro":
+                        self.ui.write_log("SYS: Kokoro — loading model + compiling JIT…")
+                    from core.tts import create_tts_player
+                    self._tts = create_tts_player(self._config)
+                    self._tts_ready.set()          # unblock _tts_worker
+                    self.ui.write_log("SYS: TTS ready.")
+                    self.ui.mark_startup_ready("tts")
+                    self.ui.set_startup_status("● All systems ready.")
+                    self.ui.hide_startup_panel()
+                    self.speak("Jarvis fully online.")
+                except Exception as e:
+                    import traceback as _tb; _tb.print_exc()
+                    self.ui.write_log(f"ERR: TTS — {e}")
+                    self.ui.mark_startup_ready("tts", error=True)
+                    self._tts_ready.set()
+
+            # Launch all three simultaneously
+            self.ui.write_log("SYS: Loading systems in parallel…")
+            threading.Thread(target=_do_warmup, daemon=True).start()
+            threading.Thread(target=_do_stt,    daemon=True).start()
+            threading.Thread(target=_do_tts,    daemon=True).start()
+
+            # ── Wait ONLY for STT + LLM (fast) ────────────────────────────
+            _warmup_done.wait(timeout=60)
+            _stt_done.wait(timeout=60)
+
+            # ── Go online immediately ──────────────────────────────────────
             self.ui.write_log("SYS: JARVIS online.")
             self.ui.set_state("LISTENING")
+            self.ui.set_startup_status("● JARVIS online · Voice loading in background…")
 
-            # TTS queue worker (sequential, no overlap)
-            threading.Thread(target=self._tts_worker, daemon=True).start()
+            threading.Thread(target=self._tts_worker,        daemon=True).start()
+            threading.Thread(target=self._text_command_loop,  daemon=True).start()
 
-            self.speak("JARVIS online. All systems ready.")
-
-            # Text-command handler (runs in background)
-            threading.Thread(target=self._text_command_loop, daemon=True).start()
-
-            # STT loop (blocking — keeps this thread alive)
+            # STT loop — blocks this thread forever
             if stt_engine == "vosk":
                 self._listen_vosk()
             else:
@@ -1151,6 +1277,17 @@ class JarvisLocal:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # ── Pre-import torch in background immediately ─────────────────────────
+    # By the time the TTS thread starts (~5s from now), torch will already
+    # be in sys.modules — removing it from the TTS critical path entirely.
+    def _preload_torch():
+        try:
+            import torch  # noqa: F401  (side-effect import only)
+        except Exception:
+            pass
+    threading.Thread(target=_preload_torch, daemon=True).start()
+    # ───────────────────────────────────────────────────────────────────────
+
     ui = JarvisUI("face.png")
 
     def runner():
@@ -1185,7 +1322,6 @@ def main() -> None:
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()
-
 
 if __name__ == "__main__":
     main()

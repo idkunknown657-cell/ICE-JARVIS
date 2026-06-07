@@ -52,7 +52,8 @@ _STT: dict[str, list[tuple[str, str]]] = {
 # TTS engine packages
 _TTS: dict[str, list[tuple[str, str]]] = {
     "edgetts":    [("edge_tts", "edge-tts")],
-    "kokoro":     [("kokoro",   "kokoro")],
+    # kokoro>=0.9 dropped AlbertModel/AutoModel from transformers — version pin is critical
+    "kokoro":     [("kokoro",   "kokoro>=0.9"), ("soundfile", "soundfile")],
     "elevenlabs": [],   # uses only requests, already in core
 }
 

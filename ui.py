@@ -884,8 +884,9 @@ class SetupOverlay(QWidget):
             QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
         """
 
-        self._sel_stt = _init.get("stt_engine", "whisper")
-        self._sel_tts = _init.get("tts_engine", "edgetts")
+        self._sel_stt          = _init.get("stt_engine",    "whisper")
+        self._sel_tts          = _init.get("tts_engine",    "edgetts")
+        self._sel_llm_provider = _init.get("llm_provider",  "ollama")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 16, 22, 16)
@@ -1018,17 +1019,44 @@ class SetupOverlay(QWidget):
         layout.addWidget(_sep())
 
         # ── LLM ──────────────────────────────────────────────────────── #
-        layout.addWidget(_lbl("LOCAL LLM  (Ollama)", 7, col=C.TEXT_DIM,
+        layout.addWidget(_lbl("LOCAL LLM", 7, col=C.TEXT_DIM,
                                align=Qt.AlignmentFlag.AlignLeft))
+
+        # Provider toggle: Ollama vs LM Studio / OpenAI-compatible
+        llm_prov_row, self._llm_prov_btns = _toggle_row(
+            [
+                ("ollama", "🦙 Ollama"),
+                ("openai", "🔌 LM Studio / OpenAI"),
+            ],
+            lambda: self._sel_llm_provider,
+            self._set_llm_provider,
+        )
+        layout.addLayout(llm_prov_row)
+
+        # Hint label — changes based on provider
+        _ollama_hint = "ollama.com  ·  run: ollama pull qwen2.5:3b"
+        _openai_hint = "lmstudio.ai  ·  start Local Server first, then pick model"
+        self._llm_hint_lbl = _lbl(
+            _openai_hint if self._sel_llm_provider == "openai" else _ollama_hint,
+            7, col=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft
+        )
+        layout.addWidget(self._llm_hint_lbl)
+
         llm_row = QHBoxLayout(); llm_row.setSpacing(5)
         llm_row.addWidget(_lbl("URL:", 7, col=C.TEXT_MED,
                                 align=Qt.AlignmentFlag.AlignRight))
-        self._llm_url_input = _input("http://localhost:11434")
-        self._llm_url_input.setText(_init.get("llm_url", "http://localhost:11434"))
+        _default_url = _init.get("llm_url",
+                                  "http://localhost:1234" if self._sel_llm_provider == "openai"
+                                  else "http://localhost:11434")
+        self._llm_url_input = _input(
+            "http://localhost:1234" if self._sel_llm_provider == "openai"
+            else "http://localhost:11434"
+        )
+        self._llm_url_input.setText(_default_url)
         llm_row.addWidget(self._llm_url_input, stretch=2)
         llm_row.addWidget(_lbl("Model:", 7, col=C.TEXT_MED,
                                 align=Qt.AlignmentFlag.AlignRight))
-        self._llm_model_input = _input("e.g.  llama3.2 / qwen2.5 / mistral")
+        self._llm_model_input = _input("e.g.  qwen2.5:3b  /  llama3.2  /  mistral")
         self._llm_model_input.setText(_init.get("llm_model", ""))
         llm_row.addWidget(self._llm_model_input, stretch=2)
         layout.addLayout(llm_row)
@@ -1201,6 +1229,40 @@ class SetupOverlay(QWidget):
         if hasattr(self, "_el_key_widget"):
             self._el_key_widget.setVisible(key == "elevenlabs")
 
+    def _set_llm_provider(self, key: str):
+        self._sel_llm_provider = key
+        if not hasattr(self, "_llm_prov_btns"):
+            return
+        for k, btn in self._llm_prov_btns.items():
+            active = (k == key)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {'#00d4ff' if active else '#000d12'};
+                    color: {'#001a22' if active else C.TEXT_DIM};
+                    border: {'none' if active else f'1px solid {C.BORDER}'};
+                    border-radius: 3px; font-weight: {'bold' if active else 'normal'};
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+            """)
+        # Update URL placeholder and hint to match selected provider
+        if hasattr(self, "_llm_url_input"):
+            if key == "openai":
+                self._llm_url_input.setPlaceholderText("http://localhost:1234")
+                # Only override if it still looks like an Ollama default URL
+                cur = self._llm_url_input.text().strip()
+                if not cur or cur == "http://localhost:11434":
+                    self._llm_url_input.setText("http://localhost:1234")
+            else:
+                self._llm_url_input.setPlaceholderText("http://localhost:11434")
+                cur = self._llm_url_input.text().strip()
+                if not cur or cur == "http://localhost:1234":
+                    self._llm_url_input.setText("http://localhost:11434")
+        if hasattr(self, "_llm_hint_lbl"):
+            if key == "openai":
+                self._llm_hint_lbl.setText("lmstudio.ai  ·  start Local Server first, then pick model")
+            else:
+                self._llm_hint_lbl.setText("ollama.com  ·  run: ollama pull qwen2.5:3b")
+
     def _set_stt(self, key: str):
         self._sel_stt = key
         if not hasattr(self, "_stt_btns"):
@@ -1262,11 +1324,14 @@ class SetupOverlay(QWidget):
             tts_voice = self._tts_voice_input.text().strip() or "en-US-GuyNeural"
             tts_speed = "1.0"
 
+        _provider = getattr(self, "_sel_llm_provider", "ollama")
+        _default_url = "http://localhost:1234" if _provider == "openai" else "http://localhost:11434"
         cfg = {
             "stt_engine":         self._sel_stt,
             "stt_model":          stt_model,
             "stt_language":       self._stt_lang_input.text().strip() or "auto",
-            "llm_url":            self._llm_url_input.text().strip() or "http://localhost:11434",
+            "llm_provider":       _provider,
+            "llm_url":            self._llm_url_input.text().strip() or _default_url,
             "llm_model":          llm_model,
             "tts_engine":         self._sel_tts,
             "tts_voice":          tts_voice,
@@ -1278,9 +1343,130 @@ class SetupOverlay(QWidget):
         self.done.emit(json.dumps(cfg))
 
 
+class StartupPanel(QWidget):
+    """Animated startup progress overlay — shown while components initialize."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            StartupPanel {{
+                background: rgba(0, 6, 10, 235);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 20, 28, 20)
+        lay.setSpacing(10)
+
+        # ── Title ──────────────────────────────────────────────────────
+        title = QLabel("◈  SYSTEMS INITIALISING")
+        title.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        lay.addWidget(title)
+
+        lay.addSpacing(2)
+
+        # ── Component rows ──────────────────────────────────────────────
+        self._rows: dict[str, dict] = {}
+        _COMPS = [
+            ("stt", "SPEECH RECOGNITION  (STT)", C.GREEN),
+            ("llm", "LANGUAGE MODEL  (LLM)",      C.ACC2),
+            ("tts", "VOICE SYNTHESIS  (TTS)",      C.PRI),
+        ]
+        for key, label, color in _COMPS:
+            box = QWidget()
+            box.setStyleSheet(
+                f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
+            )
+            box_lay = QVBoxLayout(box)
+            box_lay.setContentsMargins(10, 6, 10, 6)
+            box_lay.setSpacing(4)
+
+            top = QHBoxLayout()
+            nm = QLabel(label)
+            nm.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            nm.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
+            top.addWidget(nm)
+            top.addStretch()
+
+            st = QLabel("LOADING…")
+            st.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            st.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+            top.addWidget(st)
+            box_lay.addLayout(top)
+
+            bar = QProgressBar()
+            bar.setFixedHeight(4)
+            bar.setRange(0, 0)     # indeterminate marquee
+            bar.setTextVisible(False)
+            bar.setStyleSheet(f"""
+                QProgressBar {{
+                    background: {C.BAR_BG}; border: none; border-radius: 2px;
+                }}
+                QProgressBar::chunk {{
+                    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                        stop:0 {C.BORDER}, stop:1 {color});
+                    border-radius: 2px; width: 60px; margin: 0px;
+                }}
+            """)
+            box_lay.addWidget(bar)
+            lay.addWidget(box)
+            self._rows[key] = {"bar": bar, "status": st, "color": color}
+
+        lay.addSpacing(4)
+
+        # ── Bottom status ───────────────────────────────────────────────
+        self._status_lbl = QLabel("Initialising components…")
+        self._status_lbl.setFont(QFont("Courier New", 8))
+        self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        self._status_lbl.setWordWrap(True)
+        lay.addWidget(self._status_lbl)
+
+        tip = QLabel("All AI models run 100% locally · No data leaves your device")
+        tip.setFont(QFont("Courier New", 7))
+        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tip.setStyleSheet(f"color: {C.BORDER}; background: transparent;")
+        lay.addWidget(tip)
+
+    # Called only from the main thread (via MainWindow._startup_sig)
+    def update_component(self, key: str, status: str) -> None:
+        if key not in self._rows:
+            return
+        row = self._rows[key]
+        ok     = status == "ready"
+        color  = row["color"] if ok else C.RED
+        label  = "READY  ✓" if ok else "ERROR  ✗"
+
+        bar = row["bar"]
+        bar.setRange(0, 100)
+        bar.setValue(100)
+        bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {C.BAR_BG}; border: none; border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background: {color}; border-radius: 2px;
+            }}
+        """)
+        st = row["status"]
+        st.setText(label)
+        st.setStyleSheet(f"color: {color}; background: transparent; border: none;")
+
+    def set_status(self, text: str) -> None:
+        self._status_lbl.setText(text)
+        col = C.GREEN if "online" in text.lower() else C.TEXT_DIM
+        self._status_lbl.setStyleSheet(f"color: {col}; background: transparent;")
+
+
 class MainWindow(QMainWindow):
-    _log_sig   = pyqtSignal(str)
-    _state_sig = pyqtSignal(str)
+    _log_sig     = pyqtSignal(str)
+    _state_sig   = pyqtSignal(str)
+    _startup_sig = pyqtSignal(str, str)  # action, data — thread-safe startup panel control
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1337,8 +1523,10 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
+        self._startup_sig.connect(self._on_startup_sig)
 
         self._overlay: SetupOverlay | None = None
+        self._startup_panel: StartupPanel | None = None
         self._on_reconfigure_cb = None
         self._ready = self._check_config()
         if not self._ready:
@@ -1357,14 +1545,58 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        cw = self.centralWidget()
         if self._overlay and self._overlay.isVisible():
             ow, oh = 520, 580
-            cw = self.centralWidget()
             self._overlay.setGeometry(
                 (cw.width()  - ow) // 2,
                 (cw.height() - oh) // 2,
                 ow, oh,
             )
+        if self._startup_panel and self._startup_panel.isVisible():
+            pw, ph = 400, 310
+            self._startup_panel.setGeometry(
+                (cw.width()  - pw) // 2,
+                (cw.height() - ph) // 2,
+                pw, ph,
+            )
+
+    # ── Startup panel (thread-safe via _startup_sig) ────────────────────
+    def _on_startup_sig(self, action: str, data: str) -> None:
+        """Runs on main thread — handles all startup panel state changes."""
+        if action == "show":
+            self._create_startup_panel()
+        elif action in ("ready", "error"):
+            if self._startup_panel:
+                self._startup_panel.update_component(data, action)
+        elif action == "status":
+            if self._startup_panel:
+                self._startup_panel.set_status(data)
+        elif action == "hide":
+            if self._startup_panel:
+                # Fade out after a short pause so "READY ✓" is visible
+                QTimer.singleShot(1200, self._destroy_startup_panel)
+
+    def _create_startup_panel(self) -> None:
+        if self._startup_panel and self._startup_panel.isVisible():
+            return
+        cw = self.centralWidget()
+        pw, ph = 400, 310
+        panel = StartupPanel(cw)
+        panel.setGeometry(
+            (cw.width()  - pw) // 2,
+            (cw.height() - ph) // 2,
+            pw, ph,
+        )
+        panel.show()
+        panel.raise_()
+        self._startup_panel = panel
+
+    def _destroy_startup_panel(self) -> None:
+        if self._startup_panel:
+            self._startup_panel.hide()
+            self._startup_panel.deleteLater()
+            self._startup_panel = None
 
     def _update_metrics(self):
         snap = _metrics.snapshot()
@@ -1716,7 +1948,6 @@ class MainWindow(QMainWindow):
         txt = self._input.text().strip()
         if not txt: return
         self._input.clear()
-        self._log.append_log(f"You: {txt}")
         if self.on_text_command:
             threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
 
@@ -1860,6 +2091,19 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    # ── Startup panel (all thread-safe) ──────────────────────────────────
+    def show_startup_panel(self) -> None:
+        self._win._startup_sig.emit("show", "")
+
+    def mark_startup_ready(self, key: str, error: bool = False) -> None:
+        self._win._startup_sig.emit("error" if error else "ready", key)
+
+    def set_startup_status(self, text: str) -> None:
+        self._win._startup_sig.emit("status", text)
+
+    def hide_startup_panel(self) -> None:
+        self._win._startup_sig.emit("hide", "")
 
     def wait_for_api_key(self):
         while not self._win._ready:
