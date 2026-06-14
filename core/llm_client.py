@@ -22,7 +22,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Generator
+from typing import Callable, Generator
 
 import requests
 
@@ -182,6 +182,40 @@ def warmup_model(system_prompt: str | None = None) -> bool:
     except Exception as e:
         print(f"[LLM] Warmup failed (non-fatal): {e}")
         return False
+
+
+def check_model_available(log: Callable | None = None) -> bool:
+    """
+    Returns True if the configured model is already pulled in Ollama.
+    Logs an actionable warning (to console + optional UI callback) if not.
+    Always returns True for non-Ollama providers (cannot inspect their model list).
+    """
+    if get_llm_provider() != "ollama":
+        return True
+
+    url, model = get_llm_settings()
+    try:
+        resp = requests.get(f"{url}/api/tags", timeout=5)
+        resp.raise_for_status()
+        pulled = [m.get("name", "") for m in resp.json().get("models", [])]
+        model_base = model.split(":")[0]
+        found = any(
+            m == model or m == model_base or m.startswith(model_base + ":")
+            for m in pulled
+        )
+        if not found:
+            available = ", ".join(pulled) if pulled else "none"
+            warn = (
+                f"WRN: Model '{model}' is not pulled in Ollama.\n"
+                f"     Available: {available}\n"
+                f"     Fix: ollama pull {model}"
+            )
+            print(warn)
+            if log:
+                log(f"WRN: '{model}' not found — run: ollama pull {model}")
+        return found
+    except Exception:
+        return True   # Ollama might still be starting up; non-blocking
 
 
 def get_llm_settings() -> tuple[str, str]:

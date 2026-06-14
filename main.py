@@ -1138,6 +1138,11 @@ class JarvisLocal:
         except Exception as e:
             print(f"[STT-Whisper] Mic error: {e}")
             traceback.print_exc()
+            self.ui.write_log(
+                f"ERR: Microphone — {e}\n"
+                "     Check: microphone plugged in, OS privacy permissions granted, "
+                "correct audio device selected in system settings."
+            )
 
     def _listen_vosk(self) -> None:
         """Mic → Vosk streaming → LLM loop."""
@@ -1172,6 +1177,11 @@ class JarvisLocal:
         except Exception as e:
             print(f"[STT-Vosk] Mic error: {e}")
             traceback.print_exc()
+            self.ui.write_log(
+                f"ERR: Microphone — {e}\n"
+                "     Check: microphone plugged in, OS privacy permissions granted, "
+                "correct audio device selected in system settings."
+            )
 
     # ------------------------------------------------------------------
     # Text command loop (UI input box)
@@ -1203,10 +1213,11 @@ class JarvisLocal:
             self.ui.on_reconfigure = self.reconfigure
 
             # ── Ollama ────────────────────────────────────────────────────
-            from core.llm_client import ensure_ollama_running, warmup_model
+            from core.llm_client import ensure_ollama_running, warmup_model, check_model_available
             self.ui.write_log("SYS: Checking Ollama…")
             if ensure_ollama_running():
                 self.ui.write_log("SYS: Ollama OK.")
+                check_model_available(log=self.ui.write_log)
             else:
                 self.ui.write_log("ERR: Ollama unavailable — run: ollama serve")
 
@@ -1230,8 +1241,29 @@ class JarvisLocal:
                     # static prefix → Ollama reuses cached KV → first token <1 s
                     # instead of the ~17 s it takes to re-evaluate 300+ tokens cold.
                     static_prompt = _load_system_prompt()
-                    warmup_model(system_prompt=static_prompt)
-                    self.ui.write_log("SYS: LLM ready.")
+                    ok = warmup_model(system_prompt=static_prompt)
+                    if ok:
+                        self.ui.write_log("SYS: LLM ready.")
+                    else:
+                        # warmup() returned False — check if model is missing
+                        from core.llm_client import check_model_available
+                        if not check_model_available(log=self.ui.write_log):
+                            pass   # warning already written by check_model_available
+                        else:
+                            self.ui.write_log("WRN: LLM warmup failed — is Ollama running?")
+                    # GPU usage tip (cross-platform, non-blocking)
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            self.ui.write_log(f"SYS: GPU detected — {torch.cuda.get_device_name(0)}")
+                        else:
+                            self.ui.write_log(
+                                "WRN: CUDA not detected — LLM running on CPU (slow). "
+                                "For GPU speed install CUDA PyTorch: "
+                                "pip install torch --index-url https://download.pytorch.org/whl/cu118"
+                            )
+                    except Exception:
+                        pass   # torch not installed or not applicable
                     self.ui.mark_startup_ready("llm")
                 except Exception as e:
                     self.ui.write_log(f"ERR: LLM warmup — {e}")

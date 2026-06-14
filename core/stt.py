@@ -25,14 +25,27 @@ class WhisperSTT:
         try:
             self._model = WhisperModel(model_name, device=device, compute_type=compute)
         except Exception as _first_err:
-            # Offline flag set but model not cached yet → download once, then offline forever
+            # Offline flag set but model not cached yet → clear flags and download once.
+            # Keywords cover multiple huggingface_hub error message variants across versions.
             _e = str(_first_err).lower()
-            if any(k in _e for k in ("offline", "not found", "cache", "localentry", "does not exist")):
-                print(f"[STT] '{model_name}' not cached — downloading (internet required for first run)…")
+            _offline_keywords = (
+                "offline", "not found", "cache", "localentry",
+                "does not exist", "outgoing", "local_files_only",
+            )
+            if any(k in _e for k in _offline_keywords):
+                print(f"[STT] Whisper '{model_name}' not in local cache — downloading (one-time, internet required)…")
                 os.environ.pop("HF_HUB_OFFLINE",      None)
                 os.environ.pop("TRANSFORMERS_OFFLINE", None)
                 os.environ.pop("HF_DATASETS_OFFLINE",  None)
-                self._model = WhisperModel(model_name, device=device, compute_type=compute)
+                try:
+                    self._model = WhisperModel(model_name, device=device, compute_type=compute)
+                except Exception as _dl_err:
+                    raise RuntimeError(
+                        f"Whisper '{model_name}' model download failed.\n"
+                        f"Internet access is required the first time to download the speech model (~75–290 MB).\n"
+                        f"After the first download it runs fully offline.\n"
+                        f"Details: {_dl_err}"
+                    ) from _dl_err
             else:
                 raise
 
