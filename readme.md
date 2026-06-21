@@ -1,159 +1,84 @@
-# 🤖 MARK XL — Local AI Assistant
+# 🤖 MARK XLVI (46)
+### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
 
-> **J.A.R.V.I.S** — Just A Rather Very Intelligent System  
-> Cross-platform voice AI assistant running entirely on local hardware. No cloud APIs required.
+> 📺 **[Watch the full setup video on YouTube](https://www.youtube.com/watch?v=BhOsnGC_sAA)**
 
----
-
-## Overview
-
-MARK XL is a fully local, real-time voice and visual AI agent. It combines offline speech recognition, a locally hosted LLM (via Ollama), and text-to-speech to deliver a privacy-first personal assistant with OS-level control capabilities.
-
-Successor to the previous mark, which used the Google Gemini Live API. MARK XL removes all cloud LLM dependencies while adding streaming responses, a dynamic configuration UI, and multi-language support.
+A real-time voice AI that can hear, see, understand, and control your computer — on any OS. Supporting Windows, macOS, and Linux. Built with Gemini integration for maximum stability and performance, delivering zero subscriptions and total digital autonomy.
 
 ---
 
-## Architecture
+## ✨ Overview
 
-```
-Microphone → STT (Whisper / Vosk)
-                  ↓
-           Ollama LLM (tool calling + streaming)
-                  ↓
-         Tool Execution (OS, Browser, Files …)
-                  ↓
-           TTS (EdgeTTS / Kokoro / ElevenLabs)
-                  ↓
-              Speaker
-```
+MARK XLVI represents a massive milestone in the Jarvis series, evolving into a fully connected, highly persistent, and remote-accessible system. It completely bridges the gap between your mobile device, desktop OS, and human intent. Through real-time Gemini reasoning, Mark 46 allows you to control your PC from your phone, share large files securely, and maintain deep contextual conversations across sessions.
 
-### Core Components
-
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| **STT** | faster-whisper / Vosk | Fully offline. Auto language detection or forced locale. |
-| **LLM** | Ollama (any model) | qwen2.5, llama3.2, mistral, etc. Streaming + tool calling. |
-| **TTS** | EdgeTTS / Kokoro / ElevenLabs | EdgeTTS = free + internet. Kokoro = fully offline. |
-| **UI** | PyQt6 | HUD overlay with system monitor, log panel, file drop zone. |
-| **Agent** | Custom task queue | Multi-step planner + executor + error recovery. |
+It's not just an assistant — it's an extension of your digital life.
 
 ---
 
-## Features
+## 🚀 Capabilities
 
-- **Streaming responses** — TTS starts speaking on the first sentence, not after the full response
-- **Tool calling** — 18 built-in tools: browser control, file management, weather, YouTube, messaging, screen analysis, code helper, game updater, flight finder, and more
-- **Long-term memory** — Silently saves personal facts; recalled in every conversation
-- **Live configuration** — Change LLM model, STT engine, TTS voice without restarting (⚙ Configure button)
-- **Ollama auto-start** — Automatically launches `ollama serve` if it's not running
-- **Model warmup** — Pre-loads the LLM into memory during startup so the first message is as fast as subsequent ones
-- **Multi-language STT** — Set `stt_language` to `auto` (Whisper detects) or a specific locale (`tr`, `de`, `fr`, …)
-- **Cross-platform** — Windows, macOS, Linux (OS detected automatically at runtime)
-- **File drop zone** — Drag and drop images, PDFs, Word docs, CSV, audio, video for AI processing
-
----
-
-## Requirements
-
-- Python 3.11 or 3.12
-- [Ollama](https://ollama.com) installed and a model pulled (e.g. `ollama pull qwen2.5:7b`)
-- A microphone
+### Core Features
+| Feature | Description |
+|---|---|
+| 🎙️ Real-time Voice | Ultra-low latency conversation in any language |
+| 🖥️ System Control | Launch apps, manage files, execute terminal commands |
+| 🧩 Autonomous Tasks | High-level planning for complex, multi-step goals |
+| 👁️ Visual Awareness | Real-time screen processing and webcam vision |
+| 🧠 Persistent Memory | Deeply remembers your projects, preferences, and personal context |
+| ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
 
 ---
 
-## Quick Start
+## 🆕 What's New in XLVI
+
+- 📱 **Full Remote Phone Control** — Take command of your entire desktop operating system directly from your smartphone, anywhere, anytime.
+- 🧠 **Advanced Long-Term Memory** — Upgraded memory architecture allows Jarvis to contextually remember past interactions, preferences, and complex workflows across reboots.
+- 🚀 **Powered by Gemini Integration** — Re-engineered from the ground up to utilize the full speed and precision of the Google Gemini API for ultimate reasoning and stability.
+- ⚡ **Next-Gen Performance & Stability** — Comprehensive system-wide optimizations delivering faster response times and rock-solid execution on Windows, Mac, and Linux.
+- 📂 **Advanced File Handling & Hybrid Input** — Fluidly switch between voice or keyboard input, and drag-and-drop code, PDFs, or images for instant analysis and automation.
+- 🔒 **Secure Mobile File Sharing** — Wirelessly and securely share files or entire folders up to 500 MB from your phone directly to your computer with complete privacy.
+
+---
+
+## ⚡ Quick Start
 
 ```bash
-# 1. Install Ollama → https://ollama.com
-#    Then pull a model:
-ollama pull qwen2.5:7b
-
-# 2. Clone / download the project and launch
-cd Mark-XL
+git clone [https://github.com/FatihMakes/Mark-XLVI.git](https://github.com/FatihMakes/Mark-XLVI.git)
+cd Mark-XLVI
+pip install -r requirements.txt
+playwright install
 python main.py
+
 ```
 
-That's it. On first run MARK XL:
-1. Auto-installs base packages (PyQt6, numpy …) and restarts once
-2. Opens the **Initialisation** overlay — choose STT engine, LLM model, TTS engine
-3. Click **INITIALISE SYSTEMS** — engine packages install in the background (progress shown in log)
-4. JARVIS comes online
-
-After setup, use the **⚙ CONFIGURE** button in the right panel to change any setting at any time without restarting.
+> ⚠️ **Installation Note:** To keep the repository lightweight, some OS-specific dependencies are not bundled in `requirements.txt`. If you run into a `ModuleNotFoundError`, simply install the missing package via `pip install <module_name>` for your specific system.
 
 ---
 
-## Configuration (`config/api_keys.json`)
+## 📋 Requirements
 
-```json
-{
-    "stt_engine":         "whisper",
-    "stt_model":          "base",
-    "stt_language":       "auto",
-    "llm_url":            "http://localhost:11434",
-    "llm_model":          "qwen2.5:7b",
-    "tts_engine":         "edgetts",
-    "tts_voice":          "en-US-GuyNeural",
-    "elevenlabs_api_key": ""
-}
-```
-
-| Key | Values | Default |
-|-----|--------|---------|
-| `stt_engine` | `whisper` / `vosk` | `whisper` |
-| `stt_model` | `tiny` / `base` / `small` / `medium` / `large-v3` | `base` |
-| `stt_language` | `auto` or ISO code (`tr`, `en`, `de` …) | `auto` |
-| `llm_url` | Ollama API base URL | `http://localhost:11434` |
-| `llm_model` | Any model pulled in Ollama | `qwen2.5:7b` |
-| `tts_engine` | `edgetts` / `kokoro` / `elevenlabs` | `edgetts` |
-| `tts_voice` | Voice name / ID depending on engine | `en-US-GuyNeural` |
+| Requirement | Details |
+| --- | --- |
+| **OS** | Windows 10/11, macOS, or Linux |
+| **Python** | 3.11 or 3.12 |
+| **Microphone** | Required for voice interaction |
+| **API Key** | Free Gemini API key |
 
 ---
 
-## Built-in Tools
+## ⚠️ License
 
-| Tool | Description |
-|------|-------------|
-| `open_app` | Opens any application or website |
-| `web_search` | Web search and compare mode |
-| `weather_report` | Current weather for any city |
-| `send_message` | WhatsApp / Telegram messaging |
-| `reminder` | Timed reminders via Task Scheduler |
-| `youtube_video` | Play, summarize, trending videos |
-| `screen_process` | Screen capture + vision model analysis |
-| `computer_settings` | Volume, brightness, window management, shortcuts |
-| `browser_control` | Full Playwright browser automation |
-| `file_controller` | File/folder CRUD, search, disk usage |
-| `desktop_control` | Wallpaper, organize, clean desktop |
-| `code_helper` | Write, edit, explain, run code |
-| `dev_agent` | Build complete multi-file projects |
-| `agent_task` | Multi-step autonomous task execution |
-| `computer_control` | Direct mouse/keyboard control |
-| `game_updater` | Steam / Epic Games install & update |
-| `flight_finder` | Google Flights search |
-| `file_processor` | Process images, PDFs, CSV, audio, video |
+Personal and non-commercial use only.
+Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**.
 
 ---
 
-## Keyboard Shortcuts
+## 👤 Connect with the Creator
 
-| Key | Action |
-|-----|--------|
-| `F4` | Mute / unmute microphone |
-| `F11` | Toggle fullscreen |
+Engineered by a developer building a real-world JARVIS-style assistant.
+⭐ **Star the repository to support the journey to Mark 100.**
 
----
-
-## TTS Engine Comparison
-
-| Engine | Internet | Quality | Cost |
-|--------|----------|---------|------|
-| EdgeTTS | Required | Good | Free |
-| Kokoro | No | Excellent | Free (local model ~100 MB) |
-| ElevenLabs | Required | Best | Paid API |
-
----
-
-## License
-
-MIT — FatihMakes Industries
+| Platform | Link |
+| --- | --- |
+| YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
+| Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |

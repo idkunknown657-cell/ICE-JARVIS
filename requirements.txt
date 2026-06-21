@@ -1,54 +1,27 @@
-# MARK XL — Python dependencies
-#
-# Normal users: just run  python main.py
-#   All packages are installed automatically on first launch.
-#
-# Developers / manual setup:
-#   pip install -r requirements.txt
-#   Platform-specific packages install only on the matching OS.
-
-# ── Core UI & system ──────────────────────────────────────────────────────
-PyQt6
-psutil
-pillow
 sounddevice
-numpy
-soundfile
+google-genai
+google-generativeai
+pillow
 requests
-
-# ── Web automation & search ───────────────────────────────────────────────
-playwright
 beautifulsoup4
 duckduckgo-search
-
-# ── OS control (cross-platform) ───────────────────────────────────────────
+playwright
 pyautogui
 pyperclip
 pygetwindow
-send2trash
-mss
 opencv-python
-
-# ── OS control (Windows only) ─────────────────────────────────────────────
-pywinauto ; sys_platform == "win32"
-comtypes  ; sys_platform == "win32"
-pycaw     ; sys_platform == "win32"
-win10toast; sys_platform == "win32"
-
-# ── Media & file processing ───────────────────────────────────────────────
+numpy
+mss
+psutil
+send2trash
 youtube-transcript-api
 python-pptx
-miniaudio
-
-# ── STT — choose one (auto-installed by main.py based on your config) ─────
-faster-whisper        # Whisper  (default, recommended)
-# vosk               # Vosk     (alternative — uncomment if preferred)
-
-# ── TTS — choose one (auto-installed by main.py based on your config) ─────
-edge-tts              # EdgeTTS  (default, free, requires internet)
-# kokoro             # Kokoro   (fully offline — uncomment if preferred)
-# elevenlabs         # ElevenLabs (cloud API — uncomment if preferred)
-
-# ── Local LLM ─────────────────────────────────────────────────────────────
-# Ollama must be installed separately: https://ollama.com
-# Then pull a model:  ollama pull qwen2.5:7b
+fastapi
+uvicorn[standard]
+cryptography
+python-multipart
+comtypes; sys_platform == "win32"
+pycaw; sys_platform == "win32"
+win10toast; sys_platform == "win32"
+pywinauto; sys_platform == "win32"
+qrcode[pil]

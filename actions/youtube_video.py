@@ -10,6 +10,18 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 try:
+    import pyautogui
+    _PYAUTOGUI = True
+except ImportError:
+    _PYAUTOGUI = False
+
+try:
+    import numpy as np
+    _NUMPY = True
+except ImportError:
+    _NUMPY = False
+
+try:
     import requests
     _REQUESTS_OK = True
 except ImportError:
@@ -43,6 +55,11 @@ HEADERS = {
 }
 
 _YT_VIDEO_FILTER = "EgIQAQ%3D%3D"
+
+
+def _get_api_key() -> str:
+    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)["gemini_api_key"]
 
 
 def _open_url(url: str) -> None:
@@ -150,20 +167,26 @@ def _get_transcript(video_id: str) -> str | None:
 
 
 def _summarize_with_gemini(transcript: str, video_url: str) -> str:
-    from core.llm_client import call_llm_text
-    system = (
-        "You are JARVIS, an AI assistant. "
-        "Summarize YouTube video transcripts clearly and concisely. "
-        "Structure: 1-sentence overview, then 3-5 key points. "
-        "Be direct. Address the user as 'sir'. "
-        "Match the language of the transcript."
-    )
-    max_chars = 12000
+    from google import genai as _genai
+    from google.genai import types
+
+    _client = _genai.Client(api_key=_get_api_key())
+    max_chars = 80000
     truncated = transcript[:max_chars] + ("..." if len(transcript) > max_chars else "")
-    return call_llm_text(
-        f"Please summarize this YouTube video transcript:\n\n{truncated}",
-        system=system,
+    response  = _client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=f"Please summarize this YouTube video transcript:\n\n{truncated}",
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are JARVIS, an AI assistant. "
+                "Summarize YouTube video transcripts clearly and concisely. "
+                "Structure: 1-sentence overview, then 3-5 key points. "
+                "Be direct. Address the user as 'sir'. "
+                "Match the language of the transcript."
+            )
+        )
     )
+    return response.text.strip()
 
 
 def _save_summary(content: str, video_url: str) -> str:

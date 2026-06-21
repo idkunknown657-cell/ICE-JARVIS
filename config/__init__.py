@@ -1,9 +1,14 @@
 # config/__init__.py
-import json
-import platform
+import json, os, platform
 from pathlib import Path
 
 _CONFIG_PATH = Path(__file__).parent / "api_keys.json"
+
+def _platform_os() -> str:
+    """Auto-detect OS when config file is absent."""
+    return {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
+        platform.system(), "linux"
+    )
 
 def get_config() -> dict:
     try:
@@ -13,13 +18,8 @@ def get_config() -> dict:
         return {}
 
 def get_os() -> str:
-    """Returns 'windows' | 'mac' | 'linux' — detected at runtime, not from config."""
-    s = platform.system().lower()
-    if s == "darwin":
-        return "mac"
-    if s == "windows":
-        return "windows"
-    return "linux"
+    """Returns: 'windows' | 'mac' | 'linux'"""
+    return get_config().get("os_system", _platform_os()).lower()
 
 def is_windows() -> bool: return get_os() == "windows"
 def is_mac()     -> bool: return get_os() == "mac"

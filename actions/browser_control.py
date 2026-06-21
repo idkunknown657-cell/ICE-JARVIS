@@ -11,22 +11,13 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-try:
-    from playwright.async_api import (
-        async_playwright,
-        BrowserContext,
-        Page,
-        Playwright,
-        TimeoutError as PlaywrightTimeout,
-    )
-    _PLAYWRIGHT_OK = True
-except ImportError:
-    _PLAYWRIGHT_OK   = False
-    async_playwright = None          # type: ignore[assignment]
-    BrowserContext   = None          # type: ignore[assignment]
-    Page             = None          # type: ignore[assignment]
-    Playwright       = None          # type: ignore[assignment]
-    PlaywrightTimeout = Exception    # type: ignore[assignment,misc]
+from playwright.async_api import (
+    async_playwright,
+    BrowserContext,
+    Page,
+    Playwright,
+    TimeoutError as PlaywrightTimeout,
+)
 _OS = platform.system()   # "Windows" | "Darwin" | "Linux"
 
 def _normalize_url(url: str) -> str:
@@ -816,14 +807,6 @@ def browser_control(
     player=None,
     session_memory=None,
 ) -> str:
-    if not _PLAYWRIGHT_OK:
-        msg = (
-            "Playwright is not installed.\n"
-            "Fix: pip install playwright  &&  python -m playwright install chromium"
-        )
-        _log(player, msg)
-        return msg
-
     params  = parameters or {}
     action  = params.get("action", "").lower().strip()
     browser = params.get("browser", "").lower().strip() or None
