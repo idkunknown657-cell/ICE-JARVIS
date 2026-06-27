@@ -1,4 +1,4 @@
-# 🤖 MARK XLVI (46)
+# 🤖 MARK XLVII (47)
 ### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
 
 > 📺 **[Watch the full setup video on YouTube](https://www.youtube.com/watch?v=BhOsnGC_sAA)**
@@ -9,7 +9,7 @@ A real-time voice AI that can hear, see, understand, and control your computer �
 
 ## ✨ Overview
 
-MARK XLVI represents a massive milestone in the Jarvis series, evolving into a fully connected, highly persistent, and remote-accessible system. It completely bridges the gap between your mobile device, desktop OS, and human intent. Through real-time Gemini reasoning, Mark 46 allows you to control your PC from your phone, share large files securely, and maintain deep contextual conversations across sessions.
+MARK XLVII represents the pinnacle of the Jarvis series, evolving into a proactive, deeply integrated system. It bridges the gap between the operating system, real-time web intelligence, and hardware metrics. Through natural dialogue, Mark 47 monitors your hardware, prepares your day, and visualizes complex web data through an adaptive interface.
 
 It's not just an assistant — it's an extension of your digital life.
 
@@ -29,26 +29,24 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
-## 🆕 What's New in XLVI
+## 🆕 What's New in XLVII
 
-- 📱 **Full Remote Phone Control** — Take command of your entire desktop operating system directly from your smartphone, anywhere, anytime.
-- 🧠 **Advanced Long-Term Memory** — Upgraded memory architecture allows Jarvis to contextually remember past interactions, preferences, and complex workflows across reboots.
-- 🚀 **Powered by Gemini Integration** — Re-engineered from the ground up to utilize the full speed and precision of the Google Gemini API for ultimate reasoning and stability.
-- ⚡ **Next-Gen Performance & Stability** — Comprehensive system-wide optimizations delivering faster response times and rock-solid execution on Windows, Mac, and Linux.
-- 📂 **Advanced File Handling & Hybrid Input** — Fluidly switch between voice or keyboard input, and drag-and-drop code, PDFs, or images for instant analysis and automation.
-- 🔒 **Secure Mobile File Sharing** — Wirelessly and securely share files or entire folders up to 500 MB from your phone directly to your computer with complete privacy.
+- 🌅 **Morning Briefing Mode** — Automatically triggers once on first boot to read the time, pull local/global news, and check memory for your city to deliver a personalized weather update.
+- 🎛️ **Audio-Visual System Monitor** — Background telemetry checks CPU, RAM, GPU, and temps every 10 seconds, delivering localized voice warnings with a 5-minute cooldown when thresholds are breached.
+- 🔍 **Advanced Multi-Modal Search** — Overhauled web search featuring specific modes (`news`, `research`, `price`, `compare`, `search`) that prioritize Gemini Grounded Search with an automatic DuckDuckGo fallback.
+- 🖼️ **Dynamic Content Panel** — A new scrollable display layer beneath the HUD that automatically expands to render high-density web results (over 120 characters) with active timestamps.
+- 🗣️ **Silent Language Memory** — Instantly and silently captures your spoken language to save it under `identity/language`, ensuring all subsequent boots and briefings adapt to your dialect automatically.
 
 ---
 
 ## ⚡ Quick Start
 
 ```bash
-git clone [https://github.com/FatihMakes/Mark-XLVI.git](https://github.com/FatihMakes/Mark-XLVI.git)
-cd Mark-XLVI
+git clone [https://github.com/FatihMakes/Mark-XLVII.git](https://github.com/FatihMakes/Mark-XLVII.git)
+cd Mark-XLVII
 pip install -r requirements.txt
 playwright install
 python main.py
-
 ```
 
 > ⚠️ **Installation Note:** To keep the repository lightweight, some OS-specific dependencies are not bundled in `requirements.txt`. If you run into a `ModuleNotFoundError`, simply install the missing package via `pip install <module_name>` for your specific system.
@@ -82,3 +80,7 @@ Engineered by a developer building a real-world JARVIS-style assistant.
 | --- | --- |
 | YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
 | Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |
+
+```
+
+```

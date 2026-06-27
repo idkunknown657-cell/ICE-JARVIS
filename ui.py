@@ -1213,12 +1213,13 @@ class RemoteKeyOverlay(QWidget):
 
 
 class MainWindow(QMainWindow):
-    _log_sig   = pyqtSignal(str)
-    _state_sig = pyqtSignal(str)
+    _log_sig     = pyqtSignal(str)
+    _state_sig   = pyqtSignal(str)
+    _content_sig = pyqtSignal(str, str)   # (title, text) — thread-safe content display
 
     def __init__(self, face_path: str):
         super().__init__()
-        self.setWindowTitle("J.A.R.V.I.S — MARK XLVI")
+        self.setWindowTitle("J.A.R.V.I.S — MARK XLVII")
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
@@ -1250,9 +1251,18 @@ class MainWindow(QMainWindow):
         self._left_panel = self._build_left_panel()
         body.addWidget(self._left_panel, stretch=0)
 
+        # Center column: HUD on top + content panel below
+        _center = QWidget()
+        _center.setStyleSheet(f"background: {C.BG};")
+        _center_lay = QVBoxLayout(_center)
+        _center_lay.setContentsMargins(0, 0, 0, 0)
+        _center_lay.setSpacing(0)
         self.hud = HudCanvas(face_path)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        body.addWidget(self.hud, stretch=5)
+        _center_lay.addWidget(self.hud, stretch=1)
+        self._content_panel = self._build_content_panel()
+        _center_lay.addWidget(self._content_panel)
+        body.addWidget(_center, stretch=5)
 
         self._right_panel = self._build_right_panel()
         body.addWidget(self._right_panel, stretch=0)
@@ -1273,6 +1283,7 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
+        self._content_sig.connect(self._show_content)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1372,7 +1383,7 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
-        lay.addWidget(_badge("MARK XLVI", C.PRI_DIM))
+        lay.addWidget(_badge("MARK XLVII", C.PRI_DIM))
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
@@ -1589,6 +1600,107 @@ class MainWindow(QMainWindow):
         row.addWidget(send)
         return row
 
+    def _build_content_panel(self) -> QWidget:
+        """
+        Collapsible panel below the HUD — shows search results, news, briefings.
+        Hidden by default; appears when show_content() is called.
+        """
+        w = QWidget()
+        w.setObjectName("ContentPanel")
+        w.setStyleSheet(f"""
+            QWidget#ContentPanel {{
+                background: {C.PANEL};
+                border-top: 1px solid {C.BORDER_B};
+            }}
+        """)
+        w.hide()
+
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 7, 12, 8)
+        lay.setSpacing(5)
+
+        # ── header row ───────────────────────────────────────────────────────
+        hdr = QHBoxLayout(); hdr.setSpacing(6)
+
+        dot = QLabel("◈")
+        dot.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        dot.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(dot)
+
+        self._content_title_lbl = QLabel("BRIEFING")
+        self._content_title_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._content_title_lbl.setStyleSheet(
+            f"color: {C.PRI}; background: transparent; letter-spacing: 1px;"
+        )
+        hdr.addWidget(self._content_title_lbl)
+        hdr.addStretch()
+
+        self._content_ts_lbl = QLabel("")
+        self._content_ts_lbl.setFont(QFont("Courier New", 7))
+        self._content_ts_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hdr.addWidget(self._content_ts_lbl)
+
+        dismiss = QPushButton("DISMISS  ✕")
+        dismiss.setFont(QFont("Courier New", 7))
+        dismiss.setFixedHeight(18)
+        dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
+        dismiss.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 2px; padding: 0 5px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        dismiss.clicked.connect(w.hide)
+        hdr.addWidget(dismiss)
+        lay.addLayout(hdr)
+
+        # ── separator ─────────────────────────────────────────────────────────
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER};"); lay.addWidget(sep)
+
+        # ── text display ──────────────────────────────────────────────────────
+        self._content_display = QTextEdit()
+        self._content_display.setReadOnly(True)
+        self._content_display.setFont(QFont("Courier New", 8))
+        self._content_display.setFixedHeight(155)
+        self._content_display.setStyleSheet(f"""
+            QTextEdit {{
+                background: {C.DARK};
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 6px 8px;
+                selection-background-color: {C.PRI_GHO};
+            }}
+            QScrollBar:vertical {{
+                background: {C.BG}; width: 6px; border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 3px; min-height: 16px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+        """)
+        lay.addWidget(self._content_display)
+
+        return w
+
+    def _show_content(self, title: str, text: str):
+        """Slot — runs on Qt main thread. Updates and shows the content panel."""
+        import time as _time
+        self._content_title_lbl.setText(title.upper()[:48])
+        self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
+        self._content_display.setPlainText(text)
+        # Scroll to top
+        cur = self._content_display.textCursor()
+        cur.moveToStart() if hasattr(cur, "moveToStart") else None
+        self._content_display.moveCursor(
+            self._content_display.textCursor().MoveOperation.Start
+        )
+        self._content_panel.show()
+
     def _build_footer(self) -> QWidget:
         w = QWidget()
         w.setFixedHeight(22)
@@ -1602,7 +1714,7 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_fl("[F4] Mute  ·  [F11] Fullscreen"))
         lay.addStretch()
-        lay.addWidget(_fl("FatihMakes Industries  ·  MARK XLVI  ·  CLASSIFIED"))
+        lay.addWidget(_fl("FatihMakes Industries  ·  MARK XLVII  ·  CLASSIFIED"))
         lay.addStretch()
         lay.addWidget(_fl("© STARK INDUSTRIES", C.PRI_DIM))
         return w
@@ -1791,6 +1903,10 @@ class JarvisUI:
     def wait_for_api_key(self):
         while not self._win._ready:
             time.sleep(0.1)
+
+    def show_content(self, title: str, text: str):
+        """Thread-safe: display content in the panel below the HUD."""
+        self._win._content_sig.emit(title[:48], text[:4000])
 
     def start_speaking(self):
         self.set_state("SPEAKING")

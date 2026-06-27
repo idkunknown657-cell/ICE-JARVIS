@@ -32,6 +32,7 @@ from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
+from actions.system_monitor    import SystemMonitor, get_system_status
 
 
 def get_base_dir():
@@ -92,16 +93,34 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "web_search",
-        "description": "Searches the web for any information.",
+        "description": (
+            "Searches the web. Use for ANY question about current facts, events, prices, "
+            "or topics — always prefer this over guessing. "
+            "Modes: 'search' (default), 'news' (latest headlines on a topic), "
+            "'research' (deep comprehensive answer), 'price' (product cost lookup), "
+            "'compare' (side-by-side comparison of items)."
+        ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "query":  {"type": "STRING", "description": "Search query"},
-                "mode":   {"type": "STRING", "description": "search (default) or compare"},
-                "items":  {"type": "ARRAY", "items": {"type": "STRING"}, "description": "Items to compare"},
-                "aspect": {"type": "STRING", "description": "price | specs | reviews"}
+                "query":  {"type": "STRING", "description": "Search query or topic"},
+                "mode":   {"type": "STRING", "description": "search | news | research | price | compare"},
+                "items":  {"type": "ARRAY",  "items": {"type": "STRING"}, "description": "Items to compare (compare mode)"},
+                "aspect": {"type": "STRING", "description": "Comparison aspect: price | specs | reviews | features"},
             },
             "required": ["query"]
+        }
+    },
+    {
+        "name": "system_status",
+        "description": (
+            "Returns real-time system metrics: CPU usage, RAM, GPU load, CPU temperature, "
+            "uptime, and process count. Use when the user asks about computer performance, "
+            "temperature, memory, or resource usage."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
         }
     },
     {
@@ -483,6 +502,8 @@ class JarvisLive:
         self.ui.on_remote_clicked = self._make_remote_key
         self._turn_done_event: asyncio.Event | None = None
         self._dashboard     = None
+        self._briefing_sent = False          # morning briefing fires once per process
+        self._sys_monitor   = SystemMonitor()  # persistent cooldown state
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -649,6 +670,12 @@ class JarvisLive:
             elif name == "web_search":
                 r = await loop.run_in_executor(None, lambda: web_search_action(parameters=args, player=self.ui))
                 result = r or "Done."
+                # Mirror substantial results to the on-screen content panel
+                if r and len(r) > 120:
+                    mode  = args.get("mode", "search").upper()
+                    query = args.get("query") or ", ".join(args.get("items", []))
+                    label = f"{mode} — {query[:38]}" if query else mode
+                    self.ui.show_content(label, r)
             elif name == "file_processor":
                 if not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
@@ -669,6 +696,10 @@ class JarvisLive:
             elif name == "flight_finder":
                 r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
                 result = r or "Done."
+
+            elif name == "system_status":
+                r = await loop.run_in_executor(None, get_system_status)
+                result = str(r)
 
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
@@ -833,6 +864,152 @@ class JarvisLive:
             stream.stop()
             stream.close()
 
+    # ── Morning briefing ────────────────────────────────────────────────────────
+
+    async def _send_startup_briefing(self) -> None:
+        """
+        Two-phase briefing for instant perceived response:
+          Phase 1 — immediate greeting (no tools, no fetch) → Jarvis speaks in <2s
+          Phase 2 — news fetched in background, injected after greeting finishes
+        """
+        await asyncio.sleep(0.3)
+        if not self.session:
+            return
+
+        # ── memory ───────────────────────────────────────────────────────────
+        memory   = load_memory()
+        identity = memory.get("identity", {})
+
+        def _val(k: str) -> str:
+            e = identity.get(k, {})
+            return (e.get("value", "") if isinstance(e, dict) else str(e)).strip()
+
+        lang = _val("language")
+        name = _val("name")
+
+        from datetime import datetime
+        time_str = datetime.now().strftime("%H:%M")
+
+        # ── Phase 1: instant greeting — zero data needed ──────────────────────
+        p1_lines = [
+            "[STARTUP_GREETING] Greet the user immediately. Keep it to 1-2 short sentences.",
+            f"Current time: {time_str}.",
+            "- Say hello and mention the time naturally.",
+            "- Say you are checking today's headlines and will share them in a moment.",
+            "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
+            "- Respond in "
+            + (f"language: {lang}." if lang else "the user's language (default: English)."),
+        ]
+        if name:
+            p1_lines.append(f"- Address the user as {name}.")
+
+        await self.session.send_client_content(
+            turns={"parts": [{"text": '\n'.join(p1_lines)}]},
+            turn_complete=True,
+        )
+        self.ui.write_log("SYS: Briefing phase 1 (greeting) sent.")
+
+        # ── Phase 2: fetch news in background, deliver after greeting plays ───
+        async def _guarded_news():
+            try:
+                await self._briefing_news_phase(lang)
+            except Exception as e:
+                print(f"[Briefing] Phase 2 error: {e}")
+                self.ui.write_log(f"SYS: Briefing news phase failed: {e}")
+        asyncio.create_task(_guarded_news())
+
+    async def _briefing_news_phase(self, lang: str) -> None:
+        """
+        Fetches headlines (DDG → Gemini fallback), shows them on screen,
+        then injects a short 2-headline summary into the Live session.
+        Waits enough time for the phase-1 greeting to finish playing first.
+        """
+        from actions.web_search import _ddg_search, _gemini_headlines
+
+        fetch_start           = asyncio.get_event_loop().time()
+        headlines: list[str]  = []
+        full_news             = ""
+
+        # 1) DDG — ~0.6 s when available
+        try:
+            results = await asyncio.wait_for(
+                asyncio.to_thread(_ddg_search, "world news today", 6),
+                timeout=4.0,
+            )
+            if results:
+                headlines = [r["title"] for r in results if r.get("title")][:6]
+                full_news = "\n\n".join(
+                    f"• {r.get('title','')}\n  {r.get('snippet','')}\n  {r.get('url','')}"
+                    for r in results
+                )
+        except Exception as e:
+            print(f"[Briefing] DDG: {e}")
+
+        # 2) Gemini grounded search — reliable fallback
+        if not headlines:
+            try:
+                headlines, full_news = await asyncio.wait_for(
+                    asyncio.to_thread(_gemini_headlines, 5),
+                    timeout=8.0,
+                )
+            except Exception as e:
+                print(f"[Briefing] Gemini headlines: {e}")
+
+        # Show full list on screen immediately when data arrives
+        if full_news:
+            self.ui.show_content("NEWS — latest headlines", full_news)
+
+        if not headlines or not self.session:
+            return
+
+        # Ensure the phase-1 greeting (≈ 3 s of speech) has finished before we speak again
+        elapsed       = asyncio.get_event_loop().time() - fetch_start
+        wait_more     = max(0.0, 3.5 - elapsed)
+        if wait_more > 0:
+            await asyncio.sleep(wait_more)
+
+        if not self.session:
+            return
+
+        headlines_text = "\n".join(f"{i+1}. {h}" for i, h in enumerate(headlines))
+        p2_lines = [
+            "[BRIEFING_NEWS] Today's headlines are already displayed on screen.",
+            "Data:",
+            headlines_text,
+            "",
+            "Voice rules:",
+            "- Mention ONLY 2 headlines — one short sentence each.",
+            "- Tell the user the full list is visible on screen.",
+            "- Ask if they need anything.",
+            "- Do NOT say [BRIEFING_NEWS].",
+            "- Respond in "
+            + (f"language: {lang}." if lang else "the user's language."),
+        ]
+
+        await self.session.send_client_content(
+            turns={"parts": [{"text": '\n'.join(p2_lines)}]},
+            turn_complete=True,
+        )
+        self.ui.write_log("SYS: Briefing phase 2 (news) sent.")
+
+    # ── System monitor ──────────────────────────────────────────────────────────
+
+    async def _run_system_monitor(self) -> None:
+        """Background task: voice alerts when metrics exceed thresholds."""
+        while True:
+            await asyncio.sleep(10)
+            alert = await asyncio.to_thread(self._sys_monitor.check)
+            if alert and self.session:
+                try:
+                    await self.session.send_client_content(
+                        turns={"parts": [{"text": alert}]},
+                        turn_complete=True,
+                    )
+                except Exception as e:
+                    print(f"[Monitor] ⚠️ Could not send alert: {e}")
+
+    # ── Phone audio relay ────────────────────────────────────────────────────────
+
     async def _relay_phone_audio(self) -> None:
         """Forward phone mic PCM chunks from dashboard queue into the Gemini Live session."""
         q = self._dashboard._phone_audio_queue
@@ -933,8 +1110,14 @@ class JarvisLive:
                     tg.create_task(self._listen_audio())
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
+                    tg.create_task(self._run_system_monitor())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())
+
+                    # Morning briefing — fires once per process launch
+                    if not self._briefing_sent:
+                        self._briefing_sent = True
+                        tg.create_task(self._send_startup_briefing())
 
             except Exception as e:
                 print(f"[JARVIS] Error: {e}")
