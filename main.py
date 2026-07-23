@@ -31,6 +31,7 @@ from google.genai import types
 from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
+    save_session_summary, pop_last_session,
 )
 
 from actions.file_processor import file_processor
@@ -52,6 +53,9 @@ from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
 from actions.proactive         import ProactiveEngine
+from actions.background_monitor import (
+    add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
+)
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import get_brief_enabled
 
@@ -408,6 +412,31 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "manage_monitor",
+        "description": (
+            "Add, remove, or list background monitoring topics. "
+            "JARVIS checks these topics once a day and alerts the user when there is a new development. "
+            "Use 'add' when the user says 'monitor X', 'track X', 'follow X'. "
+            "Use 'remove' when the user says 'stop monitoring X'. "
+            "Use 'list' when the user asks what is being monitored. "
+            "Do NOT add crypto, financial, or trading topics."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type":        "STRING",
+                    "description": "add | remove | list",
+                },
+                "topic": {
+                    "type":        "STRING",
+                    "description": "Topic to monitor or stop monitoring (e.g. 'space exploration', 'AI news')",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
         "name": "shutdown_jarvis",
         "description": (
             "Shuts down the assistant completely. "
@@ -548,6 +577,7 @@ class JarvisLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
+        self._session_log: list[str] = []          # conversation turns for end-of-session summary
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -811,14 +841,35 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, get_system_status)
                 result = str(r)
 
+            elif name == "manage_monitor":
+                action = args.get("action", "").lower().strip()
+                topic  = args.get("topic", "").strip()
+                if action == "add" and topic:
+                    result = await asyncio.to_thread(add_monitor, topic)
+                elif action == "remove" and topic:
+                    result = await asyncio.to_thread(remove_monitor, topic)
+                elif action == "list":
+                    topics = await asyncio.to_thread(list_monitors)
+                    result = ("Monitoring: " + ", ".join(topics)) if topics else "No topics are being monitored."
+                else:
+                    result = "Specify action (add/remove/list) and a topic."
+
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
-                self.speak("Goodbye, sir.")
-                def _shutdown():
-                    import time, os
-                    time.sleep(1)
-                    os._exit(0)
-                threading.Thread(target=_shutdown, daemon=True).start()
+                async def _do_shutdown():
+                    await self._save_session_summary()
+                    if self.session:
+                        try:
+                            await self.session.send_client_content(
+                                turns={"parts": [{"text": "Say a brief natural goodbye to the user."}]},
+                                turn_complete=True,
+                            )
+                        except Exception:
+                            pass
+                    await asyncio.sleep(1.5)
+                    import os as _os
+                    _os._exit(0)
+                asyncio.create_task(_do_shutdown())
 
             else:
                 result = f"Unknown tool: {name}"
@@ -921,6 +972,7 @@ class JarvisLive:
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self.ui.write_log(f"You: {full_in}")
+                                self._session_log.append(f"User: {full_in}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",
@@ -932,6 +984,7 @@ class JarvisLive:
                             full_out = " ".join(out_buf).strip()
                             if full_out:
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
+                                self._session_log.append(f"{self._asst_name}: {full_out}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "jarvis",
@@ -1012,9 +1065,21 @@ class JarvisLive:
                         self.set_speaking(False)
                         self._turn_done_event.clear()
                     continue
+
                 self.set_speaking(True)
+
+                # Batch all immediately-available chunks into one write to reduce
+                # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
+                # Cap at ~200 ms so interrupt() still stops audio within ~200 ms.
+                batch = bytearray(chunk)
+                while len(batch) < 9600:   # 9600 bytes ≈ 200 ms at 24 kHz / 16-bit mono
+                    try:
+                        batch.extend(self.audio_in_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+
                 try:
-                    await asyncio.to_thread(stream.write, chunk)
+                    await asyncio.to_thread(stream.write, bytes(batch))
                 except (RuntimeError, asyncio.CancelledError):
                     break   # executor shutting down — exit cleanly
         except Exception as e:
@@ -1058,9 +1123,23 @@ class JarvisLive:
         # ── Phase 1: instant greeting ─────────────────────────────────────────
         lang_clause = f" Respond in {lang}." if lang else ""
         name_clause = f" Address the user as {name}." if name else ""
+
+        # Inject last session context if available — pop removes it so it's never repeated
+        last = await asyncio.to_thread(pop_last_session)
+        session_clause = ""
+        if last:
+            try:
+                _delta = (datetime.now() - datetime.strptime(last["date"], "%Y-%m-%d")).days
+                _when  = "earlier today" if _delta == 0 else ("yesterday" if _delta == 1 else f"{_delta} days ago")
+            except Exception:
+                _when = "last time"
+            session_clause = (
+                f" Also briefly and naturally mention that {_when}: {last['summary']}"
+            )
+
         p1 = (
-            f"Greet the user, mention it is {time_str}, and say you are fetching today's news now. "
-            f"One short sentence only. Do not call any tools.{lang_clause}{name_clause}"
+            f"Greet the user warmly, mention it is {time_str}, and say you are fetching today's news now.{session_clause} "
+            f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{name_clause}"
         )
 
         # Clear the turn-done event so we can wait for Phase 1 to finish
@@ -1089,8 +1168,13 @@ class JarvisLive:
                     except asyncio.TimeoutError:
                         pass
 
-                # If turn_complete didn't fire (timeout), give a small buffer
-                if not turn_waited:
+                # Extra buffer: turn_complete fires when Gemini finishes *generating*
+                # Phase 1, but audio may still be playing.  Waiting a beat here
+                # prevents Phase 2 audio from arriving while Phase 1 is mid-sentence
+                # (which sounds like a "repeated first response" to the user).
+                if turn_waited:
+                    await asyncio.sleep(0.8)
+                else:
                     await asyncio.sleep(1.0)
 
                 try:
@@ -1127,6 +1211,40 @@ class JarvisLive:
 
         asyncio.create_task(_deliver_news())
 
+    # ── Session memory ──────────────────────────────────────────────────────────
+
+    async def _save_session_summary(self) -> None:
+        """Summarise the current session in 1-2 sentences and save to long_term.json."""
+        log = self._session_log
+        if len(log) < 3:          # need at least one exchange to be worth saving
+            return
+        self._session_log = []    # reset immediately so the next session starts clean
+
+        memory = load_memory()
+        lang_entry = memory.get("identity", {}).get("language", {})
+        lang = (lang_entry.get("value", "") if isinstance(lang_entry, dict) else str(lang_entry)).strip()
+        lang = lang or "English"
+
+        convo = "\n".join(log[-40:])   # cap at last 40 turns to stay within token budget
+        prompt = (
+            f"Summarize this conversation in 1-2 sentences in {lang}. "
+            "Focus on what the user accomplished or discussed. "
+            "Output ONLY the summary text, nothing else:\n\n" + convo
+        )
+        try:
+            from google import genai as _genai
+            client = _genai.Client(api_key=_get_api_key())
+            resp   = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            summary = (resp.text or "").strip()
+            if summary:
+                save_session_summary(summary, lang)
+        except Exception as e:
+            print(f"[Memory] ⚠️ Session summary failed: {e}")
+
     # ── System monitor ──────────────────────────────────────────────────────────
 
     async def _run_system_monitor(self) -> None:
@@ -1134,14 +1252,53 @@ class JarvisLive:
         while True:
             await asyncio.sleep(10)
             alert = await asyncio.to_thread(self._sys_monitor.check)
-            if alert and self.session:
-                try:
-                    await self.session.send_client_content(
-                        turns={"parts": [{"text": alert}]},
-                        turn_complete=True,
-                    )
-                except Exception as e:
-                    print(f"[Monitor] ⚠️ Could not send alert: {e}")
+            if not alert or not self.session:
+                continue
+            # Don't interrupt an active conversation
+            with self._speaking_lock:
+                speaking = self._is_speaking
+            if speaking or (time.monotonic() - self._last_user_speech) < 10:
+                continue
+            try:
+                await self.session.send_client_content(
+                    turns={"parts": [{"text": alert}]},
+                    turn_complete=True,
+                )
+            except Exception as e:
+                print(f"[Monitor] ⚠️ Could not send alert: {e}")
+
+    # ── Background monitor ──────────────────────────────────────────────────────
+
+    async def _run_background_monitor(self) -> None:
+        """Check user-configured topics once per day; speak alerts when new headlines appear."""
+        await asyncio.sleep(300)          # wait 5 min after startup before first check
+        while True:
+            if self.session:
+                # Don't interrupt if user spoke recently or JARVIS is mid-sentence
+                with self._speaking_lock:
+                    speaking = self._is_speaking
+                recent_speech = (time.monotonic() - self._last_user_speech) < 30
+                if not speaking and not recent_speech:
+                    try:
+                        alerts = await asyncio.to_thread(monitor_check_all)
+                        memory = load_memory()
+                        lang_e = memory.get("identity", {}).get("language", {})
+                        lang   = (lang_e.get("value", "") if isinstance(lang_e, dict) else str(lang_e)).strip() or "English"
+                        for alert in alerts:
+                            msg = (
+                                f"{alert}\n\n"
+                                f"Inform the user about this development naturally in {lang}. "
+                                "One brief sentence only."
+                            )
+                            await self.session.send_client_content(
+                                turns={"parts": [{"text": msg}]},
+                                turn_complete=True,
+                            )
+                            self.ui.write_log(f"SYS: Monitor alert sent.")
+                            await asyncio.sleep(6)   # gap between consecutive alerts
+                    except Exception as e:
+                        print(f"[Monitor] ⚠️ Background check error: {e}")
+            await asyncio.sleep(1800)     # check every 30 minutes
 
     # ── Proactive mode ──────────────────────────────────────────────────────────
 
@@ -1168,8 +1325,14 @@ class JarvisLive:
             self._proactive.mark_triggered()
 
             try:
-                memory = await asyncio.to_thread(load_memory)
-                prompt = self._proactive.build_prompt(memory)
+                memory       = await asyncio.to_thread(load_memory)
+                monitors     = await asyncio.to_thread(list_monitors)
+                recent_turns = self._session_log[-8:] if self._session_log else []
+                prompt = self._proactive.build_prompt(
+                    memory       = memory,
+                    monitors     = monitors or None,
+                    recent_turns = recent_turns or None,
+                )
                 await self.session.send_client_content(
                     turns={"parts": [{"text": prompt}]},
                     turn_complete=True,
@@ -1290,6 +1453,7 @@ class JarvisLive:
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
                     tg.create_task(self._run_system_monitor())
+                    tg.create_task(self._run_background_monitor())
                     tg.create_task(self._run_proactive_mode())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())
@@ -1340,6 +1504,9 @@ class JarvisLive:
                     self._conn_backoff = 3
             finally:
                 self.session = None
+                # Only save if there was a real conversation (≥3 turns)
+                if len(self._session_log) >= 3:
+                    asyncio.create_task(self._save_session_summary())
 
             self.set_speaking(False)
             self.ui.set_state("SLEEPING")

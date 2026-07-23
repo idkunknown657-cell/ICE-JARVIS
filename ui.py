@@ -2077,6 +2077,57 @@ class MainWindow(QMainWindow):
             return False
 
     @staticmethod
+    def _create_lnk_windows(lnk: str, target: str, args: str,
+                             work_dir: str, icon_loc: str) -> None:
+        """
+        Create a Windows .lnk shortcut WITHOUT launching PowerShell or cmd.
+        Tries win32com (pywin32) first; falls back to wscript.exe + VBScript.
+        wscript.exe is a GUI-mode host — it never opens a console window.
+        """
+        # ── Option 1: pywin32 (pure Python COM, zero subprocess) ──────────
+        try:
+            from win32com.client import Dispatch   # type: ignore
+            sh = Dispatch("WScript.Shell")
+            sc = sh.CreateShortCut(lnk)
+            sc.TargetPath       = target
+            sc.Arguments        = f'"{args}"'
+            sc.WorkingDirectory = work_dir
+            sc.Description      = "J.A.R.V.I.S AI Assistant"
+            sc.IconLocation     = icon_loc
+            sc.save()
+            return
+        except ImportError:
+            pass
+
+        # ── Option 2: wscript.exe + VBScript (always available on Windows,
+        #    GUI-mode executable — never opens a console window) ────────────
+        vbs = "\n".join([
+            'Set ws = CreateObject("WScript.Shell")',
+            f'Set sc = ws.CreateShortcut("{lnk}")',
+            f'sc.TargetPath = "{target}"',
+            f'sc.Arguments = Chr(34) & "{args}" & Chr(34)',
+            f'sc.WorkingDirectory = "{work_dir}"',
+            'sc.Description = "J.A.R.V.I.S AI Assistant"',
+            f'sc.IconLocation = "{icon_loc}"',
+            'sc.Save',
+        ])
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".vbs")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(vbs)
+            proc = subprocess.Popen(
+                ["wscript.exe", "/nologo", tmp],
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+            )
+            proc.wait(timeout=10)
+        finally:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+    @staticmethod
     def _get_desktop_dir() -> Path:
         """
         Resolve the user's REAL desktop directory instead of assuming
@@ -2157,72 +2208,6 @@ class MainWindow(QMainWindow):
         # display-only). Everything else lands here as a last resort.
         return home / "Desktop"
 
-    @staticmethod
-    def _create_lnk_windows(lnk: str, target: str, args: str,
-                             work_dir: str, icon_loc: str) -> None:
-        """
-        Create a Windows .lnk shortcut WITHOUT launching PowerShell or cmd.
-        Tries win32com (pywin32) first; falls back to wscript.exe + VBScript.
-        wscript.exe is a GUI-mode host — it never opens a console window.
-        Raises on failure so the caller can log a useful error.
-        """
-        # ── Option 1: pywin32 (pure Python COM, zero subprocess) ──────────
-        com_err: Exception | None = None
-        try:
-            from win32com.client import Dispatch   # type: ignore
-            sh = Dispatch("WScript.Shell")
-            sc = sh.CreateShortCut(lnk)
-            sc.TargetPath       = target
-            sc.Arguments        = f'"{args}"'
-            sc.WorkingDirectory = work_dir
-            sc.Description      = "J.A.R.V.I.S AI Assistant"
-            sc.IconLocation     = icon_loc
-            sc.save()
-            return
-        except ImportError:
-            pass
-        except Exception as e:            # COM error — still try VBScript
-            com_err = e
-
-        # ── Option 2: wscript.exe + VBScript (always available on Windows,
-        #    GUI-mode executable — never opens a console window) ────────────
-        def q(s: str) -> str:              # escape for a VBScript string literal
-            return s.replace('"', '""')
-
-        vbs = "\n".join([
-            'On Error Resume Next',
-            'Set ws = CreateObject("WScript.Shell")',
-            f'Set sc = ws.CreateShortcut("{q(lnk)}")',
-            f'sc.TargetPath = "{q(target)}"',
-            f'sc.Arguments = Chr(34) & "{q(args)}" & Chr(34)',
-            f'sc.WorkingDirectory = "{q(work_dir)}"',
-            'sc.Description = "J.A.R.V.I.S AI Assistant"',
-            f'sc.IconLocation = "{q(icon_loc)}"',
-            'sc.Save',
-            'If Err.Number <> 0 Then WScript.Quit 1',
-        ])
-        import tempfile
-        fd, tmp = tempfile.mkstemp(suffix=".vbs")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(vbs)
-            proc = subprocess.Popen(
-                ["wscript.exe", "/nologo", tmp],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
-            )
-            proc.wait(timeout=10)
-        finally:
-            try:
-                os.unlink(tmp)
-            except Exception:
-                pass
-
-        if not Path(lnk).exists():
-            raise RuntimeError(
-                f"could not create '{lnk}'"
-                + (f" ({com_err})" if com_err else "")
-            )
-
     def _create_desktop_shortcut(self):
         """
         Create a desktop shortcut on Windows / macOS / Linux.
@@ -2240,7 +2225,6 @@ class MainWindow(QMainWindow):
 
         try:
             _os = platform.system()
-            desktop.mkdir(parents=True, exist_ok=True)
 
             # ── Windows ───────────────────────────────────────────────────────
             if _os == "Windows":
@@ -2321,7 +2305,7 @@ class MainWindow(QMainWindow):
                 desk.write_text(
                     "[Desktop Entry]\n"
                     "Name=J.A.R.V.I.S\n"
-                    f'Exec="{python}" "{script}"\n'
+                    f"Exec={python} {script}\n"
                     f"Path={script.parent}\n"
                     "Type=Application\n"
                     "Terminal=false\n"
@@ -2329,22 +2313,10 @@ class MainWindow(QMainWindow):
                     + icon_line
                 )
                 desk.chmod(desk.stat().st_mode | 0o755)
-                # GNOME refuses to launch desktop files until they are
-                # marked trusted ("Allow Launching") — do it automatically.
-                try:
-                    subprocess.run(
-                        ["gio", "set", str(desk),
-                         "metadata::trusted", "true"],
-                        capture_output=True, timeout=5,
-                    )
-                except Exception:
-                    pass  # non-GNOME desktops don't need (or have) gio
 
-            self._log.append_log(f"SYS: Desktop shortcut created in '{desktop}'.")
+            self._log.append_log("SYS: Desktop shortcut created.")
         except Exception as e:
-            self._log.append_log(
-                f"ERR: Shortcut failed — {e} (desktop dir: '{desktop}')"
-            )
+            self._log.append_log(f"ERR: Shortcut failed — {e}")
 
     def _toggle_fullscreen(self):
         if self.isFullScreen():
