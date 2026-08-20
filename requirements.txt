@@ -1,6 +1,6 @@
 PyQt6
 sounddevice
-google-genai
+google-genai>=2.8.0
 google-generativeai
 pillow
 requests

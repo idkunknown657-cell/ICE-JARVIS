@@ -89,3 +89,24 @@ def save_brief_enabled(enabled: bool) -> None:
             data = {}
     data["morning_brief_enabled"] = enabled
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+def get_plugin_enabled(plugin_name: str) -> bool:
+    """Plugins are enabled by default the moment they're discovered (opt-out model)."""
+    return load_api_keys().get("plugins_enabled", {}).get(plugin_name, True)
+
+
+def save_plugin_enabled(plugin_name: str, enabled: bool) -> None:
+    ensure_config_dir()
+    data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    plugins_cfg = data.get("plugins_enabled")
+    if not isinstance(plugins_cfg, dict):
+        plugins_cfg = {}
+    plugins_cfg[plugin_name] = enabled
+    data["plugins_enabled"] = plugins_cfg
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")

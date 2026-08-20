@@ -23,7 +23,7 @@ def _gemini_search(query: str) -> str:
 
     client   = genai.Client(api_key=_get_api_key())
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-flash-latest",
         contents=query,
         config={"tools": [{"google_search": {}}]},
     )
@@ -124,7 +124,7 @@ def _gemini_headlines(n: int = 5) -> tuple[list[str], str]:
 
     client = genai.Client(api_key=_get_api_key())
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-flash-latest",
         contents=f"Current world news: {n} headlines. Numbered list, titles only.",
         config={"tools": [{"google_search": {}}]},
     )

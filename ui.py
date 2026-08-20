@@ -1412,6 +1412,117 @@ class CustomizeOverlay(QWidget):
         self.hide()
 
 
+class PluginManagerOverlay(QWidget):
+    """Floating overlay — lists discovered plugins with per-plugin ON/OFF toggles."""
+
+    _OW = 420
+
+    def __init__(self, plugins: list[dict], parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            PluginManagerOverlay {{
+                background: rgba(0, 6, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self.setFixedWidth(self._OW)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(6)
+
+        hdr = QLabel("🧩  PLUGIN MANAGER")
+        hdr.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        hdr.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        lay.addWidget(hdr)
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(sep)
+
+        if not plugins:
+            empty = QLabel("No plugins found in /plugins.")
+            empty.setFont(QFont("Courier New", 8))
+            empty.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            lay.addWidget(empty)
+
+        for p in plugins:
+            lay.addLayout(self._build_row(p))
+
+        lay.addSpacing(4)
+        close_btn = QPushButton("CLOSE")
+        close_btn.setFixedHeight(30)
+        close_btn.setFont(QFont("Courier New", 9))
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        close_btn.clicked.connect(self.hide)
+        lay.addWidget(close_btn)
+        self.adjustSize()
+
+    def _build_row(self, p: dict) -> QHBoxLayout:
+        row = QHBoxLayout(); row.setSpacing(6)
+
+        label_text = p["name"] if p["valid"] else f"{p['name']}  (⚠ {p['file']})"
+        lbl = QLabel(label_text)
+        lbl.setFont(QFont("Courier New", 8))
+        lbl.setStyleSheet(f"color: {C.TEXT if p['valid'] else C.TEXT_DIM}; background: transparent;")
+        lbl.setToolTip(p["description"] if p["valid"] else p["error"])
+        lbl.setWordWrap(False)
+        row.addWidget(lbl, stretch=1)
+
+        btn = QPushButton()
+        btn.setFixedSize(72, 24)
+        btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        if not p["valid"]:
+            btn.setText("BROKEN")
+            btn.setEnabled(False)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                }}
+            """)
+        else:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._style_toggle(btn, p["enabled"])
+            btn.clicked.connect(lambda _, name=p["name"], b=btn: self._toggle(name, b))
+        row.addWidget(btn)
+        return row
+
+    def _style_toggle(self, btn: QPushButton, enabled: bool):
+        if enabled:
+            btn.setText("ON")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a08; color: {C.GREEN};
+                    border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ background: #002010; }}
+            """)
+        else:
+            btn.setText("OFF")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+            """)
+
+    def _toggle(self, name: str, btn: QPushButton):
+        from memory.config_manager import get_plugin_enabled, save_plugin_enabled
+        new_val = not get_plugin_enabled(name)
+        save_plugin_enabled(name, new_val)
+        self._style_toggle(btn, new_val)
+
+
 class ClipboardPanel(QWidget):
     """Floating panel shown when text is copied — offers quick Jarvis actions."""
 
@@ -1750,7 +1861,7 @@ class MainWindow(QMainWindow):
         if _ui_color and _ui_color.lower() != DEFAULT_UI_COLOR:
             apply_ui_accent(_ui_color)
 
-        self.setWindowTitle(f"{_display} — MARK XLIX")
+        self.setWindowTitle(f"{_display} — MARK LI")
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
@@ -1763,6 +1874,7 @@ class MainWindow(QMainWindow):
         self.on_text_command   = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
+        self.get_plugins       = None   # callable: () -> list[dict], set by JarvisLive
         self._muted            = False
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
@@ -2427,7 +2539,7 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
-        lay.addWidget(_badge("MARK XLIX", C.PRI_DIM))
+        lay.addWidget(_badge("MARK LI", C.PRI_DIM))
         lay.addSpacing(8)
         self._drawer_btn = QPushButton("⚙")
         self._drawer_btn.setFixedSize(26, 26)
@@ -2709,6 +2821,14 @@ class MainWindow(QMainWindow):
         self._brief_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._brief_btn.clicked.connect(self._toggle_brief)
         lay.addWidget(self._brief_btn)
+
+        plugin_btn = QPushButton("🧩  PLUGINS")
+        plugin_btn.setFixedHeight(26)
+        plugin_btn.setFont(QFont("Courier New", 7))
+        plugin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        plugin_btn.setStyleSheet(_BTN_STYLE_DIM)
+        plugin_btn.clicked.connect(self._open_plugin_manager)
+        lay.addWidget(plugin_btn)
 
         w.adjustSize()
         return w
@@ -3099,7 +3219,7 @@ class MainWindow(QMainWindow):
         """Update all name/theme-dependent UI elements and persist to config."""
         self._assistant_name = name.strip() or "JARVIS"
         display = self._assistant_name.upper()
-        self.setWindowTitle(f"{display} — MARK XLIX")
+        self.setWindowTitle(f"{display} — MARK LI")
         self._title_lbl.setText(display)
         if display in ("JARVIS", "J.A.R.V.I.S"):
             self._sub_lbl.setText("Just A Rather Very Intelligent System")
@@ -3128,6 +3248,20 @@ class MainWindow(QMainWindow):
                 self._log.append_log(f"SYS: UI colour applied — {ui_color}")
         except Exception as e:
             self._log.append_log(f"ERR: Config save failed — {e}")
+
+    def _open_plugin_manager(self):
+        plugins = self.get_plugins() if self.get_plugins else []
+        cw = self.centralWidget()
+        ov = PluginManagerOverlay(plugins, parent=cw)
+        ov.adjustSize()
+        ov.setGeometry(
+            (cw.width()  - ov.width())  // 2,
+            (cw.height() - ov.height()) // 2,
+            ov.width(), ov.height(),
+        )
+        ov.show()
+        ov.raise_()
+        self._plugin_manager_overlay = ov   # keep a reference so it isn't GC'd
 
     # ── Clipboard intelligence ───────────────────────────────────────────────────
 
@@ -3292,6 +3426,14 @@ class JarvisUI:
     @on_interrupt.setter
     def on_interrupt(self, cb):
         self._win.on_interrupt = cb
+
+    @property
+    def get_plugins(self):
+        return self._win.get_plugins
+
+    @get_plugins.setter
+    def get_plugins(self, cb):
+        self._win.get_plugins = cb
 
     def notify_phone_connected(self) -> None:
         self._win.notify_phone_connected()

@@ -1,4 +1,4 @@
-# ⚙️ MARK L (50)
+# ⚙️ MARK LI (51)
 ### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
 
 > 📺 **[Watch the full setup video on YouTube](https://www.youtube.com/@FatihMakes)**
@@ -9,7 +9,7 @@ A real-time voice AI that can hear, see, understand, and control your computer �
 
 ## ✨ Overview
 
-MARK L is where the assistant stops being a tool and starts being a presence. It remembers yesterday's conversation, watches the topics you care about, and speaks first when it has something worth saying. The goal of this build was continuity — JARVIS should feel like it never fully left, even after you close it.
+MARK LI is the final form of the core: an assistant you extend without ever touching its engine. Drop a single plugin file into the `plugins/` folder and JARVIS learns a new skill on the next launch — no code changes, no configuration, no risk. On top of that, the voice itself got smarter: JARVIS now hears the emotion in your voice, knows when you're talking to someone else in the room and stays silent, and can hold one conversation for hours without losing the thread.
 
 It's not just an assistant — it's an extension of your digital life.
 
@@ -20,7 +20,11 @@ It's not just an assistant — it's an extension of your digital life.
 ### Core Features
 | Feature | Description |
 |---|---|
+| 🧩 Plugin System | Drop a single `.py` file into `plugins/` — JARVIS learns a new skill on next launch |
 | 🎙️ Real-time Voice | Ultra-low latency conversation in any language via Gemini Live API |
+| 💓 Affective Dialog | Hears the emotion in your voice and adapts its tone in response |
+| 🤫 Proactive Audio | Knows when you're not talking to it — background chatter never triggers a reply |
+| ♾️ Unlimited Sessions | Sliding-window context compression — one conversation can last for hours |
 | 🖥️ System Control | Launch apps, adjust volume/brightness, WiFi, shortcuts, power — all by voice |
 | 🧩 Autonomous Tasks | High-level planning for complex multi-step goals via agent mode |
 | 👁️ Visual Awareness | Real-time screen capture and webcam vision piped into your main Gemini session |
@@ -51,34 +55,29 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
-## 🆕 What's New in Mark L
+## 🆕 What's New in Mark LI
 
-### 🗓️ Session Memory — JARVIS Remembers Yesterday
-At the end of every session, JARVIS generates a 1-2 sentence summary of what was discussed and saves it to memory. The next morning, it's mentioned naturally in the briefing:
-> *"Good morning, sir — it's 09:15. Yesterday you were working on the Mark L background monitoring feature. Fetching today's headlines now."*
+### 🧩 Plugin System — Extend JARVIS Without Touching a Single Core File
+The headline feature of Mark LI, and the reason it's the final architecture version. Every new capability from now on ships as a single `.py` file:
 
-The summary is consumed immediately after use — it never repeats in future briefings and adds zero long-term bloat to memory.
+1. Download a plugin file (e.g. `calorie_counter.py`)
+2. Drop it into the `plugins/` folder
+3. Restart JARVIS — done. The skill is live, by voice, in any language.
 
-### 👁️‍🗨️ Background Monitoring — JARVIS Watches While You're Away
-Tell JARVIS to monitor any topic and it checks for new developments once a day using DuckDuckGo news. When a headline changes, it reports back naturally in your language:
-> *"Efendim, takip ettiğiniz yapay zeka haberlerinde bir gelişme var: Google yeni bir model duyurdu."*
+Each plugin declares its own Gemini tool schema and logic in one file. The engine auto-discovers it at startup, registers it with the Live session, and lists it in the new **🧩 Plugin Manager** panel where every plugin gets its own persistent ON/OFF toggle.
 
-Fully opt-in — JARVIS monitors nothing without being explicitly asked. Crypto, financial, and trading topics are blocked at the code level regardless of what is requested. Same headline never triggers twice.
+Safety is built in at three layers: a broken or badly written plugin can **never** crash JARVIS — it simply shows up as "BROKEN" in the manager with the error explained, while every other tool and plugin keeps working. Name collisions with core tools are detected and rejected automatically. Want to write your own? Copy `plugins/_template.py` and fill in two things: the `PLUGIN` dict and the `run()` function.
 
-### 🔔 Proactive System 2.0 — Context-Aware, Time-Aware, Non-Repetitive
-The proactive engine was rebuilt from the ground up. Instead of a generic check-in after 15 minutes of silence, JARVIS now:
-- Knows the **time of day** — morning tone differs from evening tone
-- Knows your **active projects** from memory and can ask how something is going
-- Knows your **monitored topics** and can bring one up naturally
-- Knows **what you were just talking about** (last 8 conversation turns)
-- **Rotates** between three focus areas so it never opens with the same line twice
-- Has a 20-minute cooldown (up from 10) — less intrusive, more meaningful
+### 💓 Affective Dialog — JARVIS Hears How You Feel
+Powered by Gemini Live's native audio understanding, JARVIS now picks up the emotion in your voice — excitement, frustration, fatigue — and adapts its own tone in response. Late-night tired questions get calm answers; excited announcements get energy back.
 
-### 👁️ Instant Vision Acknowledgment — No More Silent Waiting
-When you ask JARVIS to look at your screen or camera, it no longer goes silent while processing. It immediately says something natural ("Looking at your screen now, sir" / "Ekrana bakıyorum efendim") while the capture runs. The actual analysis follows as the next response.
+### 🤫 Proactive Audio — Knows When You're Not Talking to It
+The biggest quality-of-life upgrade for an always-listening assistant: JARVIS can now tell when speech isn't addressed to it. Talking to someone in the room, taking a phone call, TV in the background — it stays silent instead of interjecting. No wake word needed, no accidental replies.
 
-### 📰 Parallel News Search — First Result Wins
-News queries now run Gemini Grounded Search and DuckDuckGo news simultaneously in two threads. Whichever delivers a valid result first is used; the other is silently discarded. A Gemini 503 error no longer delays results — the DDG fallback is already running in parallel.
+### ♾️ Unlimited Session Length — The Conversation Never Dies
+Sliding-window context compression means the Live session no longer terminates when the context window fills up. Combined with session resumption, JARVIS holds one continuous conversation for hours without losing the thread.
+
+All three Live API upgrades degrade gracefully: if the preview API ever rejects them, JARVIS automatically reconnects with the standard configuration — users never see a crash.
 
 ---
 
@@ -89,15 +88,16 @@ News queries now run Gemini Grounded Search and DuckDuckGo news simultaneously i
 | **XLVIII** | Instant interrupt · parallel news · two-phase briefing · exponential backoff · vision cooldown |
 | **XLIX** | Auto-start · clipboard intelligence · assistant customization |
 | **L** | Session memory · background monitoring · proactive 2.0 · instant vision · parallel news search |
-| **LI+** | Plugin system · email · quiz mode · calorie counter · calendar |
+| **LI** | Plugin system · affective dialog · proactive audio · unlimited sessions |
+| **LII+** | Plugin files: email · quiz mode · calorie counter · calendar · and more |
 
 ---
 
 ## ⚡ Quick Start
 
 ```bash
-git clone https://github.com/FatihMakes/Mark-L.git
-cd Mark-L
+git clone https://github.com/FatihMakes/Mark-LI.git
+cd Mark-LI
 pip install -r requirements.txt
 python main.py
 ```
@@ -120,10 +120,12 @@ python main.py
 ## 🗂️ Project Structure
 
 ```
-Mark L/
+Mark LI/
 ├── main.py                   # Core loop — Gemini Live session, audio I/O, tool dispatch
-├── ui.py                     # PyQt6 HUD — waveform, log panel, interrupt button, camera feed
+├── ui.py                     # PyQt6 HUD — waveform, log panel, plugin manager, camera feed
 ├── setup.py                  # First-run configuration wizard
+├── plugins/
+│   └── _template.py          # Copy this to write a new plugin — one file, drop in, done
 ├── actions/
 │   ├── web_search.py         # Gemini + DDG parallel search (news, research, price, compare)
 │   ├── screen_processor.py   # Screen capture & webcam vision via Gemini Live
@@ -149,7 +151,8 @@ Mark L/
 │   ├── memory_manager.py     # Load/save long_term.json — sessions, monitors, identity
 │   └── long_term.json        # Persistent store: identity, preferences, projects, sessions, monitors
 ├── core/
-│   └── prompt.txt            # Assistant personality and tool-routing rules
+│   ├── prompt.txt            # Assistant personality and tool-routing rules
+│   └── plugin_loader.py      # Plugin engine — discovery, validation, crash isolation
 └── config/
     └── api_keys.json         # API key, OS setting, assistant name, user name
 ```
