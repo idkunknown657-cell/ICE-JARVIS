@@ -16,21 +16,26 @@ BASE_DIR         = get_base_dir()
 API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
-MODEL_PLANNER    = "gemini-flash-latest"
-MODEL_WRITER     = "gemini-flash-latest"
+# Model choice, timeout and fallback ladder all live in core/gemini.py.
+from core import gemini
+
+MODEL_PLANNER    = gemini.SMART
+MODEL_WRITER     = gemini.SMART
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
-def _get_model(model_name: str):
-    from google import genai
-    _c = genai.Client(api_key=_get_api_key())
-
+def _get_model(model_name: str = gemini.SMART):
+    """Planning and writing whole files — the reasoning tier, and a long
+    deadline because the answer is a source file rather than a sentence."""
     class _W:
         def generate_content(self, contents):
-            return _c.models.generate_content(model=model_name, contents=contents)
+            resp = gemini.call(contents, tier=model_name, timeout_ms=60000)
+            if resp is None:
+                raise RuntimeError("every Gemini model on the ladder failed")
+            return resp
 
     return _W()
 

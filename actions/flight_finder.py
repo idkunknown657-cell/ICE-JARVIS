@@ -60,17 +60,13 @@ def _parse_date(raw: str) -> str:
             return val.strftime("%Y-%m-%d")
 
     try:
-        from google import genai as _genai
-        _client  = _genai.Client(api_key=_get_api_key())
-        response = _client.models.generate_content(
-            model="gemini-flash-lite-latest",
-            contents=(
-                f"Today is {today.strftime('%Y-%m-%d')}. "
-                f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
-                f"Return ONLY the date string, nothing else."
-            )
+        from core import gemini
+        result = gemini.text(
+            f"Today is {today.strftime('%Y-%m-%d')}. "
+            f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
+            f"Return ONLY the date string, nothing else.",
+            tier=gemini.FAST,
         )
-        result = response.text.strip()
         if re.match(r"\d{4}-\d{2}-\d{2}", result):
             return result
     except Exception as e:
@@ -155,7 +151,6 @@ def _parse_flights_with_gemini(
     from google import genai as _genai
     from google.genai import types
 
-    _client = _genai.Client(api_key=_get_api_key())
     prompt  = (
         f"Extract flight options from {origin} to {destination} on {date} "
         f"from this Google Flights page text:\n\n{raw_text[:12000]}\n\n"
@@ -166,9 +161,11 @@ def _parse_flights_with_gemini(
     )
 
     try:
-        response = _client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
+        from core import gemini
+        response = gemini.call(
+            prompt,
+            tier=gemini.SMART,
+            timeout_ms=30_000,
             config=types.GenerateContentConfig(
                 system_instruction=(
                     "You are a flight data extraction expert. "

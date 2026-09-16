@@ -15,7 +15,10 @@ BASE_DIR           = get_base_dir()
 API_CONFIG_PATH    = BASE_DIR / "config" / "api_keys.json"
 DESKTOP            = Path.home() / "Desktop"
 MAX_BUILD_ATTEMPTS = 3
-GEMINI_MODEL       = "gemini-flash-latest"
+# Model choice lives in core/gemini.py, and so does the timeout and the
+# fallback ladder. Writing a model name here is what left this file hanging
+# forever whenever that one alias was unwell.
+from core import gemini
 
 
 def _get_api_key() -> str:
@@ -23,13 +26,15 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 
-def _get_gemini(model: str = GEMINI_MODEL):
-    from google import genai
-    _c = genai.Client(api_key=_get_api_key())
-
+def _get_gemini(tier: str = gemini.SMART):
+    """Writing and fixing code is the reasoning tier; a 60s deadline because a
+    whole file can come back."""
     class _W:
         def generate_content(self, contents):
-            return _c.models.generate_content(model=model, contents=contents)
+            resp = gemini.call(contents, tier=tier, timeout_ms=60000)
+            if resp is None:
+                raise RuntimeError("every Gemini model on the ladder failed")
+            return resp
 
     return _W()
 
@@ -456,10 +461,7 @@ def _screen_debug_action(description, file_path, player, speak=None) -> str:
             print(f"[Code] ⚠️ Could not read file: {err}")
 
     try:
-        from google import genai
         from google.genai import types
-
-        client = genai.Client(api_key=_get_api_key())
 
         image_bytes  = screenshot_path.read_bytes()
         image_base64 = _image_to_base64(screenshot_path)
@@ -487,12 +489,11 @@ Be specific and actionable. If you see an error message, quote it exactly."""
             analysis_prompt,
         ]
 
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=contents,
-        )
+        response = gemini.call(contents, tier=gemini.SMART, timeout_ms=45_000)
+        if response is None:
+            return "Sir, I couldn't reach Gemini to analyse that screenshot."
 
-        analysis = response.text.strip()
+        analysis = (response.text or "").strip()
         print(f"[Code] ✅ Screen analysis complete")
 
         try:

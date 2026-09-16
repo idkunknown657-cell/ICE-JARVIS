@@ -121,6 +121,150 @@ def save_wake_word_enabled(enabled: bool) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
+def get_push_to_talk_enabled() -> bool:
+    """Hold-a-key-to-speak. When on, the mic is closed unless the chord is held."""
+    return load_api_keys().get("push_to_talk_enabled", False)
+
+
+def save_push_to_talk_enabled(enabled: bool) -> None:
+    _save_flag("push_to_talk_enabled", enabled)
+
+
+HUD_STYLES = ("face", "core")
+
+
+def get_hud_style() -> str:
+    """Which centrepiece the HUD draws: the animated head, or the reactor core.
+
+    Taste, not capability — both render in the same software painter and cost
+    about the same. Defaults to the head because that is what MARK LIV shipped
+    with; anyone who preferred the older look can switch back in ⚙ and the
+    choice survives a restart.
+    """
+    v = str(load_api_keys().get("hud_style", "face")).strip().lower()
+    return v if v in HUD_STYLES else "face"
+
+
+def save_hud_style(style: str) -> None:
+    s = str(style or "").strip().lower()
+    _save_flag("hud_style", s if s in HUD_STYLES else "face")
+
+
+# ── Live-session tuning ──────────────────────────────────────────────────────
+# Everything here is optional and has a working default, so an untouched
+# config behaves exactly like a configured one. Each value is also a way out:
+# if a future model dislikes one of these, set it back and nothing else changes.
+
+def get_thinking_enabled() -> bool:
+    """Whether the Live model may spend tokens thinking before it answers.
+
+    Off by default. A voice assistant is judged on how fast it starts talking,
+    and the reasoning that actually needs deliberation in this app is delegated
+    to the planning tools, which run on a separate non-Live model.
+    """
+    return bool(load_api_keys().get("thinking_enabled", False))
+
+
+def save_thinking_enabled(enabled: bool) -> None:
+    _save_flag("thinking_enabled", enabled)
+
+
+def get_turn_tuning() -> dict:
+    """How eagerly the server decides you have stopped speaking.
+
+    OFF by default, and that default was earned. Cutting turns shorter looks
+    like a free speed win and is not: proactive audio has to judge whether an
+    utterance was even addressed to the assistant, and a turn clipped early
+    gives it less to judge, so it stays quiet — and the reply to your first
+    sentence only arrives once your second one has given it enough context.
+    That reads as the assistant being a turn behind, which is far worse than
+    the fraction of a second the tuning saves.
+
+    Turn it on with "turn_tuning": {"enabled": true} if your own microphone and
+    speaking pace suit it. `silence_ms` is the one that is felt: the pause the
+    server sits through before accepting your turn is over.
+    """
+    cfg = load_api_keys().get("turn_tuning")
+    cfg = cfg if isinstance(cfg, dict) else {}
+
+    def _int(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(cfg.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "enabled":    bool(cfg.get("enabled", False)),
+        "silence_ms": _int("silence_ms", 550, 200, 3000),
+        "prefix_ms":  _int("prefix_ms", 150, 0, 1000),
+        # "high" = quicker to decide speech has ended.
+        "end_sensitivity":   str(cfg.get("end_sensitivity", "high")).lower(),
+        "start_sensitivity": str(cfg.get("start_sensitivity", "default")).lower(),
+    }
+
+
+def save_turn_tuning(values: dict) -> None:
+    ensure_config_dir()
+    data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    cur = data.get("turn_tuning")
+    cur = dict(cur) if isinstance(cur, dict) else {}
+    cur.update(values or {})
+    data["turn_tuning"] = cur
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+def get_proactive_audio_enabled() -> bool:
+    """Whether the model gets to decide an utterance was not aimed at it and
+    stay quiet.
+
+    On by default — it is what stops the assistant answering the room. But it
+    is also the first thing to switch off if replies ever seem to arrive a turn
+    late: what looks like lag is usually the model having judged your previous
+    sentence as not addressed to it, and only changing its mind once the next
+    one arrives.
+    """
+    return bool(load_api_keys().get("proactive_audio", True))
+
+
+def save_proactive_audio_enabled(enabled: bool) -> None:
+    _save_flag("proactive_audio", enabled)
+
+
+MEDIA_RESOLUTIONS = ("default", "low", "medium", "high")
+
+
+def get_media_resolution() -> str:
+    """How finely the model tokenises the screenshots and camera frames it is
+    sent. 'medium' keeps on-screen text readable at a fraction of the tokens a
+    full-resolution frame costs; 'low' is cheaper still but starts losing small
+    text, which is most of what screen captures are for."""
+    v = str(load_api_keys().get("media_resolution", "medium")).strip().lower()
+    return v if v in MEDIA_RESOLUTIONS else "medium"
+
+
+def save_media_resolution(value: str) -> None:
+    v = str(value or "").strip().lower()
+    _save_flag("media_resolution", v if v in MEDIA_RESOLUTIONS else "medium")
+
+
+def _save_flag(key: str, value) -> None:
+    """Read-modify-write one key without disturbing the rest of the config."""
+    ensure_config_dir()
+    data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    data[key] = bool(value) if isinstance(value, bool) else value
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
 def get_brief_enabled() -> bool:
     return load_api_keys().get("morning_brief_enabled", True)
 
@@ -189,7 +333,7 @@ def get_plugin_enabled(plugin_name: str) -> bool:
 # and the settings UI renders + persists them WITHOUT any core edit — keeping the
 # drop-in model intact. Values live under plugin_config[<namespace>][<key>].
 # A namespace defaults to the plugin name, but a suite of plugins (e.g. the
-# printer control/watchdog/autoeject trio) can share ONE namespace.
+# several printer plugins) can share ONE namespace.
 def get_plugin_config(namespace: str) -> dict:
     """All stored values for a namespace (empty dict if none set yet)."""
     cfg = load_api_keys().get("plugin_config")

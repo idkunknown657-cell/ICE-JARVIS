@@ -39,6 +39,21 @@ _DEFAULT_PARAMS = {"type": "OBJECT", "properties": {}}
 _CTX_KEYS = ("player", "speak", "response", "session_memory")
 
 
+# A tool may declare that the model should NOT be held up waiting for it.
+# `behavior` goes to the API with the declaration; `scheduling` decides when the
+# eventual result is allowed back into the conversation:
+#   WHEN_IDLE  — wait for a gap in the speech (the sane default)
+#   SILENT     — record it, do not prompt a reply (the tool already announced)
+#   INTERRUPT  — cut in immediately (only when the answer cannot wait)
+_BEHAVIORS = ("BLOCKING", "NON_BLOCKING")
+_SCHEDULING = ("WHEN_IDLE", "SILENT", "INTERRUPT")
+
+
+def _opt_upper(value, allowed: tuple[str, ...]) -> Optional[str]:
+    v = str(value or "").strip().upper()
+    return v if v in allowed else None
+
+
 @dataclass
 class ActionRecord:
     name: str
@@ -48,6 +63,8 @@ class ActionRecord:
     file: str = ""
     valid: bool = False
     error: str = ""
+    behavior: Optional[str] = None     # None = the API's default (blocking)
+    scheduling: Optional[str] = None   # None = the API's default (WHEN_IDLE)
 
 
 class ActionRegistry:
@@ -58,13 +75,22 @@ class ActionRegistry:
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
-        return [
-            {"name": rec.name, "description": rec.description, "parameters": rec.parameters}
-            for rec in self._actions.values()
-        ]
+        out = []
+        for rec in self._actions.values():
+            decl = {"name": rec.name, "description": rec.description,
+                    "parameters": rec.parameters}
+            if rec.behavior:
+                decl["behavior"] = rec.behavior
+            out.append(decl)
+        return out
 
     def has(self, name: str) -> bool:
         return name in self._actions
+
+    def scheduling(self, name: str) -> Optional[str]:
+        """How this action's result should re-enter the conversation, if it said."""
+        rec = self._actions.get(name)
+        return rec.scheduling if rec else None
 
     def names(self) -> set[str]:
         return set(self._actions.keys())
@@ -123,7 +149,9 @@ def _validate(module, filename: str) -> ActionRecord:
                             error="TOOL['handler'] missing or not callable.")
 
     return ActionRecord(name=name, description=description.strip(), parameters=parameters,
-                        handler=handler, file=filename, valid=True, error="")
+                        handler=handler, file=filename, valid=True, error="",
+                        behavior=_opt_upper(tool.get("behavior"), _BEHAVIORS),
+                        scheduling=_opt_upper(tool.get("scheduling"), _SCHEDULING))
 
 
 def discover_actions(actions_dir: Path, reserved_names: set[str] | None = None,

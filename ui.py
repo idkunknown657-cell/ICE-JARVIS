@@ -19,7 +19,7 @@ else:
     _WIN_HIDE: dict = {}
 
 from PyQt6.QtCore import (
-    QEasingCurve, QMimeData, QObject, QParallelAnimationGroup, QPointF,
+    QEasingCurve, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,
     QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
@@ -33,14 +33,11 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
 
-# ── Which Mark this is ───────────────────────────────────────────────────────
-# One constant, read by the window title, the header badge and the PROTOCOL
-# panel. It used to be typed separately in each of those places, and they drifted:
-# Mark 52 and 53 shipped showing "PROTOCOL XLIX" — the number from Mark 49 — and
-# Mark 55 shipped titled "MARK 54". Deriving the protocol from the name means a
-# release bump is this one line.
-APP_VERSION  = "MARK LIII"
-APP_PROTOCOL = APP_VERSION.split()[-1]
+try:
+    from core.avatar import HoloAvatar
+except Exception:      # pragma: no cover — HUD must never die over cosmetics
+    HoloAvatar = None
+
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -59,6 +56,11 @@ def _read_full_config() -> dict:
     except Exception:
         return {}
 
+
+# Single source of truth for the release name — the window title, the header
+# badge and the readme must never disagree again.
+APP_VERSION  = "MARK LIV"
+APP_PROTOCOL = APP_VERSION.split()[-1]
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
 _MIN_W,     _MIN_H     = 820, 580
@@ -389,42 +391,120 @@ class HudCanvas(QWidget):
         self.state    = "INITIALISING"
         self._assistant_name = assistant_name
 
+        # The holographic head that fills the HUD. If it could not be imported
+        # we fall back to the old glowing core so the panel is never empty.
+        self._avatar = None
+        if HoloAvatar is not None:
+            try:
+                self._avatar = HoloAvatar()
+            except Exception:
+                self._avatar = None
+
+        # Which centrepiece to draw. Read once here and changed live by the
+        # settings toggle; the avatar object is kept either way so switching
+        # back is instant and costs no reload.
+        try:
+            from memory.config_manager import get_hud_style
+            self.hud_style = get_hud_style()
+        except Exception:
+            self.hud_style = "face"
+        self._core_phase = 0.0
+
         self._tick       = 0
         self._scale      = 1.0
         self._tgt_scale  = 1.0
         self._halo       = 55.0
         self._tgt_halo   = 55.0
         self._last_t     = time.time()
-        self._scan       = 0.0
-        self._scan2      = 180.0
-        self._rings      = [0.0, 120.0, 240.0]
-        self._pulses: list[float] = [0.0, 50.0, 100.0]
+        self._step_t     = time.time()
         self._blink      = True
         self._blink_tick = 0
-        self._particles: list[list[float]] = []
-        self._face_px: QPixmap | None = None
+
         # Rescaled-face cache: the smooth rescale is expensive, so we keep the
         # last result and only rebuild it when the (quantised) size changes.
-        self._face_cache: QPixmap | None = None
-        self._face_cache_sz = -1
+
         # Static grid-dot layer, pre-rendered once per size/theme into a pixmap
         # so paintEvent blits it in one call instead of thousands of drawPoint()s.
         self._grid_cache: QPixmap | None = None
         self._grid_key = None
         # Repaint throttle counter (idle frames drop to ~20 Hz — see _step()).
         self._paint_tick = 0
-        self._load_face(face_path)
 
         # Live audio reactivity: _live_amp is written from the audio threads
         # (0.0–1.0), _amp_disp is the smoothed value the paint code reads.
         self._live_amp  = 0.0
         self._amp_disp  = 0.0
+        # (frames, start_time, hop) posted by the playback thread — see
+        # push_visemes(). None means "no schedule; use the plain level".
+        self._visemes = None
+        self._vis_i = None        # first schedule frame not yet handed to the mouth
         self._base_scale = 1.0    # slow "breathing" target; amp is added per-frame
         self._base_halo  = 55.0
 
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
+
+    def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
+        """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
+        try:
+            if self._avatar is not None:
+                self._avatar.glance(dx, dy, hold)
+        except Exception:
+            pass
+
+    def push_visemes(self, frames, hop: float, at: float) -> None:
+        """Thread-safe: hand over a schedule of (level, openness, width) frames.
+
+        The playback thread writes up to 200 ms of audio in one go, so a single
+        averaged level would only move the mouth five times a second — enough to
+        flap, nowhere near enough to articulate. It instead posts the whole
+        slice's worth of 20 ms frames here and `_step()` plays them out against
+        the wall clock, in step with the audio going to the speakers.
+
+        `at` is the wall-clock time this batch will *begin to sound*, which the
+        caller tracks as a playback cursor. It is not the time of the call, and
+        the difference is the whole point: `stream.write` returns once the buffer
+        accepts the samples, so consecutive batches are handed over far faster
+        than they play. Anchoring each one to "now" made every batch start while
+        its predecessor was still sounding, so each schedule replaced the last
+        after a couple of frames and the mouth only ever played the opening
+        instant of every 200 ms — the reason it did not match the words.
+
+        Successive batches are therefore *appended* into one continuous
+        timeline, not swapped in. A paragraph is one schedule; the mouth stops
+        falling into a gap at every chunk boundary and having to climb back out.
+        """
+        try:
+            if not frames:
+                return
+            hop = max(1e-3, float(hop))
+            at = float(at)
+            new = list(frames)
+            cur = self._visemes
+            if cur is not None:
+                old, t0, ohop = cur
+                if abs(ohop - hop) < 1e-6:
+                    # Where in the existing timeline does this batch land?
+                    i = int(round((at - t0) / hop))
+                    if 0 <= i <= len(old) + 1:
+                        # Continues (or slightly overlaps) what is already
+                        # queued: extend rather than restart. Drop whatever has
+                        # already been played so the list cannot grow without
+                        # bound over a long reply.
+                        merged = old[:i] + new
+                        played = int((time.time() - t0) / hop) - 2
+                        if played > 60:
+                            merged = merged[played:]
+                            t0 += played * hop
+                            if self._vis_i is not None:
+                                self._vis_i = max(0, self._vis_i - played)
+                        self._visemes = (merged, t0, hop)
+                        return
+            self._visemes = (new, at, hop)
+            self._vis_i = None
+        except Exception:
+            pass
 
     def set_audio_level(self, level: float) -> None:
         """Thread-safe entry point for the audio threads. Stores the louder of
@@ -440,26 +520,6 @@ class HudCanvas(QWidget):
             lv = 1.0
         if lv > self._live_amp:
             self._live_amp = lv
-
-    def _load_face(self, path: str):
-        try:
-            from PIL import Image, ImageDraw
-            import io
-            img = Image.open(path).convert("RGBA")
-            sz  = min(img.size)
-            img = img.resize((sz, sz), Image.LANCZOS)
-            mk  = Image.new("L", (sz, sz), 0)
-            ImageDraw.Draw(mk).ellipse((2, 2, sz - 2, sz - 2), fill=255)
-            img.putalpha(mk)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            px = QPixmap(); px.loadFromData(buf.getvalue())
-            self._face_px = px
-        except Exception:
-            self._face_px = None
-        # New source image → drop the rescaled cache so it rebuilds on next paint.
-        self._face_cache    = None
-        self._face_cache_sz = -1
 
     def _make_grid(self, W: int, H: int) -> QPixmap:
         """Pre-render the static grid-dot background into a transparent pixmap so
@@ -480,69 +540,81 @@ class HudCanvas(QWidget):
         now = time.time()
 
         # ── Live audio reactivity ────────────────────────────────────────────
+        # A viseme schedule, if one is playing, gives both the level and the
+        # mouth shape for this exact instant; otherwise fall back to the peak
+        # level the audio threads pushed in.
+        v_open = v_wide = v_level = None
+        v_seq = None
+        sched = self._visemes
+        if sched is not None:
+            frames, t0, hop = sched
+            i = int((now - t0) / hop)
+            if 0 <= i < len(frames):
+                # Hand over *every* frame since the last tick, not just the one
+                # under the cursor. This timer runs at 60 Hz but the paint is
+                # throttled and the machine may be busy, so a tick can span two
+                # or three 20 ms frames — and a consonant closure is only two
+                # frames long. Sampling one and discarding the rest is how the
+                # closures between words went missing.
+                j = self._vis_i if self._vis_i is not None else i
+                v_seq = frames[max(0, j):i + 1]
+                self._vis_i = max(j, i + 1)
+                v_level, v_open, v_wide = frames[i]
+                if v_seq:
+                    peak = max(f[0] for f in v_seq)
+                    if peak > self._live_amp:
+                        self._live_amp = peak
+            elif i >= len(frames):
+                self._visemes = None        # schedule spent
+                self._vis_i = None
+
         # Audio threads push peaks into _live_amp; decay it toward silence so
         # gaps between chunks fade out instead of freezing, then smooth it.
         self._live_amp *= 0.86
         self._amp_disp += (self._live_amp - self._amp_disp) * 0.45
         amp = self._amp_disp
 
-        # Slow "breathing" base target (random shimmer), refreshed on a timer.
-        if now - self._last_t > (0.12 if self.speaking else 0.5):
-            if self.speaking:
-                self._base_scale = 1.03
-                self._base_halo  = 122.0
-            elif self.muted:
-                self._base_scale = random.uniform(0.998, 1.002)
-                self._base_halo  = random.uniform(15, 28)
-            else:
-                self._base_scale = random.uniform(1.001, 1.008)
-                self._base_halo  = random.uniform(48, 68)
-            self._last_t = now
+        # The avatar animates off the very same smoothed level the waveform
+        # uses — one audio source, so the mouth can never drift out of sync.
+        dt = now - self._step_t
+        self._step_t = now
+        # Integrated, not derived from absolute time: multiplying wall-clock by
+        # a rate that changes with state jumps the rings the instant JARVIS
+        # starts talking. Same lesson the head's sway taught.
+        self._core_phase += min(0.10, max(0.0, dt))
 
-        # Every frame, the live audio level lifts the target on top of the base
-        # — this is what makes the core visibly pulse to the actual voice.
-        if self.muted:
-            self._tgt_scale, self._tgt_halo = self._base_scale, self._base_halo
-        elif self.speaking:
-            self._tgt_scale = self._base_scale + amp * 0.13
-            self._tgt_halo  = self._base_halo  + amp * 95.0
+        if self._avatar is not None and self.hud_style == "face":
+            self._avatar.step(dt, amp, speaking=self.speaking,
+                              muted=self.muted, state=self.state,
+                              v_open=v_open, v_wide=v_wide or 0.0,
+                              v_level=v_level, v_seq=v_seq,
+                              v_hop=(sched[2] if sched is not None else 0.02))
         else:
-            self._tgt_scale = self._base_scale + amp * 0.06
-            self._tgt_halo  = self._base_halo  + amp * 75.0
+            # Fallback core: slow "breathing" base target, lifted by the level.
+            if now - self._last_t > (0.12 if self.speaking else 0.5):
+                if self.speaking:
+                    self._base_scale = 1.03
+                    self._base_halo  = 122.0
+                elif self.muted:
+                    self._base_scale = random.uniform(0.998, 1.002)
+                    self._base_halo  = random.uniform(15, 28)
+                else:
+                    self._base_scale = random.uniform(1.001, 1.008)
+                    self._base_halo  = random.uniform(48, 68)
+                self._last_t = now
 
-        sp = 0.38 if self.speaking else (0.30 if amp > 0.02 else 0.15)
-        self._scale += (self._tgt_scale - self._scale) * sp
-        self._halo  += (self._tgt_halo  - self._halo)  * sp
+            if self.muted:
+                self._tgt_scale, self._tgt_halo = self._base_scale, self._base_halo
+            elif self.speaking:
+                self._tgt_scale = self._base_scale + amp * 0.13
+                self._tgt_halo  = self._base_halo  + amp * 95.0
+            else:
+                self._tgt_scale = self._base_scale + amp * 0.06
+                self._tgt_halo  = self._base_halo  + amp * 75.0
 
-        # Rings/scanners spin faster while speaking, reacting to loudness.
-        boost  = 1.0 + amp * 1.6
-        speeds = ([1.3, -0.9, 2.0] if self.speaking else [0.55, -0.35, 0.9])
-        for i, spd in enumerate(speeds):
-            self._rings[i] = (self._rings[i] + spd * boost) % 360
-
-        self._scan  = (self._scan  + (3.0 if self.speaking else 1.3) * boost) % 360
-        self._scan2 = (self._scan2 + (-2.0 if self.speaking else -0.75) * boost) % 360
-
-        fw  = min(self.width(), self.height())
-        lim = fw * 0.74
-        spd = 4.2 if self.speaking else 2.0
-        self._pulses = [r + spd for r in self._pulses if r + spd < lim]
-        if len(self._pulses) < 3 and random.random() < (0.07 if self.speaking else 0.025):
-            self._pulses.append(0.0)
-
-        if self.speaking and random.random() < 0.28:
-            cx, cy = self.width() / 2, self.height() / 2
-            ang = random.uniform(0, 2 * math.pi)
-            r_s = fw * 0.28
-            self._particles.append([
-                cx + math.cos(ang) * r_s, cy + math.sin(ang) * r_s,
-                math.cos(ang) * random.uniform(0.9, 2.4),
-                math.sin(ang) * random.uniform(0.9, 2.4) - 0.4, 1.0,
-            ])
-        self._particles = [
-            [p[0]+p[2], p[1]+p[3], p[2]*0.97, p[3]*0.97, p[4]-0.028]
-            for p in self._particles if p[4] > 0
-        ]
+            sp = 0.38 if self.speaking else (0.30 if amp > 0.02 else 0.15)
+            self._scale += (self._tgt_scale - self._scale) * sp
+            self._halo  += (self._tgt_halo  - self._halo)  * sp
 
         self._blink_tick += 1
         if self._blink_tick >= 38:
@@ -553,15 +625,196 @@ class HudCanvas(QWidget):
             _blinked = False
 
         # Repaint throttling — advancing the animation state above is cheap at
-        # 60 Hz, but the paint is heavy. Repaint every frame while something is
-        # actually happening (speaking, audio, thinking) or when the blink
-        # toggles; otherwise drop to ~20 Hz so an idle HUD stops pinning a CPU
-        # core. The visuals stay smooth because the state keeps stepping.
-        self._paint_tick = (self._paint_tick + 1) % 3
+        # 60 Hz, but the paint is heavy. Active (speaking, audio, thinking) runs
+        # at ~30 Hz, which is the frame rate animation has used for talking
+        # characters forever and is indistinguishable here; idle drops to ~20 Hz
+        # so a sleeping HUD stops pinning a CPU core. The visuals stay smooth
+        # either way because the animation state keeps stepping at 60 Hz.
+        self._paint_tick = (self._paint_tick + 1) % 6
         active = (self.speaking or amp > 0.02
                   or self.state in ("THINKING", "PROCESSING"))
-        if active or _blinked or self._paint_tick == 0:
-            self.update()
+        if _blinked or (self._paint_tick % 2 == 0 if active
+                        else self._paint_tick % 3 == 0):
+            # Nothing is on screen when the window is hidden or minimised, so
+            # rendering the avatar into it is pure waste — and this app is meant
+            # to sit running all day. The animation state above keeps stepping,
+            # so it picks up mid-motion instead of snapping when you come back.
+            if self._on_screen():
+                self.update()
+
+    def _on_screen(self) -> bool:
+        """True only when this canvas can actually be seen by the user."""
+        try:
+            if not self.isVisible():
+                return False
+            win = self.window()
+            return not (win.isMinimized() or win.isHidden())
+        except Exception:
+            return True      # never let a visibility check stop the HUD drawing
+
+    # ── reactor core ─────────────────────────────────────────────────────────
+    # The centrepiece for anyone who did not want a face looking back at them.
+    # Built from the same budget as the head — software QPainter, no GPU — and
+    # from the same principle: everything on it means something. The rings turn
+    # at a rate the state sets, the spectrum ring is the real audio level, and
+    # the core brightens with the voice. Nothing here is decoration that moves
+    # for its own sake, which is what made the old glowing orb feel dead.
+
+    def _core_colours(self):
+        if self.muted:
+            return qcol(C.MUTED_C), qcol(C.MUTED_C)
+        if self.speaking:
+            return qcol(C.PRI), qcol(C.ACC)
+        if self.state in ("THINKING", "PROCESSING"):
+            return qcol(C.PRI), qcol(C.ACC2)
+        if self.state == "LISTENING":
+            return qcol(C.PRI), qcol(C.GREEN)
+        return qcol(C.PRI), qcol(C.PRI_DIM)
+
+    def _paint_core(self, p: QPainter, cx: float, cy: float, r: float,
+                    W: float = 0.0, H: float = 0.0):
+        """Draw the reactor at (cx, cy) with outer radius r, using the whole
+        canvas (W x H) for the marks that frame it."""
+        main, acc = self._core_colours()
+        bg = qcol(C.BG)
+        amp = self._amp_disp
+        t = self._core_phase
+        live = (self.speaking or amp > 0.04) and not self.muted
+
+        def blend(col: QColor, a: float) -> QColor:
+            """Pre-mix onto the background instead of asking Qt to composite.
+            The raster engine's opaque path is several times faster than its
+            translucent one, and everything here is a line or an arc."""
+            k = max(0.0, min(1.0, a))
+            return QColor(int(bg.red()   + (col.red()   - bg.red())   * k),
+                          int(bg.green() + (col.green() - bg.green()) * k),
+                          int(bg.blue()  + (col.blue()  - bg.blue())  * k))
+
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # 1. The atmosphere. One radial gradient doing what a stack of discs did
+        #    badly: a wide, soft body of light that gives the thing presence
+        #    before any detail is read. This single element decides whether the
+        #    HUD looks vast or looks small, so it is drawn first and drawn big.
+        # Concentrated rather than spread: a gradient reaching the outer rim
+        # washes the whole disc a flat dim blue and reads as fog. Ending it at
+        # two thirds leaves it a body of light with somewhere to fall off to,
+        # which is what makes it look lit rather than tinted.
+        lift = 1.0 + 0.55 * amp + (0.18 if self.speaking else 0.0)
+        p.setPen(Qt.PenStyle.NoPen)
+        for gr, a0, a1 in ((r * 0.70, 0.30, 0.0), (r * 0.34, 0.34, 0.0)):
+            g = QRadialGradient(cx, cy, gr)
+            g.setColorAt(0.00, blend(main, min(0.95, a0 * lift)))
+            g.setColorAt(0.45, blend(main, min(0.95, a0 * lift * 0.52)))
+            g.setColorAt(0.78, blend(main, min(0.95, a0 * lift * 0.18)))
+            g.setColorAt(1.00, blend(main, a1))
+            p.setBrush(QBrush(g))
+            p.drawEllipse(QRectF(cx - gr, cy - gr, gr * 2, gr * 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # 2. Frame marks at the corners of the whole canvas, not of the circle.
+        #    They are what set the scale: the eye reads the reactor as filling
+        #    the room rather than sitting in the middle of it.
+        if W > 40 and H > 40:
+            m, arm = min(W, H) * 0.035, min(W, H) * 0.055
+            p.setPen(QPen(blend(main, 0.45), 1.4))
+            for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                x = cx + sx * (W / 2 - m)
+                y = cy + sy * (H / 2 - m)
+                p.drawLine(QLineF(x, y, x - sx * arm, y))
+                p.drawLine(QLineF(x, y, x, y - sy * arm))
+
+        # 3. Crosshair across the full canvas, broken around the core so it
+        #    frames the reactor rather than crossing it.
+        p.setPen(QPen(blend(main, 0.16), 1))
+        gap = r * 0.62
+        if W > 40:
+            p.drawLine(QLineF(cx - W / 2, cy, cx - gap, cy))
+            p.drawLine(QLineF(cx + gap, cy, cx + W / 2, cy))
+        if H > 40:
+            p.drawLine(QLineF(cx, cy - H / 2, cx, cy - gap))
+            p.drawLine(QLineF(cx, cy + gap, cx, cy + H / 2))
+
+        # 4. Two thin outer circles. Sparse on purpose — a dense ring reads as a
+        #    grey band at this size, and restraint is what made the original
+        #    look expensive.
+        for rr, a in ((1.00, 0.34), (0.93, 0.16)):
+            rad = r * rr
+            p.setPen(QPen(blend(main, a), 1))
+            p.drawEllipse(QRectF(cx - rad, cy - rad, rad * 2, rad * 2))
+
+        # 5. Long, sparse graduations: 24 majors reaching well in from the rim,
+        #    with shorter minors between them.
+        major, minor = [], []
+        for i in range(72):
+            a = math.radians(i * 5.0)
+            ca, sa = math.cos(a), math.sin(a)
+            if i % 3 == 0:
+                major.append(QLineF(cx + ca * r * 0.885, cy + sa * r * 0.885,
+                                    cx + ca * r * 0.985, cy + sa * r * 0.985))
+            else:
+                minor.append(QLineF(cx + ca * r * 0.945, cy + sa * r * 0.945,
+                                    cx + ca * r * 0.985, cy + sa * r * 0.985))
+        p.setPen(QPen(blend(main, 0.42), 1.3))
+        p.drawLines(major)
+        p.setPen(QPen(blend(main, 0.18), 1))
+        p.drawLines(minor)
+
+        # 6. Sweeping arcs. Long spans, not dashes — the original's grandeur
+        #    came from a few big strokes. Speed is the state: idle drifts,
+        #    thinking hurries, speaking runs.
+        rate = 1.0 + (1.9 if self.state in ("THINKING", "PROCESSING") else 0.0) \
+                   + (1.2 if self.speaking else 0.0)
+        for k, (rr, span, count, dirn, col, a, wid) in enumerate((
+                (0.955, 118, 2, +1, acc,  0.75, 2.0),
+                (0.845, 82,  3, -1, main, 0.38, 1.3),
+                (0.760, 150, 1, +1, acc,  0.45, 1.6),
+                (0.660, 64,  4, -1, main, 0.26, 1.1),
+                (0.545, 128, 2, +1, main, 0.30, 1.2))):
+            rad = r * rr
+            p.setPen(QPen(blend(col, a), wid))
+            box = QRectF(cx - rad, cy - rad, rad * 2, rad * 2)
+            base = (t * rate * (9 + k * 6) * dirn) % 360.0
+            for sgm in range(count):
+                p.drawArc(box, int((base + sgm * (360.0 / count)) * 16),
+                          int(span * 16))
+
+        # 7. The voice, as a ring of graduations that grow with it. Kept out at
+        #    a wide radius so it never crowds the middle.
+        n = 60
+        ring = r * 0.415
+        spikes = []
+        for i in range(n):
+            a = math.radians(i * (360.0 / n))
+            ca, sa = math.cos(a), math.sin(a)
+            wob = 0.5 + 0.5 * math.sin(t * 2.3 + i * 0.42)
+            idle = 0.018 + 0.012 * math.sin(t * 1.2 + i * 0.7)
+            h = r * (idle + (amp * 0.20 * wob if live else 0.0))
+            spikes.append(QLineF(cx + ca * ring, cy + sa * ring,
+                                 cx + ca * (ring + h), cy + sa * (ring + h)))
+        p.setPen(QPen(blend(acc if live else main, 0.25 + 0.5 * amp), 1.6))
+        p.drawLines(spikes)
+
+        # 8. The inner ring the name sits in.
+        inner = r * 0.355
+        p.setPen(QPen(blend(acc, 0.30 + 0.45 * amp), 1.5))
+        p.drawEllipse(QRectF(cx - inner, cy - inner, inner * 2, inner * 2))
+
+        # 9. The name, sized from the string rather than from the radius alone:
+        #    "J.A.R.V.I.S" and a name someone renamed to "MAX" are very
+        #    different widths, and a fixed fraction of r spills one of them past
+        #    the ring it is supposed to sit inside.
+        name = self._assistant_name or ""
+        if name:
+            space = max(1.0, r * 0.018)
+            fsz = max(8, int(min(r * 0.105,
+                                 (inner * 1.75) / max(1, len(name)) * 1.6 - space)))
+            f = QFont("Courier New", fsz, QFont.Weight.Bold)
+            f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, space)
+            p.setFont(f)
+            p.setPen(QPen(blend(qcol(C.WHITE), 0.6 + 0.4 * min(1.0, amp * 2)), 1))
+            p.drawText(QRectF(cx - r, cy - fsz, r * 2, fsz * 2),
+                       Qt.AlignmentFlag.AlignCenter, name)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -582,119 +835,43 @@ class HudCanvas(QWidget):
             self._grid_key   = _gkey
         p.drawPixmap(0, 0, self._grid_cache)
 
-        r_face = fw * 0.31
+        # ── holographic head ────────────────────────────────────────────────
+        # Sized to the band between the top of the canvas and the status line,
+        # capped by width, so it fills the HUD at any window size — including
+        # fullscreen — without ever colliding with the status text below.
+        _sy_status = cy + fw * 0.40
+        if self._avatar is not None and self.hud_style == "face":
+            _band_t = 12.0
+            _band_h = max(60.0, _sy_status - 12.0 - _band_t)
+            _r_head = min(fw * 0.355, _band_h / (self._avatar.SPAN + 0.08))
+            _head_cy = _band_t + (_band_h - self._avatar.SPAN * _r_head) / 2.0 + _r_head
 
-        # halo glow
-        for i in range(10):
-            r   = r_face * (1.8 - i * 0.08)
-            frc = 1.0 - i / 10
-            a   = max(0, min(255, int(self._halo * 0.085 * frc)))
-            col = qcol(C.MUTED_C if self.muted else C.PRI, a)
-            p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
+            if self.muted:
+                _main = _acc = qcol(C.MUTED_C)
+            else:
+                _main = qcol(C.PRI)
+                if self.speaking:
+                    _acc = qcol(C.ACC)
+                elif self.state in ("THINKING", "PROCESSING"):
+                    _acc = qcol(C.ACC2)
+                elif self.state == "LISTENING":
+                    _acc = qcol(C.GREEN)
+                else:
+                    _acc = qcol(C.PRI)
+            self._avatar.paint(p, cx, _head_cy, _r_head, _main, _acc, qcol(C.BG))
 
-        # pulse rings
-        for pr in self._pulses:
-            a   = max(0, int(230 * (1.0 - pr / (fw * 0.74))))
-            col = qcol(C.MUTED_C if self.muted else C.PRI, a)
-            p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QRectF(cx - pr, cy - pr, pr * 2, pr * 2))
-
-        # spinning arc rings
-        for idx, (r_frac, w_r, arc_l, gap) in enumerate(
-            [(0.48, 3, 115, 78), (0.40, 2, 78, 55), (0.32, 1, 56, 40)]
-        ):
-            ring_r = fw * r_frac
-            base   = self._rings[idx]
-            a_val  = max(0, min(255, int(self._halo * (1.0 - idx * 0.18))))
-            col    = qcol(C.MUTED_C if self.muted else C.PRI, a_val)
-            p.setPen(QPen(col, w_r)); p.setBrush(Qt.BrushStyle.NoBrush)
-            angle = base
-            rect  = QRectF(cx - ring_r, cy - ring_r, ring_r * 2, ring_r * 2)
-            while angle < base + 360:
-                p.drawArc(rect, int(angle * 16), int(arc_l * 16))
-                angle += arc_l + gap
-
-        # scanners
-        sr = fw * 0.50
-        sa = min(255, int(self._halo * 1.5))
-        ex = 75 if self.speaking else 44
-        p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, sa), 2.5))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        srect = QRectF(cx - sr, cy - sr, sr * 2, sr * 2)
-        p.drawArc(srect, int(self._scan * 16), int(ex * 16))
-        p.setPen(QPen(qcol(C.ACC, sa // 2), 1.5))
-        p.drawArc(srect, int(self._scan2 * 16), int(ex * 16))
-
-        # tick marks
-        t_out, t_in = fw * 0.497, fw * 0.474
-        p.setPen(QPen(qcol(C.PRI, 140), 1))
-        for deg in range(0, 360, 10):
-            rad = math.radians(deg)
-            inn = t_in if deg % 30 == 0 else t_in + 6
-            p.drawLine(
-                QPointF(cx + t_out * math.cos(rad), cy - t_out * math.sin(rad)),
-                QPointF(cx + inn  * math.cos(rad), cy - inn  * math.sin(rad)),
-            )
-
-        # crosshair
-        ch_r, gap_h = fw * 0.51, fw * 0.16
-        p.setPen(QPen(qcol(C.PRI, int(self._halo * 0.5)), 1))
-        p.drawLine(QPointF(cx - ch_r, cy), QPointF(cx - gap_h, cy))
-        p.drawLine(QPointF(cx + gap_h, cy), QPointF(cx + ch_r, cy))
-        p.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
-        p.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
-
-        # corner brackets
-        bl = 24
-        bc = qcol(C.PRI, 210)
-        hl, hr = cx - fw // 2, cx + fw // 2
-        ht, hb = cy - fw // 2, cy + fw // 2
-        p.setPen(QPen(bc, 2))
-        for bx, by, dx, dy in [(hl,ht,1,1),(hr,ht,-1,1),(hl,hb,1,-1),(hr,hb,-1,-1)]:
-            p.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
-            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
-
-        # face
-        if self._face_px:
-            fsz = int(fw * 0.62 * self._scale)
-            # Quantise the target size so the expensive smooth rescale only runs
-            # when it visibly changes — not on every 1 px "breathing" step.
-            q_sz = max(1, (fsz // 4) * 4)
-            if self._face_cache is None or self._face_cache_sz != q_sz:
-                self._face_cache = self._face_px.scaled(
-                    q_sz, q_sz,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                self._face_cache_sz = q_sz
-            scaled = self._face_cache
-            p.drawPixmap(int(cx - scaled.width() / 2),
-                         int(cy - scaled.height() / 2), scaled)
+        # reactor core — the other centrepiece, and the fallback if the head
+        # could not be built. There is no third path: the old face.png branch
+        # was unreachable (no such file ships) and the bare orb it fell through
+        # to is what this replaces.
         else:
-            orb_r = int(fw * 0.27 * self._scale)
-            oc    = (200, 0, 50) if self.muted else (0, 60, 110)
-            for i in range(8, 0, -1):
-                r2  = int(orb_r * i / 8)
-                frc = i / 8
-                a   = max(0, min(255, int(self._halo * 1.1 * frc)))
-                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), a)))
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QRectF(cx - r2, cy - r2, r2 * 2, r2 * 2))
-            p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
-            p.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
-            p.drawText(QRectF(cx - 80, cy - 14, 160, 28),
-                       Qt.AlignmentFlag.AlignCenter, self._assistant_name)
-
-        # particles
-        for pt in self._particles:
-            a = max(0, min(255, int(pt[4] * 255)))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(qcol(C.PRI, a)))
-            p.drawEllipse(QPointF(pt[0], pt[1]), 2.5, 2.5)
+            _band_t = 12.0
+            _band_h = max(60.0, _sy_status - 12.0 - _band_t)
+            _r = min(W * 0.46, _band_h / 2.0)
+            self._paint_core(p, cx, _band_t + _band_h / 2.0, _r, W, _band_h)
 
         # status text
-        sy = cy + fw * 0.40
+        sy = _sy_status
         if self.muted:
             txt, col = "⊘  MUTED",     qcol(C.MUTED_C)
         elif self.speaking:
@@ -876,7 +1053,12 @@ class LogWidget(QTextEdit):
                 "ai":   qcol(C.PRI),
                 "err":  qcol(C.RED),
                 "file": qcol(C.GREEN),
-                "sys":  qcol(C.ACC2),
+                # SYS lines are the bulk of the log. Amber fought the cyan HUD
+                # and, being a fixed status colour rather than a hue-linked one,
+                # stayed amber even after the accent picker retinted everything
+                # else. TEXT_MED follows the theme and drops the contrast to a
+                # level you can read past.
+                "sys":  qcol(C.TEXT_MED),
             }.get(self._tag, qcol(C.TEXT))
             fmt.setForeground(QBrush(col))
             cur.movePosition(cur.MoveOperation.End)
@@ -2746,6 +2928,9 @@ class MainWindow(QMainWindow):
     _confirm_sig    = pyqtSignal(str, str)   # (title, detail) — irreversible-action gate
     _confirm_hide_sig = pyqtSignal()
     _wake_dl_sig    = pyqtSignal(bool, str)  # wake-word install finished (ok, message)
+    _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
+    _quiz_hide_sig  = pyqtSignal()
+    _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2781,6 +2966,8 @@ class MainWindow(QMainWindow):
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas, set by JarvisLive
         self.on_wake_toggle    = None   # callable: (enable: bool) -> str, set by JarvisLive
         self.on_wake_manual    = None   # callable: () -> None — manual sleep/wake
+        self.on_push_to_talk   = None   # callable: (enable: bool) -> str scope
+        self.ptt_hold          = None   # callable: (held: bool) -> None — windowed chord
         self.wake_get_state    = None   # callable: () -> dict {enabled, awake, ready}
         self._muted            = False
         self._current_file: str | None = None
@@ -2807,6 +2994,7 @@ class MainWindow(QMainWindow):
         self.hud = HudCanvas(face_path, _display)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._content_panel = self._build_content_panel()
+        self._quiz_panel = self._build_quiz_panel()
 
         # Live camera container — replaces HUD when camera stream is active
         _cam_cont = QWidget()
@@ -2859,6 +3047,7 @@ class MainWindow(QMainWindow):
         """)
         self._center_split.addWidget(self._hud_cam_stack)
         self._center_split.addWidget(self._content_panel)
+        self._center_split.addWidget(self._quiz_panel)
         self._center_split.setStretchFactor(0, 3)
         self._center_split.setStretchFactor(1, 1)
         self._center_split.setCollapsible(0, False)
@@ -2898,6 +3087,9 @@ class MainWindow(QMainWindow):
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._wake_dl_sig.connect(self._on_wake_install_done)
+        self._quiz_sig.connect(self._show_quiz)
+        self._quiz_hide_sig.connect(self._hide_quiz)
+        self._review_sig.connect(self._show_review)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -3476,7 +3668,7 @@ class MainWindow(QMainWindow):
         self._title_lbl.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
         self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         mid.addWidget(self._title_lbl)
-        _sub_text = ("Just A Rather Very Intelligent System"
+        _sub_text = ("A Friendly Assistant"
                      if _disp in ("JARVIS", "J.A.R.V.I.S")
                      else "Personal AI Assistant")
         self._sub_lbl = QLabel(_sub_text)
@@ -3752,6 +3944,23 @@ class MainWindow(QMainWindow):
         self._wake_btn.setStyleSheet(_BTN_STYLE_DIM)
         self._wake_sleep_btn.hide()
 
+        self._ptt_btn = QPushButton()
+        self._ptt_btn.setFixedHeight(26)
+        self._ptt_btn.setFont(QFont("Courier New", 7))
+        self._ptt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ptt_btn.clicked.connect(self._toggle_ptt)
+        lay.addWidget(self._ptt_btn)
+
+        self._refresh_talk_btns()
+
+        self._hud_btn = QPushButton()
+        self._hud_btn.setFixedHeight(26)
+        self._hud_btn.setFont(QFont("Courier New", 7))
+        self._hud_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hud_btn.clicked.connect(self._toggle_hud_style)
+        lay.addWidget(self._hud_btn)
+        self._refresh_hud_btn()
+
         audio_btn = QPushButton("🎧  AUDIO DEVICES")
         audio_btn.setFixedHeight(26)
         audio_btn.setFont(QFont("Courier New", 7))
@@ -3928,6 +4137,9 @@ class MainWindow(QMainWindow):
     def _show_content(self, title: str, text: str):
         """Slot — runs on Qt main thread. Updates and shows the content panel."""
         import time as _time
+        # The panel opens below the head, so the head looks down at it. It is a
+        # tiny thing that answers "did that land?" before you read a word.
+        self.hud.glance(0.0, -0.85, hold=1.3)
         self._content_title_lbl.setText(title.upper()[:48])
         self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
         self._content_display.setPlainText(text)
@@ -3939,6 +4151,361 @@ class MainWindow(QMainWindow):
         if first_show:
             total = self._center_split.height()
             self._center_split.setSizes([max(total - 220, 120), 220])
+
+    # ── document review ──────────────────────────────────────────────────────
+    # Rendered as rich text into the content panel that already exists, rather
+    # than into a panel of its own. A review is read, not clicked, so QTextEdit
+    # gives scrolling, selection and copy for nothing, and the HUD gains no
+    # widget it has to lay out. Severity decides colour and order here because
+    # that is presentation; the plugin supplies no styling and knows no palette,
+    # which is also what lets a re-theme repaint a review correctly.
+
+    # Severity is marked by a symbol and a colour, not by a word. The findings
+    # themselves are in the user's language, and "[SERIOUS]" sitting inside a
+    # Turkish sentence is the kind of seam this project tries not to have —
+    # while translating the tag would mean a table per language, which is worse.
+    # A shape carries it in every language, and shape plus colour still reads
+    # for someone who cannot separate red from amber. What the marks mean
+    # arrives the way everything else does: JARVIS says it out loud.
+    _REVIEW_MARKS = {"serious": ("RED", "▲"), "caution": ("ACC2", "●"), "note": ("PRI_DIM", "·")}
+
+    @staticmethod
+    def _esc(s) -> str:
+        return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace("\n", "<br>"))
+
+    def _show_review(self, title: str, summary: str, findings, unclear):
+        """Slot — Qt main thread. Lays a document review into the content panel."""
+        e = self._esc
+        parts = [f'<div style="color:{C.TEXT}; font-family:Courier New;">']
+
+        if summary:
+            parts.append(
+                f'<div style="color:{C.WHITE}; border-left:2px solid {C.PRI};'
+                f' padding-left:8px; margin-bottom:10px;">{e(summary)}</div>')
+
+        for f in (findings or []):
+            key, mark = self._REVIEW_MARKS.get(f.get("severity"), ("PRI_DIM", "·"))
+            colour = getattr(C, key)
+            parts.append(f'<div style="margin-bottom:11px;">')
+            parts.append(
+                f'<span style="color:{colour}; font-weight:bold;">{mark}</span> '
+                f'<span style="color:{C.WHITE}; font-weight:bold;">'
+                f'{e(f.get("heading"))}</span>')
+            if f.get("detail"):
+                parts.append(f'<div style="margin-left:12px;">{e(f["detail"])}</div>')
+            if f.get("quote"):
+                # The document's own wording, visually separated from the
+                # explanation so the two are never mistaken for each other.
+                parts.append(
+                    f'<div style="margin-left:12px; color:{C.TEXT_DIM};'
+                    f' border-left:1px solid {C.BORDER}; padding-left:7px;">'
+                    f'&ldquo;{e(f["quote"])}&rdquo;</div>')
+            if f.get("suggestion"):
+                parts.append(
+                    f'<div style="margin-left:12px; color:{C.PRI};">'
+                    f'&rarr; {e(f["suggestion"])}</div>')
+            parts.append('</div>')
+
+        if unclear:
+            parts.append(
+                f'<div style="margin-top:6px; border-top:1px solid {C.BORDER};'
+                f' padding-top:7px; color:{C.TEXT_MED};">'
+                'The document does not settle:</div>')
+            for u in unclear:
+                parts.append(
+                    f'<div style="margin-left:12px; color:{C.TEXT_MED};">'
+                    f'&middot; {e(u)}</div>')
+        parts.append('</div>')
+
+        import time as _time
+        self.hud.glance(0.0, -0.85, hold=1.3)
+        # Left as written, not upper-cased. The other content-panel titles are
+        # the app's own English labels, but this one is the document's name in
+        # the user's language, and str.upper() applies English casing rules to
+        # it: Turkish "Sözleşmesi" comes back "SÖZLEŞMESI", having lost the
+        # dotted capital İ. Python has no locale-aware upper to reach for, and
+        # imposing one language's rules on all of them is the bug, not the fix.
+        self._content_title_lbl.setText((title or "Document")[:48])
+        self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
+        self._content_display.setHtml("".join(parts))
+        self._content_display.moveCursor(
+            self._content_display.textCursor().MoveOperation.Start)
+        first_show = not self._content_panel.isVisible()
+        self._content_panel.show()
+        if first_show:
+            total = self._center_split.height()
+            self._center_split.setSizes([max(total - 260, 120), 260, 0])
+
+    # ── quiz panel ───────────────────────────────────────────────────────────
+    # An interactive twin of the content panel. The plugin only ever hands over
+    # questions; everything about asking, marking and reporting happens here,
+    # and the finished result is pushed back into the conversation the same way
+    # a dropped file is — as a message JARVIS reads and responds to. That keeps
+    # the tool call short (it returns the moment the board is up) and leaves the
+    # talking to the assistant, in the user's own language.
+
+    def _quiz_btn(self, text: str, primary: bool = False) -> QPushButton:
+        b = QPushButton(text)
+        b.setFont(QFont("Courier New", 8))
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setMinimumHeight(24)
+        edge = C.BORDER_B if primary else C.BORDER
+        col = C.PRI if primary else C.TEXT_MED
+        b.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PANEL2}; color: {col};
+                border: 1px solid {edge}; border-radius: 2px;
+                padding: 3px 9px; text-align: left;
+            }}
+            QPushButton:hover {{ color: {C.WHITE}; border-color: {C.PRI_DIM}; }}
+            QPushButton:disabled {{ color: {C.TEXT_DIM}; border-color: {C.BORDER}; }}
+        """)
+        return b
+
+    def _build_quiz_panel(self) -> QWidget:
+        w = QWidget()
+        w.setObjectName("QuizPanel")
+        w.setStyleSheet(f"""
+            QWidget#QuizPanel {{
+                background: {C.PANEL};
+                border-top: 1px solid {C.BORDER_B};
+            }}
+        """)
+        w.hide()
+
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 7, 12, 8)
+        lay.setSpacing(6)
+
+        hdr = QHBoxLayout(); hdr.setSpacing(6)
+        dot = QLabel("◈")
+        dot.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        dot.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(dot)
+
+        self._quiz_title_lbl = QLabel("QUIZ")
+        self._quiz_title_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._quiz_title_lbl.setStyleSheet(
+            f"color: {C.PRI}; background: transparent; letter-spacing: 1px;")
+        hdr.addWidget(self._quiz_title_lbl)
+        hdr.addStretch()
+
+        self._quiz_count_lbl = QLabel("")
+        self._quiz_count_lbl.setFont(QFont("Courier New", 7))
+        self._quiz_count_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hdr.addWidget(self._quiz_count_lbl)
+
+        quit_btn = QPushButton("DISMISS  ✕")
+        quit_btn.setFont(QFont("Courier New", 7))
+        quit_btn.setFixedHeight(18)
+        quit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        quit_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 2px; padding: 0 5px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        quit_btn.clicked.connect(self._hide_quiz)
+        hdr.addWidget(quit_btn)
+        lay.addLayout(hdr)
+
+        rule = QFrame(); rule.setFixedHeight(1)
+        rule.setStyleSheet(f"background: {C.BORDER};")
+        lay.addWidget(rule)
+
+        self._quiz_q_lbl = QLabel("")
+        self._quiz_q_lbl.setWordWrap(True)
+        self._quiz_q_lbl.setFont(QFont("Courier New", 9))
+        self._quiz_q_lbl.setStyleSheet(f"color: {C.WHITE}; background: transparent;")
+        lay.addWidget(self._quiz_q_lbl)
+
+        self._quiz_answers = QWidget()
+        self._quiz_answers.setStyleSheet("background: transparent;")
+        self._quiz_answers_lay = QVBoxLayout(self._quiz_answers)
+        self._quiz_answers_lay.setContentsMargins(0, 2, 0, 0)
+        self._quiz_answers_lay.setSpacing(4)
+        lay.addWidget(self._quiz_answers)
+
+        self._quiz_note_lbl = QLabel("")
+        self._quiz_note_lbl.setWordWrap(True)
+        self._quiz_note_lbl.setFont(QFont("Courier New", 8))
+        self._quiz_note_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._quiz_note_lbl.hide()
+        lay.addWidget(self._quiz_note_lbl)
+
+        foot = QHBoxLayout()
+        foot.addStretch()
+        self._quiz_next_btn = self._quiz_btn("NEXT  →", primary=True)
+        self._quiz_next_btn.setFixedWidth(110)
+        self._quiz_next_btn.clicked.connect(self._quiz_next)
+        self._quiz_next_btn.hide()
+        foot.addWidget(self._quiz_next_btn)
+        lay.addLayout(foot)
+
+        self._quiz = None
+        return w
+
+    def _show_quiz(self, topic: str, questions, grader=None):
+        """Slot — Qt main thread. Puts a fresh quiz on the board."""
+        if not questions:
+            return
+        self._quiz = {
+            "topic": topic or "",
+            "questions": list(questions),
+            "grader": grader,
+            "i": 0,
+            "results": [],
+            "answered": False,
+        }
+        self._quiz_title_lbl.setText((topic or "quiz").upper()[:48])
+        self.hud.glance(0.0, -0.85, hold=1.3)
+        first_show = not self._quiz_panel.isVisible()
+        self._quiz_panel.show()
+        if first_show:
+            total = self._center_split.height()
+            self._center_split.setSizes([max(total - 250, 120), 0, 250])
+        self._quiz_render()
+
+    def _hide_quiz(self):
+        self._quiz = None
+        self._quiz_panel.hide()
+
+    def _quiz_clear_answers(self):
+        while self._quiz_answers_lay.count():
+            item = self._quiz_answers_lay.takeAt(0)
+            child = item.widget()
+            if child is not None:
+                child.setParent(None)
+                child.deleteLater()
+
+    def _quiz_render(self):
+        q = self._quiz["questions"][self._quiz["i"]]
+        n, total = self._quiz["i"] + 1, len(self._quiz["questions"])
+        self._quiz_count_lbl.setText(f"{n} / {total}")
+        self._quiz_q_lbl.setText(q.get("question", ""))
+        self._quiz_note_lbl.hide()
+        self._quiz_next_btn.hide()
+        self._quiz["answered"] = False
+        self._quiz_clear_answers()
+
+        opts = q.get("options") or []
+        if opts:
+            for text in opts:
+                b = self._quiz_btn("   " + text)
+                b.clicked.connect(lambda _=False, t=text: self._quiz_submit(t))
+                self._quiz_answers_lay.addWidget(b)
+        else:
+            row = QWidget(); row.setStyleSheet("background: transparent;")
+            h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+            field = QLineEdit()
+            field.setFont(QFont("Courier New", 9))
+            field.setPlaceholderText("your answer")
+            field.setStyleSheet(f"""
+                QLineEdit {{
+                    background: {C.PANEL2}; color: {C.WHITE};
+                    border: 1px solid {C.BORDER}; border-radius: 2px; padding: 4px 7px;
+                }}
+                QLineEdit:focus {{ border-color: {C.PRI_DIM}; }}
+            """)
+            send = self._quiz_btn("ANSWER", primary=True)
+            send.setFixedWidth(90)
+            field.returnPressed.connect(lambda: self._quiz_submit(field.text()))
+            send.clicked.connect(lambda: self._quiz_submit(field.text()))
+            h.addWidget(field, stretch=1)
+            h.addWidget(send)
+            self._quiz_answers_lay.addWidget(row)
+            field.setFocus()
+
+    def _quiz_submit(self, given: str):
+        if self._quiz is None or self._quiz["answered"]:
+            return
+        self._quiz["answered"] = True
+        q = self._quiz["questions"][self._quiz["i"]]
+        grader = self._quiz.get("grader")
+        verdict = None
+        if callable(grader):
+            try:
+                verdict = grader(q, given)
+            except Exception:
+                verdict = None
+        self._quiz["results"].append({
+            "question": q.get("question", ""),
+            "type": q.get("type", ""),
+            "given": str(given or "").strip(),
+            "answer": q.get("answer", ""),
+            "correct": verdict,
+        })
+
+        for i in range(self._quiz_answers_lay.count()):
+            wdg = self._quiz_answers_lay.itemAt(i).widget()
+            if wdg is not None:
+                wdg.setEnabled(False)
+
+        if verdict is True:
+            mark, colour = "✓  correct", C.GREEN
+        elif verdict is False:
+            mark, colour = "✕  " + str(q.get("answer", "")), C.RED
+        else:
+            # Open answers and near-miss gap-fills are JARVIS's to judge. Saying
+            # so is honest; marking it wrong here would be a guess.
+            mark, colour = "…  noted — I'll go over this one with you", C.ACC2
+        note = q.get("note") or ""
+        self._quiz_note_lbl.setText(mark + (("\n" + note) if note else ""))
+        self._quiz_note_lbl.setStyleSheet(f"color: {colour}; background: transparent;")
+        self._quiz_note_lbl.show()
+
+        last = self._quiz["i"] >= len(self._quiz["questions"]) - 1
+        self._quiz_next_btn.setText("FINISH  →" if last else "NEXT  →")
+        self._quiz_next_btn.show()
+        self._quiz_next_btn.setFocus()
+
+    def _quiz_next(self):
+        if self._quiz is None:
+            return
+        if self._quiz["i"] >= len(self._quiz["questions"]) - 1:
+            self._quiz_finish()
+        else:
+            self._quiz["i"] += 1
+            self._quiz_render()
+
+    def _quiz_finish(self):
+        if self._quiz is None:
+            return
+        topic = self._quiz["topic"]
+        results = self._quiz["results"]
+        right = sum(1 for r in results if r["correct"] is True)
+        unsure = sum(1 for r in results if r["correct"] is None)
+        total = len(results)
+        self._quiz_panel.hide()
+        self._quiz = None
+
+        self._log.append_log(f"QUIZ: {topic or 'quiz'} — {right}/{total} correct")
+
+        # Hand it back to JARVIS as a message, not as a tool return: the tool
+        # call ended minutes ago. This is the same channel a dropped file uses.
+        lines = [f"[QUIZ_DONE] topic={topic or 'general'} | "
+                 f"auto-marked {right}/{total} correct"
+                 + (f", {unsure} still need your marking" if unsure else "")]
+        for i, r in enumerate(results, 1):
+            state = ("correct" if r["correct"] is True
+                     else "wrong" if r["correct"] is False else "NEEDS MARKING")
+            lines.append(
+                f"{i}. [{r['type']}] {r['question']} | they answered: "
+                f"{r['given'] or '(blank)'} | expected: {r['answer']} | {state}")
+        lines.append(
+            "Mark every question flagged NEEDS MARKING yourself — accept an answer "
+            "that means the same thing. Then tell them how they did in their own "
+            "language: the score, what they got wrong and why, in a couple of "
+            "sentences. Offer another round only if it fits. "
+            "Remember something only if it would still matter next week — that they "
+            "are working through a subject, or keep missing the same thing. A score "
+            "from one session is not worth a memory, and a memory per quiz would "
+            "bury the things that are.")
+        msg = "\n".join(lines)
+        if self.on_text_command:
+            threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
 
     def _build_footer(self) -> QWidget:
         w = QWidget()
@@ -4168,6 +4735,129 @@ class MainWindow(QMainWindow):
             self._wake_btn.setText("🎙  WAKE WORD: OFF")
             self._wake_btn.setStyleSheet(_off)
             self._wake_sleep_btn.hide()
+
+    def _refresh_talk_btns(self):
+        """Repaint the push-to-talk row from the saved setting."""
+        if not hasattr(self, "_ptt_btn"):
+            return
+        from core.hotkey import chord_label
+        from memory.config_manager import get_push_to_talk_enabled
+        _on = f"""
+            QPushButton {{ background: #001a08; color: {C.GREEN};
+                border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                text-align: left; padding: 0 8px; }}
+            QPushButton:hover {{ background: #002010; }}"""
+        _off = f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+                text-align: left; padding: 0 8px; }}
+            QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}"""
+
+        ptt = get_push_to_talk_enabled()
+        self._ptt_btn.setText(f"🎚  PUSH-TO-TALK: {chord_label()}" if ptt
+                              else "🎚  PUSH-TO-TALK: OFF")
+        self._ptt_btn.setStyleSheet(_on if ptt else _off)
+        self._ptt_btn.setToolTip(
+            "Microphone stays closed until you hold the key — nothing is sent "
+            "while you are not holding it." if ptt
+            else "Hold a key to talk instead of streaming the mic continuously.")
+
+
+    def _refresh_hud_btn(self):
+        from memory.config_manager import get_hud_style
+        face = get_hud_style() == "face"
+        # Neither state is "off", so both read as active — this is a choice
+        # between two things, not a switch with a disabled side.
+        style = f"""
+            QPushButton {{ background: {C.PANEL2}; color: {C.PRI};
+                border: 1px solid {C.BORDER_A}; border-radius: 3px;
+                text-align: left; padding: 0 8px; }}
+            QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER_B}; }}"""
+        self._hud_btn.setText("🧑  HUD: ANIMATED FACE" if face
+                              else "◉  HUD: REACTOR CORE")
+        self._hud_btn.setStyleSheet(style)
+        self._hud_btn.setToolTip(
+            "An animated head that speaks your words and shows what JARVIS is "
+            "doing. Tap to switch to the reactor core."
+            if face else
+            "A reactor core that turns with the state and moves with your voice. "
+            "Tap to switch to the animated head.")
+
+    def _toggle_hud_style(self):
+        """Swap the centrepiece. Both objects stay in memory, so the change is
+        instant and switching back costs nothing."""
+        from memory.config_manager import get_hud_style, save_hud_style
+        want = "core" if get_hud_style() == "face" else "face"
+        save_hud_style(want)
+        try:
+            self.hud.hud_style = want
+            self.hud.update()
+        except Exception:
+            pass
+        self._refresh_hud_btn()
+        self._log.append_log(
+            "SYS: HUD switched to the animated face." if want == "face"
+            else "SYS: HUD switched to the reactor core.")
+
+    def _toggle_ptt(self):
+        from memory.config_manager import (get_push_to_talk_enabled,
+                                           save_push_to_talk_enabled)
+        want = not get_push_to_talk_enabled()
+        save_push_to_talk_enabled(want)
+        scope = None
+        if self.on_push_to_talk:
+            try:
+                scope = self.on_push_to_talk(want)
+            except Exception as e:
+                self._log.append_log(f"ERR: Push-to-talk failed — {e}")
+                save_push_to_talk_enabled(False)
+                want = False
+        self._apply_ptt_shortcut(want and scope != "global")
+        self._refresh_talk_btns()
+
+    def _apply_ptt_shortcut(self, needed: bool):
+        """Bind the chord inside the window when no global hook is available.
+
+        On macOS and Linux there is no dependency-free way to read global key
+        state, so the chord is at least live whenever this window has focus.
+        Qt gives no key-release for a QShortcut, so a press latches the mic open
+        and a short timer closes it; held down, auto-repeat keeps pushing that
+        timer out, which behaves like holding a key.
+        """
+        from PyQt6.QtGui import QKeySequence, QShortcut
+        from core.hotkey import qt_sequence
+
+        if not needed:
+            sc = getattr(self, "_ptt_sc", None)
+            if sc is not None:
+                sc.setEnabled(False)
+                self._ptt_sc = None
+            self._ptt_hold(False)
+            return
+        if getattr(self, "_ptt_sc", None) is not None:
+            return
+
+        self._ptt_release = QTimer(self)
+        self._ptt_release.setSingleShot(True)
+        self._ptt_release.setInterval(420)
+        self._ptt_release.timeout.connect(lambda: self._ptt_hold(False))
+
+        def _press():
+            self._ptt_hold(True)
+            self._ptt_release.start()
+
+        self._ptt_sc = QShortcut(QKeySequence(qt_sequence()), self)
+        self._ptt_sc.setAutoRepeat(True)
+        self._ptt_sc.activated.connect(_press)
+
+    def _ptt_hold(self, held: bool):
+        """Report a windowed press/release to whoever owns the microphone."""
+        cb = getattr(self, "ptt_hold", None)
+        if cb:
+            try:
+                cb(bool(held))
+            except Exception:
+                pass
 
     def _toggle_wake_word(self):
         st = self._wake_state()
@@ -4642,6 +5332,39 @@ class JarvisUI:
         except Exception:
             pass
 
+    def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
+        """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
+        try:
+            if self._avatar is not None:
+                self._avatar.glance(dx, dy, hold)
+        except Exception:
+            pass
+
+    @property
+    def ptt_hold(self):
+        return self._win.ptt_hold
+
+    @ptt_hold.setter
+    def ptt_hold(self, cb):
+        self._win.ptt_hold = cb
+
+    @property
+    def on_push_to_talk(self):
+        return self._win.on_push_to_talk
+
+    @on_push_to_talk.setter
+    def on_push_to_talk(self, cb):
+        self._win.on_push_to_talk = cb
+
+    def push_visemes(self, frames, hop: float, at: float) -> None:
+        """Thread-safe: post a schedule of (level, openness, width) mouth frames
+        for JARVIS's own speech. `at` is the wall-clock time the batch begins to
+        sound, not the time of the call. See HudCanvas.push_visemes()."""
+        try:
+            self._win.hud.push_visemes(frames, hop, at)
+        except Exception:
+            pass
+
     def notify_phone_connected(self) -> None:
         self._win.notify_phone_connected()
 
@@ -4658,6 +5381,33 @@ class JarvisUI:
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""
         self._win._content_sig.emit(title[:48], text[:4000])
+
+    def show_quiz(self, topic: str, questions, grade=None) -> None:
+        """Thread-safe: put an interactive quiz on the board.
+
+        `grade(question, given)` decides each answer — the plugin supplies it so
+        the marking rules live with the questions rather than being duplicated
+        here. Returning None from it means "JARVIS should judge this one", which
+        is how open answers and near-miss gap-fills are handled.
+
+        Returns immediately: the user answers at their own pace and the finished
+        result is delivered back through on_text_command.
+        """
+        self._win._quiz_sig.emit(str(topic or ""), list(questions or []), grade)
+
+    def hide_quiz(self) -> None:
+        """Thread-safe: clear any quiz currently on the board."""
+        self._win._quiz_hide_sig.emit()
+
+    def show_review(self, title: str, summary: str, findings, unclear=None) -> None:
+        """Thread-safe: lay a document review into the panel below the HUD.
+
+        `findings` is a list of {heading, detail, severity, quote, suggestion};
+        severity is one of 'serious' / 'caution' / 'note' and decides colour and
+        order here, so the caller supplies no styling of its own.
+        """
+        self._win._review_sig.emit(str(title or ""), str(summary or ""),
+                                   list(findings or []), list(unclear or []))
 
     def prompt_reconfig(self):
         """Thread-safe: show the API key setup overlay (e.g. after an auth error)."""

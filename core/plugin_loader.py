@@ -22,6 +22,17 @@ from memory.config_manager import get_plugin_enabled, get_plugin_config
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 _DEFAULT_PARAMS = {"type": "OBJECT", "properties": {}}
 
+# Optional, and the same contract actions use: a plugin that takes a moment can
+# say so, and the model carries on talking instead of waiting on it. See
+# core/action_loader.py for what each value means.
+_BEHAVIORS = ("BLOCKING", "NON_BLOCKING")
+_SCHEDULING = ("WHEN_IDLE", "SILENT", "INTERRUPT")
+
+
+def _opt_upper(value, allowed: tuple[str, ...]) -> Optional[str]:
+    v = str(value or "").strip().upper()
+    return v if v in allowed else None
+
 
 @dataclass
 class PluginRecord:
@@ -33,28 +44,44 @@ class PluginRecord:
     valid: bool = False
     error: str = ""
     settings: Optional[dict] = None   # optional PLUGIN_SETTINGS schema (config fields)
+    behavior: Optional[str] = None    # None = the API's default (blocking)
+    scheduling: Optional[str] = None  # None = the API's default (WHEN_IDLE)
 
 
 class PluginRegistry:
-    def __init__(self, plugins: dict[str, PluginRecord], logger: Callable[[str], None]):
+    def __init__(self, plugins: dict[str, PluginRecord], logger: Callable[[str], None],
+                 notify: Callable[[str], None] | None = None):
         self._plugins = plugins          # name -> PluginRecord, VALID entries only
         self._all_records: list[PluginRecord] = []   # valid + invalid, for UI listing
         self._logger = logger
+        # Where user-facing notices go. `logger` is the console transcript and
+        # carries everything; `notify` reaches the activity log, so only things
+        # the user has to know about are sent to it. Defaults to dropping them,
+        # which keeps every existing single-sink caller working unchanged.
+        self._notify = notify or (lambda _msg: None)
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
         decls = []
         for name, rec in self._plugins.items():
             if get_plugin_enabled(name):
-                decls.append({
+                decl = {
                     "name": rec.name,
                     "description": rec.description,
                     "parameters": rec.parameters,
-                })
+                }
+                if rec.behavior:
+                    decl["behavior"] = rec.behavior
+                decls.append(decl)
         return decls
 
     def has(self, name: str) -> bool:
         return name in self._plugins
+
+    def scheduling(self, name: str) -> Optional[str]:
+        """How this plugin's result should re-enter the conversation, if it said."""
+        rec = self._plugins.get(name)
+        return rec.scheduling if rec else None
 
     # -- called by main.py from _execute_tool's else branch --
     def run(self, name: str, parameters: dict, player=None, session_memory=None) -> str:
@@ -67,6 +94,7 @@ class PluginRegistry:
             return _call_run(rec.run, parameters, player, session_memory) or "Done."
         except Exception as e:
             self._logger(f"Plugin '{name}' crashed during run(): {e}")
+            self._notify(f"Plugin '{name}' failed — see the console for details.")
             traceback.print_exc()
             return f"Sir, the '{name}' plugin failed: {e}"
 
@@ -159,11 +187,40 @@ def _validate(module, filename: str) -> PluginRecord:
         settings = None
 
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
-                         run=run_fn, file=filename, valid=True, error="", settings=settings)
+                         run=run_fn, file=filename, valid=True, error="", settings=settings,
+                         behavior=_opt_upper(plugin_meta.get("behavior"), _BEHAVIORS),
+                         scheduling=_opt_upper(plugin_meta.get("scheduling"), _SCHEDULING))
+
+
+def _load_error(path: Path, plugins_dir: Path, exc: Exception) -> str:
+    """Turn an import failure into something the person who downloaded the file
+    can act on.
+
+    Plugins are shared one file at a time, but some of them sit on a helper —
+    anything named with a leading underscore, which this loader deliberately
+    skips so it is never treated as a plugin of its own. Download the plugin
+    without its helper and Python reports `No module named 'plugins._x'`, which
+    is accurate and tells a non-programmer nothing. Naming the missing file, and
+    saying it belongs next to this one, turns a support question into a
+    thirty-second fix. Nothing here is specific to any plugin: the helper's name
+    comes from the exception itself.
+    """
+    if isinstance(exc, ModuleNotFoundError):
+        missing = (getattr(exc, "name", "") or "").split(".")
+        if len(missing) == 2 and missing[0] == "plugins" and missing[1].startswith("_"):
+            helper = missing[1] + ".py"
+            return (f"Needs the shared file '{helper}', which is not in "
+                    f"{plugins_dir.name}/. It comes with this plugin — download "
+                    f"'{helper}' into the same folder as {path.name} and restart.")
+        if missing and missing[0] not in ("plugins",):
+            return (f"Needs a package that is not installed: "
+                    f"pip install {missing[0]}")
+    return f"Failed to load: {exc}"
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
-                      logger: Callable[[str], None] = print) -> PluginRegistry:
+                      logger: Callable[[str], None] = print,
+                      notify: Callable[[str], None] | None = None) -> PluginRegistry:
     """
     Scans plugins_dir for *.py files (skips files starting with '_', e.g. __init__.py,
     _template.py, and any shared-helper modules an author prefixes with '_').
@@ -204,7 +261,7 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
 
         except Exception as e:
             rec = PluginRecord(name=path.stem, file=path.name,
-                                error=f"Failed to load: {e}")
+                                error=_load_error(path, plugins_dir, e))
             traceback.print_exc()
 
         all_records.append(rec)
@@ -214,8 +271,15 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
         else:
             logger(f"Plugin rejected: {path.name} — {rec.error}")
 
-    registry = PluginRegistry(valid, logger)
+    notify = notify or (lambda _msg: None)
+    registry = PluginRegistry(valid, logger, notify)
     registry._all_records = all_records
+    rejected = len(all_records) - len(valid)
     logger(f"Plugin discovery complete: {len(valid)} active, "
-           f"{len(all_records) - len(valid)} rejected, {len(all_records)} total.")
+           f"{rejected} rejected, {len(all_records)} total.")
+    # The activity log is the user's conversation, not a boot transcript: a
+    # plugin that loaded correctly is not news, so only a failure surfaces there
+    # — and then as one line, because the per-plugin detail is on the console.
+    if rejected:
+        notify(f"{rejected} plugin(s) could not be loaded — see the console.")
     return registry

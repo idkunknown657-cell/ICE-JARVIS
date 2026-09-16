@@ -167,15 +167,17 @@ def _get_transcript(video_id: str) -> str | None:
 
 
 def _summarize_with_gemini(transcript: str, video_url: str) -> str:
-    from google import genai as _genai
     from google.genai import types
+    from core import gemini
 
-    _client = _genai.Client(api_key=_get_api_key())
     max_chars = 80000
     truncated = transcript[:max_chars] + ("..." if len(transcript) > max_chars else "")
-    response  = _client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=f"Please summarize this YouTube video transcript:\n\n{truncated}",
+    # A whole transcript can be 80k characters, hence the long deadline — but a
+    # deadline there is, and the ladder in core/gemini.py picks the model.
+    response = gemini.call(
+        f"Please summarize this YouTube video transcript:\n\n{truncated}",
+        tier=gemini.SMART,
+        timeout_ms=60_000,
         config=types.GenerateContentConfig(
             system_instruction=(
                 "You are JARVIS, an AI assistant. "
@@ -186,7 +188,9 @@ def _summarize_with_gemini(transcript: str, video_url: str) -> str:
             )
         )
     )
-    return response.text.strip()
+    if response is None:
+        return "I couldn't reach Gemini to summarise that transcript, sir."
+    return (response.text or "").strip()
 
 
 def _save_summary(content: str, video_url: str) -> str:

@@ -67,15 +67,18 @@ def is_ready() -> bool:
         return False
 
 
-def install_and_download(logger: Callable[[str], None] = print) -> tuple[bool, str]:
+def install_and_download(logger: Callable[[str], None] = print,
+                         notify: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """
     One-click setup for the UI button: pip-install openwakeword if missing, then
     download the wake model. Returns (ok, message). Never raises — every failure
     is reported through the returned message and the logger.
     """
+    _tell = notify or (lambda _msg: None)
     try:
         if not is_installed():
             logger("Wake word: installing openwakeword (one-time)…")
+            _tell("Wake word: installing openwakeword (one-time)…")
             r = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "openwakeword"],
                 capture_output=True, text=True,
@@ -85,6 +88,7 @@ def install_and_download(logger: Callable[[str], None] = print) -> tuple[bool, s
                 return False, f"pip install failed: {tail[0][:160]}"
         # Download the pretrained melspectrogram/embedding + wake models.
         logger("Wake word: downloading models…")
+        _tell("Wake word: downloading models…")
         try:
             import openwakeword.utils as _u
             try:
@@ -111,10 +115,14 @@ class WakeWordDetector:
 
     def __init__(self, on_detect: Callable[[], None],
                  threshold: float = DEFAULT_THRESHOLD,
-                 logger: Callable[[str], None] = print):
+                 logger: Callable[[str], None] = print,
+                 notify: Callable[[str], None] | None = None):
         self._on_detect = on_detect
         self._threshold = threshold
         self._logger    = logger
+        # See PluginRegistry: `logger` is the console and gets everything,
+        # `notify` is the activity log and gets only what the user must act on.
+        self._notify    = notify or (lambda _msg: None)
         self._queue: queue.Queue = queue.Queue(maxsize=50)
         self._thread: threading.Thread | None = None
         self._running = False
@@ -131,6 +139,7 @@ class WakeWordDetector:
             self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
         except Exception as e:
             self._logger(f"Wake word: could not load model — {e}")
+            self._notify("Wake word unavailable — use the WAKE NOW button.")
             self._model = None
             return False
         self._running = True

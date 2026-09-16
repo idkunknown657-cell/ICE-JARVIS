@@ -158,9 +158,22 @@ def _resolve_path(raw: str) -> Path:
         "videos":    _get_videos(),
         "home":      Path.home(),
     }
-    lower = raw.strip().lower()
+    raw   = raw.strip().strip('"').strip("'")
+    lower = raw.lower()
     if lower in shortcuts:
         return shortcuts[lower]
+
+    # "desktop/notes/a.md" and "desktop\notes\a.md" — a shortcut followed by a
+    # sub-path.  Without this branch the whole string falls through to the
+    # relative-path return below and is resolved against the process CWD instead
+    # of the real Desktop: an "Access denied" when the project lives outside the
+    # home directory, or — worse — a silent write into a stray "desktop" folder
+    # inside the project when it lives inside it.
+    head, sep, rest = raw.replace("\\", "/").partition("/")
+    if sep and head.lower() in shortcuts:
+        rest = rest.strip("/")
+        return shortcuts[head.lower()] / rest if rest else shortcuts[head.lower()]
+
     return Path(raw).expanduser()
 
 def _format_size(b: int) -> str:
