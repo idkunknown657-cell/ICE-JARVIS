@@ -45,7 +45,7 @@ from pathlib import Path
 from core.version import APP_VERSION
 
 GITHUB_API = "https://api.github.com/repos/{repo}/releases/latest"
-EXE_NAME   = "JARVIS.exe"
+EXE_NAME   = "ICE.exe"
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ def check_for_update(repo: str, channel: str = "stable") -> UpdateInfo | None:
     if not info.exe_url:
         info.exe_url = _asset_url(EXE_NAME)
     if not info.exe_url:
-        print("[Update] ⚠️ release has no JARVIS.exe asset")
+        print("[Update] ⚠️ release has no ICE.exe asset")
         return None
 
     if info.channel != (channel or "stable").lower():
@@ -159,9 +159,9 @@ def download_update(info: UpdateInfo,
     exe_dir  = _exe_dir()
     stage    = exe_dir / ".update"
     stage.mkdir(parents=True, exist_ok=True)
-    dst      = stage / "JARVIS.exe.new"
+    dst      = stage / "ICE.exe.new"
 
-    req = urllib.request.Request(info.exe_url, headers={"User-Agent": "JARVIS-updater"})
+    req = urllib.request.Request(info.exe_url, headers={"User-Agent": "ICE-updater"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         total   = int(r.headers.get("Content-Length") or 0)
         got     = 0
@@ -274,7 +274,7 @@ def complete_update() -> str | None:
         data     = json.loads(marker.read_text(encoding="utf-8-sig")) if marker.exists() else {}
         version  = str(data.get("version") or "")
         marker.unlink(missing_ok=True)
-        (exe_dir / ".update" / "JARVIS.exe.new").unlink(missing_ok=True)
+        (exe_dir / ".update" / "ICE.exe.new").unlink(missing_ok=True)
         return version or "unknown"
     except Exception as e:
         print(f"[Update] ⚠️ complete_update: {e}")

@@ -274,14 +274,14 @@ python main.py
 
 ## 📦 Build a distributable .exe & push auto-updates
 
-The app can ship as a single `JARVIS.exe`, and every installed copy auto-updates
+The app can ship as a single `ICE.exe`, and every installed copy auto-updates
 itself from your **GitHub Releases**: whatever you push reaches all users on
 their next launch (it also checks ~8s after startup while running).
 
 **Produce the exe:**
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/build_exe.ps1
-# → dist/JARVIS.exe (plus actions/, plugins/ and core files beside it)
+# → dist/ICE.exe (plus actions/, plugins/ and core files beside it)
 ```
 
 **Publish a new version to all your users:**

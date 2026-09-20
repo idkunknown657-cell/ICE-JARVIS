@@ -12,7 +12,7 @@ from pathlib import Path
 
 # The engine for every physical action. core/pc_input is a dependency-free
 # Windows backend (ctypes / SendInput), so this whole tool works inside the
-# one-file JARVIS.exe where pyautogui is deliberately NOT shipped. pyautogui
+# one-file ICE.exe where pyautogui is deliberately NOT shipped. pyautogui
 # remains only as the non-Windows fallback.
 try:
     import pyautogui
@@ -609,7 +609,7 @@ def computer_control(
     """
     Full PC control: mouse, keyboard, clipboard, windows, processes, volume,
     brightness, media, screenshots and system queries. Works with no extra
-    packages (even inside the JARVIS.exe build).
+    packages (even inside the ICE.exe build).
 
     parameters keys (all optional unless noted):
       action        : (required) one of the actions listed below

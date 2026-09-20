@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for the JARVIS Windows build.
+# PyInstaller spec for the ICE JARVIS Windows build.
 #
 # Build with:  powershell -ExecutionPolicy Bypass -File tools/build_exe.ps1
 #
-# What ships next to JARVIS.exe (copied by build_exe.ps1, NOT part of the exe):
+# What ships next to ICE.exe (copied by build_exe.ps1, NOT part of the exe):
 #   core\prompt.txt, core\face_model.obj   — read from the exe's own folder at
 #                                            runtime (see get_base_dir / _base_dir)
 #   actions\, plugins\                     — scanned at startup for tools; keeping
@@ -69,7 +69,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="JARVIS",
+    name="ICE",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

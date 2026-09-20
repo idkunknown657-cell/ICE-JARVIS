@@ -6,4 +6,4 @@ wherever it pleases. Keep it simple: major.minor.patch.
 """
 
 APP_VERSION = "1.0.0"
-APP_NAME    = "JARVIS"
+APP_NAME    = "ICE"

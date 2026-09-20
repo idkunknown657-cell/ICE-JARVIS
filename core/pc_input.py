@@ -2,8 +2,8 @@
 core/pc_input.py — dependency-free Windows input & PC control engine.
 
 WHY THIS EXISTS
-    The distributed JARVIS.exe ships WITHOUT pyautogui / pyperclip / pycaw /
-    comtypes / pywin32 (deliberately excluded — see JARVIS.spec). That left the
+    The distributed ICE.exe ships WITHOUT pyautogui / pyperclip / pycaw /
+    comtypes / pywin32 (deliberately excluded — see ICE.spec). That left the
     two computer-control tools (computer_control, computer_settings) with no
     working backend inside the exe: every physical action died on
     "_require_pyautogui()". This module is that backend, built on ctypes +

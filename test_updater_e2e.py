@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 # Fake exe bytes with a known sha256
-EXE_BYTES = b"MZ\x90\x00 fake JARVIS.exe payload " * 512
+EXE_BYTES = b"MZ\x90\x00 fake ICE.exe payload " * 512
 SHA = hashlib.sha256(EXE_BYTES).hexdigest()
 
 PORT = 18799
@@ -20,8 +20,8 @@ RELEASES = {
     "tag_name": "v9.9.9",
     "body": "Test release with AGI brain",
     "assets": [
-        {"name": "JARVIS.exe",
-         "browser_download_url": f"http://127.0.0.1:{PORT}/JARVIS.exe"},
+        {"name": "ICE.exe",
+         "browser_download_url": f"http://127.0.0.1:{PORT}/ICE.exe"},
         {"name": "update.json",
          "browser_download_url": f"http://127.0.0.1:{PORT}/update.json"},
     ],
@@ -41,7 +41,7 @@ class H(http.server.BaseHTTPRequestHandler):
         ctype = "application/json"
         if self.path == "/repos/test/repo/releases/latest":
             body = json.dumps(RELEASES).encode()
-        elif self.path == "/JARVIS.exe":
+        elif self.path == "/ICE.exe":
             body = EXE_BYTES
             ctype = "application/octet-stream"
         elif self.path == "/update.json":

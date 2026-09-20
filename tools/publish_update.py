@@ -7,7 +7,7 @@ Usage (from the repo root, after a build or to build + publish in one go):
 
 Steps the script performs:
     1. Bumps APP_VERSION in core/version.py (when --version is given)
-    2. Builds dist/JARVIS.exe with tools/build_exe.ps1 (unless --skip-build)
+    2. Builds dist/ICE.exe with tools/build_exe.ps1 (unless --skip-build)
     3. Computes the exe's sha256 and writes dist/update.json
     4. Creates a GitHub release v<version> with the exe + update.json as
        assets, via the `gh` CLI when available (or prints the manual steps)
@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT      = Path(__file__).resolve().parent.parent
 VERSION   = ROOT / "core" / "version.py"
 DIST      = ROOT / "dist"
-EXE       = DIST / "JARVIS.exe"
+EXE       = DIST / "ICE.exe"
 MANIFEST  = DIST / "update.json"
 
 
@@ -74,7 +74,7 @@ def main() -> None:
     ap.add_argument("--notes", default="", help="Release notes shown to users")
     ap.add_argument("--channel", default="stable", help="update.json channel")
     ap.add_argument("--skip-build", action="store_true",
-                    help="Use the existing dist/JARVIS.exe instead of rebuilding")
+                    help="Use the existing dist/ICE.exe instead of rebuilding")
     args = ap.parse_args()
 
     version = args.version or _next_patch(_current_version())
@@ -106,8 +106,8 @@ def main() -> None:
     if gh.returncode == 0:
         _run(["gh", "release", "create", tag,
               "--repo", repo,
-              "--title", f"JARVIS {version}",
-              "--notes", args.notes or f"JARVIS v{version}",
+              "--title", f"ICE JARVIS {version}",
+              "--notes", args.notes or f"ICE JARVIS v{version}",
               str(EXE), str(MANIFEST)])
         print(f"[publish] DONE — release published: https://github.com/{repo}/releases/tag/{tag}")
         print(f"[publish] Users' apps will pick this up automatically at next startup.")
@@ -116,7 +116,7 @@ def main() -> None:
         print(f"  1. Upload   {EXE}")
         print(f"  2. Upload   {MANIFEST}")
         print(f"  3. Create a GitHub release tagged {tag} in {repo} with both as assets")
-        print(f"     (or:  gh release create {tag} {EXE} {MANIFEST} --repo {repo} --title 'JARVIS {version}')")
+        print(f"     (or:  gh release create {tag} {EXE} {MANIFEST} --repo {repo} --title 'ICE JARVIS {version}')")
 
 
 if __name__ == "__main__":
