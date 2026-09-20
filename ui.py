@@ -1647,8 +1647,11 @@ class CustomizeOverlay(QWidget):
 
         # ── Assistant voice — Gemini prebuilt voices ─────────────────────────
         # Names are language-neutral proper nouns, so the row reads the same in
-        # every locale. Selecting one and applying rebuilds the Live session.
-        from memory.config_manager import AVAILABLE_VOICES, DEFAULT_VOICE
+        # every locale. Each pill carries a short vocal character; the longer
+        # description lives in its tooltip. Selecting one and applying rebuilds
+        # the Live session.
+        from memory.config_manager import (AVAILABLE_VOICES, DEFAULT_VOICE,
+                                           VOICE_CHARACTERS)
         lay.addSpacing(4)
         lay.addWidget(_lbl("ASSISTANT VOICE", 8, color=C.TEXT_DIM,
                             align=Qt.AlignmentFlag.AlignLeft))
@@ -1658,7 +1661,9 @@ class CustomizeOverlay(QWidget):
         self._voice_btns: dict[str, QPushButton] = {}
         voice_row = QHBoxLayout(); voice_row.setSpacing(4)
         for _v in AVAILABLE_VOICES:
-            b = QPushButton(_v)
+            _tag = VOICE_CHARACTERS.get(_v, "").split(" · ")[0]
+            b = QPushButton(f"{_v} · {_tag}" if _tag else _v)
+            b.setToolTip(VOICE_CHARACTERS.get(_v, _v))
             b.setCheckable(True)
             b.setFixedHeight(28)
             b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
@@ -1667,6 +1672,9 @@ class CustomizeOverlay(QWidget):
             self._voice_btns[_v] = b
             voice_row.addWidget(b)
         lay.addLayout(voice_row)
+        self._voice_desc = _lbl("", 8, color=C.TEXT_DIM,
+                                align=Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(self._voice_desc)
         self._refresh_voice_btns()
 
         # ── UI colour — colour wheel ─────────────────────────────────────────
@@ -1748,6 +1756,7 @@ class CustomizeOverlay(QWidget):
 
     def _refresh_voice_btns(self):
         """Highlight the selected voice pill; dim the rest."""
+        from memory.config_manager import DEFAULT_VOICE, VOICE_CHARACTERS
         for name, b in self._voice_btns.items():
             on = (name == self._sel_voice)
             b.setChecked(on)
@@ -1762,6 +1771,12 @@ class CustomizeOverlay(QWidget):
                         border: 1px solid {C.BORDER}; border-radius: 3px; }}
                     QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
                 """)
+        char = VOICE_CHARACTERS.get(self._sel_voice, "")
+        if self._sel_voice == DEFAULT_VOICE:  # populated in __init__ via _build
+            suffix = "  — the default soft voice"
+        else:
+            suffix = ""
+        self._voice_desc.setText(f"{self._sel_voice} — {char}{suffix}")
 
     # ── colour flow ──────────────────────────────────────────────────────────
     def _set_color(self, hx: str, update_wheel: bool = True, preview: bool = True):
@@ -5335,8 +5350,7 @@ class JarvisUI:
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
         """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
         try:
-            if self._avatar is not None:
-                self._avatar.glance(dx, dy, hold)
+            self._win.hud.glance(dx, dy, hold)
         except Exception:
             pass
 

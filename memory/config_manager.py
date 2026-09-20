@@ -78,8 +78,27 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
 # ── Assistant voice ──────────────────────────────────────────────────────────
 # Gemini Live prebuilt voices. Names are proper nouns — identical in every
 # language, so this list is safe to show verbatim in any locale.
-AVAILABLE_VOICES = ["Charon", "Puck", "Kore", "Fenrir", "Aoede"]
-DEFAULT_VOICE    = "Charon"
+#
+# VOCAL CHARACTERS — the Live preview voices vary in tone and warmth. The
+# personality that ships with this build is a warm, soft, feminine voice, so
+# the default is Sulafat (described by Google as "Warm" and pitched as one of
+# the softer female voices); Kore ("Firm") is the previous default and stays
+# one tap away, alongside the rest of the curated set.
+VOICE_CHARACTERS = {
+    "Sulafat":    "Soft · Warm · gentle female",
+    "Kore":       "Firm · steady female",
+    "Leda":       "Youthful · bright female",
+    "Despina":    "Smooth · calm female",
+    "Aoede":      "Breezy · light female",
+    "Callirrhoe": "Easy-going · relaxed female",
+    "Achernar":   "Soft · hushed female",
+    "Charon":     "Low · husky",
+    "Puck":       "Cheerful · upbeat",
+    "Fenrir":     "Heavy · deep",
+}
+
+AVAILABLE_VOICES = list(VOICE_CHARACTERS.keys())
+DEFAULT_VOICE    = "Sulafat"
 
 
 def get_voice() -> str:
@@ -172,17 +191,21 @@ def save_thinking_enabled(enabled: bool) -> None:
 def get_turn_tuning() -> dict:
     """How eagerly the server decides you have stopped speaking.
 
-    OFF by default, and that default was earned. Cutting turns shorter looks
-    like a free speed win and is not: proactive audio has to judge whether an
-    utterance was even addressed to the assistant, and a turn clipped early
+    ON by default, and tightened for a snappy conversation: this assistant is
+    judged on how fast it starts talking, so a short `silence_ms` and a high
+    end-sensitivity make replies begin almost the moment you finish a sentence.
+
+    The trade-off, historically, is real: proactive audio has to judge whether
+    an utterance was even addressed to the assistant, and a turn clipped early
     gives it less to judge, so it stays quiet — and the reply to your first
     sentence only arrives once your second one has given it enough context.
-    That reads as the assistant being a turn behind, which is far worse than
-    the fraction of a second the tuning saves.
+    That read as the assistant being a turn behind. It still beats a long
+    dead pause, and the model compensates by asking a half-sentence in rather
+    than waiting. If replies ever feel clipped, `silence_ms` is the one knob
+    to reach for: raise it in small steps.
 
-    Turn it on with "turn_tuning": {"enabled": true} if your own microphone and
-    speaking pace suit it. `silence_ms` is the one that is felt: the pause the
-    server sits through before accepting your turn is over.
+    `silence_ms` is the pause the server sits through before accepting your
+    turn is over.
     """
     cfg = load_api_keys().get("turn_tuning")
     cfg = cfg if isinstance(cfg, dict) else {}
@@ -194,8 +217,8 @@ def get_turn_tuning() -> dict:
             return default
 
     return {
-        "enabled":    bool(cfg.get("enabled", False)),
-        "silence_ms": _int("silence_ms", 550, 200, 3000),
+        "enabled":    bool(cfg.get("enabled", True)),
+        "silence_ms": _int("silence_ms", 450, 200, 3000),
         "prefix_ms":  _int("prefix_ms", 150, 0, 1000),
         # "high" = quicker to decide speech has ended.
         "end_sensitivity":   str(cfg.get("end_sensitivity", "high")).lower(),
