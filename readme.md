@@ -1,7 +1,7 @@
 # 🧊 ICE JARVIS
 ### The Ultimate Cross-Platform Personal AI Assistant
 
-> 🔗 **[GitHub — idkunknown657-cell/ICE-JARVIS-](https://github.com/idkunknown657-cell/ICE-JARVIS-)**
+> 🔗 **[GitHub — idkunknown657-cell/ICE-JARVIS](https://github.com/idkunknown657-cell/ICE-JARVIS)**
 
 A real-time voice AI that can hear, see, speak, and control your computer — on any OS. Supports Windows, macOS, and Linux. Built on the Gemini Live API for native audio streaming, delivering zero subscriptions and total digital autonomy.
 
@@ -279,8 +279,8 @@ It is held in memory only, deliberately: writing it to disk would make a fresh l
 ## ⚡ Quick Start
 
 ```bash
-git clone https://github.com/idkunknown657-cell/ICE-JARVIS-.git
-cd ICE-JARVIS-
+git clone https://github.com/idkunknown657-cell/ICE-JARVIS.git
+cd ICE-JARVIS
 python setup.py        # installs deps for YOUR OS + the browser automation engine
 python main.py
 ```
@@ -441,4 +441,4 @@ Engineered by a developer building a real-world JARVIS-style assistant.
 | Platform | Link |
 | --- | --- |
 | GitHub | [idkunknown657-cell](https://github.com/idkunknown657-cell) |
-| Repository | [ICE-JARVIS-](https://github.com/idkunknown657-cell/ICE-JARVIS-) |
+| Repository | [ICE-JARVIS](https://github.com/idkunknown657-cell/ICE-JARVIS) |
