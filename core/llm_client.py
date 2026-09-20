@@ -54,7 +54,7 @@ def get_llm_provider() -> str:
 
 def _load_config() -> dict:
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
 

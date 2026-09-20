@@ -199,7 +199,7 @@ def api_key(refresh: bool = False) -> str:
         if _cached_key is not None and not refresh:
             return _cached_key
         try:
-            data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
+            data = json.loads(_KEY_FILE.read_text(encoding="utf-8-sig"))
             _cached_key = str(data.get("gemini_api_key") or "")
         except Exception:
             _cached_key = ""

@@ -59,7 +59,7 @@ def load_memory() -> dict:
         return _empty_memory()
     with _lock:
         try:
-            data = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+            data = json.loads(MEMORY_PATH.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict):
                 base = _empty_memory()
                 for key in base:
@@ -479,7 +479,7 @@ def pop_last_session() -> dict | None:
         if not MEMORY_PATH.exists():
             return None
         try:
-            memory   = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+            memory   = json.loads(MEMORY_PATH.read_text(encoding="utf-8-sig"))
             sessions = memory.get("sessions", [])
             if not isinstance(sessions, list) or not sessions:
                 return None

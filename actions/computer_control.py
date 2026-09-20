@@ -41,7 +41,7 @@ _MEMORY_PATH  = _BASE / "memory" / "long_term.json"
 
 def _load_config() -> dict:
     try:
-        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
 
@@ -147,7 +147,7 @@ def _user_profile() -> dict:
     """Read identity fields from long-term memory."""
     try:
         if _MEMORY_PATH.exists():
-            data     = json.loads(_MEMORY_PATH.read_text(encoding="utf-8"))
+            data     = json.loads(_MEMORY_PATH.read_text(encoding="utf-8-sig"))
             identity = data.get("identity", {})
             return {k: v.get("value", "") for k, v in identity.items()}
     except Exception:

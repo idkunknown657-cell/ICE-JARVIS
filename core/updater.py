@@ -271,7 +271,7 @@ def complete_update() -> str | None:
     try:
         exe_dir  = _exe_dir()
         marker   = exe_dir / ".update" / "pending.json"
-        data     = json.loads(marker.read_text(encoding="utf-8")) if marker.exists() else {}
+        data     = json.loads(marker.read_text(encoding="utf-8-sig")) if marker.exists() else {}
         version  = str(data.get("version") or "")
         marker.unlink(missing_ok=True)
         (exe_dir / ".update" / "JARVIS.exe.new").unlink(missing_ok=True)

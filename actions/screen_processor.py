@@ -47,7 +47,7 @@ _CONFIG_PATH = _BASE / "config" / "api_keys.json"
 
 def _load_config() -> dict:
     try:
-        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
 

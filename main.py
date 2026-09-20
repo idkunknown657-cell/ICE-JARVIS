@@ -289,13 +289,13 @@ def _render_prompt(template: str, values: dict) -> str:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    with open(API_CONFIG_PATH, "r", encoding="utf-8-sig") as f:
         return json.load(f)["gemini_api_key"]
 
 
 def _load_system_prompt() -> str:
     try:
-        return PROMPT_PATH.read_text(encoding="utf-8")
+        return PROMPT_PATH.read_text(encoding="utf-8-sig")
     except Exception:
         return (
             "You are JARVIS, Tony Stark's AI assistant. "
@@ -960,7 +960,7 @@ class JarvisLive:
 
         # Load customization from config
         try:
-            _cfg = json.loads(open(API_CONFIG_PATH, encoding="utf-8").read())
+            _cfg = json.loads(open(API_CONFIG_PATH, encoding="utf-8-sig").read())
             self._asst_name = (_cfg.get("assistant_name") or "JARVIS").strip()
             _user_name = (_cfg.get("user_name") or "").strip()
         except Exception:

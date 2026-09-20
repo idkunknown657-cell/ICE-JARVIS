@@ -734,7 +734,7 @@ def _get_epic_games() -> list[dict]:
     games = []
     for item_file in manifests.glob("*.item"):
         try:
-            data = json.loads(item_file.read_text(encoding="utf-8"))
+            data = json.loads(item_file.read_text(encoding="utf-8-sig"))
             name = data.get("DisplayName") or data.get("AppName", "")
             if name:
                 games.append({"id": data.get("AppName", ""), "name": name})

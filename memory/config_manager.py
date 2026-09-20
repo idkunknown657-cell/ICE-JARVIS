@@ -23,7 +23,7 @@ def save_api_keys(gemini_api_key: str) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
 
@@ -38,7 +38,7 @@ def load_api_keys() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        return json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
     except Exception as e:
         print(f"❌ Failed to load api_keys.json: {e}")
         return {}
@@ -67,7 +67,7 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     data["assistant_name"] = assistant_name.strip() or "JARVIS"
@@ -115,7 +115,7 @@ def save_voice(voice_name: str) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     v = (voice_name or "").strip()
@@ -133,7 +133,7 @@ def save_wake_word_enabled(enabled: bool) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     data["wake_word_enabled"] = bool(enabled)
@@ -231,7 +231,7 @@ def save_turn_tuning(values: dict) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     cur = data.get("turn_tuning")
@@ -281,7 +281,7 @@ def _save_flag(key: str, value) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     data[key] = bool(value) if isinstance(value, bool) else value
@@ -297,7 +297,7 @@ def save_brief_enabled(enabled: bool) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     data["morning_brief_enabled"] = enabled
@@ -321,7 +321,7 @@ def _patch_config(**fields) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     data.update(fields)
@@ -376,7 +376,7 @@ def save_plugin_config(namespace: str, values: dict) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     pc = data.get("plugin_config")
@@ -396,7 +396,7 @@ def save_plugin_enabled(plugin_name: str, enabled: bool) -> None:
     data: dict = {}
     if CONFIG_FILE.exists():
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             data = {}
     plugins_cfg = data.get("plugins_enabled")
