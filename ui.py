@@ -19,8 +19,9 @@ else:
     _WIN_HIDE: dict = {}
 
 from PyQt6.QtCore import (
-    QEasingCurve, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,
-    QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
+    QAbstractAnimation, QEasingCurve, QLineF, QMimeData, QObject,
+    QParallelAnimationGroup, QPointF, QPropertyAnimation, QRect, QRectF, QSize,
+    Qt, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
@@ -28,9 +29,10 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
+    QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
+    QSizePolicy, QSplitter, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
+    QProgressBar,
 )
 
 try:
@@ -59,7 +61,7 @@ def _read_full_config() -> dict:
 
 # Single source of truth for the release name — the window title, the header
 # badge and the readme must never disagree again.
-APP_VERSION  = "MARK LIV"
+APP_VERSION  = "ICE JARVIS"
 APP_PROTOCOL = APP_VERSION.split()[-1]
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
@@ -408,6 +410,12 @@ class HudCanvas(QWidget):
             self.hud_style = get_hud_style()
         except Exception:
             self.hud_style = "face"
+        # How much ambient motion to draw — set live from ⚙ → ANIMATION.
+        try:
+            from memory.config_manager import get_ui_animation
+            self._anim_level = get_ui_animation()
+        except Exception:
+            self._anim_level = "full"
         self._core_phase = 0.0
 
         self._tick       = 0
@@ -419,6 +427,12 @@ class HudCanvas(QWidget):
         self._step_t     = time.time()
         self._blink      = True
         self._blink_tick = 0
+
+        # Ambient particle drift layer (rebuilt on resize; gated by _anim_level).
+        self._particles: list[list]   = []
+        self._particle_key: tuple     | None = None
+        # Soft "voice pulse" ring while speaking — rises and fades each beat.
+        self._speak_pulse = 0.0
 
         # Rescaled-face cache: the smooth rescale is expensive, so we keep the
         # last result and only rebuild it when the (quantised) size changes.
@@ -521,6 +535,32 @@ class HudCanvas(QWidget):
         if lv > self._live_amp:
             self._live_amp = lv
 
+    def set_ui_animation(self, level: str) -> None:
+        """Live animation-level switch (from ⚙ → ANIMATION). Takes effect next
+        frame — no rebuild needed."""
+        self._anim_level = level if level in ("full", "light", "off") else "full"
+
+    def _ensure_particles(self, W: int, H: int) -> None:
+        """Build the ambient particle layer once per size/level. Particles are
+        just (x, y, speed, radius, phase); the step loop moves them and the
+        paint loop draws them — no allocation in the hot path."""
+        key = (W, H, self._anim_level)
+        if self._particle_key == key:
+            return
+        self._particle_key = key
+        if self._anim_level == "off":
+            self._particles.clear()
+            return
+        density = 55 if self._anim_level == "full" else 22
+        n = max(4, min(70, (W * H) // density))
+        rnd = random.random
+        self._particles = [[
+            rnd() * W, rnd() * H,                 # x, y
+            6.0 + rnd() * 20.0,                   # upward speed (px/s)
+            0.6 + rnd() * 1.6,                    # radius
+            rnd() * 6.28318,                      # phase (for alpha flicker)
+        ] for _ in range(n)]
+
     def _make_grid(self, W: int, H: int) -> QPixmap:
         """Pre-render the static grid-dot background into a transparent pixmap so
         paintEvent can blit it once per frame instead of running a nested
@@ -592,15 +632,16 @@ class HudCanvas(QWidget):
         else:
             # Fallback core: slow "breathing" base target, lifted by the level.
             if now - self._last_t > (0.12 if self.speaking else 0.5):
+                calm = self._anim_level == "off"
                 if self.speaking:
                     self._base_scale = 1.03
                     self._base_halo  = 122.0
                 elif self.muted:
-                    self._base_scale = random.uniform(0.998, 1.002)
-                    self._base_halo  = random.uniform(15, 28)
+                    self._base_scale = 1.0 if calm else random.uniform(0.998, 1.002)
+                    self._base_halo  = 18.0 if calm else random.uniform(15, 28)
                 else:
-                    self._base_scale = random.uniform(1.001, 1.008)
-                    self._base_halo  = random.uniform(48, 68)
+                    self._base_scale = 1.0 if calm else random.uniform(1.001, 1.008)
+                    self._base_halo  = 55.0 if calm else random.uniform(48, 68)
                 self._last_t = now
 
             if self.muted:
@@ -615,6 +656,26 @@ class HudCanvas(QWidget):
             sp = 0.38 if self.speaking else (0.30 if amp > 0.02 else 0.15)
             self._scale += (self._tgt_scale - self._scale) * sp
             self._halo  += (self._tgt_halo  - self._halo)  * sp
+
+        # ── ambient particles ───────────────────────────────────────────────
+        # A slow upward drift of dim motes behind the head — the cheapest thing
+        # on the canvas (≤70 dots) and the first thing turned off in LIGHT/OFF.
+        if self._anim_level != "off":
+            W, H = self.width(), self.height()
+            self._ensure_particles(W, H)
+            for _pt in self._particles:
+                _pt[1] -= _pt[2] * dt
+                if _pt[1] < -8.0:
+                    _pt[1] = H + 8.0
+                    _pt[0] = random.random() * W
+        elif self._particles:
+            self._particles.clear()
+            self._particle_key = None
+
+        # Soft expanding ring that breathes while JARVIS talks — a "voice pulse"
+        # around the head. Loop value only; paint decides the geometry.
+        _pulse = (math.sin(self._core_phase * 2.4) + 1.0) * 0.5
+        self._speak_pulse = _pulse if self.speaking else 0.0
 
         self._blink_tick += 1
         if self._blink_tick >= 38:
@@ -835,6 +896,15 @@ class HudCanvas(QWidget):
             self._grid_key   = _gkey
         p.drawPixmap(0, 0, self._grid_cache)
 
+        # ── ambient particles ───────────────────────────────────────────────
+        if self._particles:
+            tw = (self._tick * 0.05) % 6.28318
+            for x0, y0, spd, rad, ph in self._particles:
+                a = 0.06 + 0.10 * (0.5 + 0.5 * math.sin(ph + tw))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(qcol(C.PRI_DIM, int(255 * a)))
+                p.drawEllipse(QPointF(x0, y0), rad, rad)
+
         # ── holographic head ────────────────────────────────────────────────
         # Sized to the band between the top of the canvas and the status line,
         # capped by width, so it fills the HUD at any window size — including
@@ -859,6 +929,13 @@ class HudCanvas(QWidget):
                 else:
                     _acc = qcol(C.PRI)
             self._avatar.paint(p, cx, _head_cy, _r_head, _main, _acc, qcol(C.BG))
+
+        # voice pulse — a soft ring that swells and fades while JARVIS speaks
+        if self._speak_pulse > 0.02 and self._anim_level != "off":
+            _pr = fw * (0.36 + 0.14 * self._speak_pulse)
+            p.setPen(QPen(qcol(C.PRI, int(26 + 26 * self._speak_pulse)), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QPointF(cx, cy + fw * 0.06), _pr, _pr * 0.42)
 
         # reactor core — the other centrepiece, and the fallback if the head
         # could not be built. There is no third path: the old face.png branch
@@ -906,8 +983,9 @@ class HudCanvas(QWidget):
                 hgt, cl = 2, qcol(C.MUTED_C)
             else:
                 env     = (1.0 - abs(i - mid) / mid) ** 0.7      # center-weighted hump
-                shimmer = 0.55 + 0.45 * math.sin(self._tick * 0.18 + i * 0.7)
-                idle    = 3.0 + 2.0 * math.sin(self._tick * 0.09 + i * 0.6)
+                _shim   = 0.0 if self._anim_level == "off" else 1.0
+                shimmer = 0.55 + 0.45 * _shim * math.sin(self._tick * 0.18 + i * 0.7)
+                idle    = 3.0 + 2.0 * _shim * math.sin(self._tick * 0.09 + i * 0.6)
                 hgt     = int(max(2, min(24, idle + amp * 22.0 * env * shimmer)))
                 if amp > 0.05:
                     cl = qcol(C.PRI) if hgt > 12 else qcol(C.PRI_DIM)
@@ -1591,13 +1669,16 @@ class HueWheel(QWidget):
 
 
 class CustomizeOverlay(QWidget):
-    """Floating overlay — change assistant name, user name, UI colour and voice."""
+    """Floating overlay — assistant name, user name, UI colour, voice, HUD
+    centrepiece style and how much ambient animation the HUD draws."""
 
-    saved = pyqtSignal(str, str, str, str)   # assistant_name, user_name, ui_color, voice
-    _OW, _OH = 400, 588
+    # assistant_name, user_name, ui_color, voice, hud_style, animation
+    saved = pyqtSignal(str, str, str, str, str, str)
+    _OW, _OH = 404, 730
 
     def __init__(self, assistant_name="JARVIS", user_name="",
-                 ui_color=DEFAULT_UI_COLOR, voice="", parent=None):
+                 ui_color=DEFAULT_UI_COLOR, voice="", hud_style="face",
+                 animation="full", parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
@@ -1677,6 +1758,48 @@ class CustomizeOverlay(QWidget):
         lay.addWidget(self._voice_desc)
         self._refresh_voice_btns()
 
+        # ── HUD centrepiece — animated face vs reactor core ─────────────────
+        lay.addSpacing(4)
+        lay.addWidget(_lbl("HUD STYLE", 8, color=C.TEXT_DIM,
+                           align=Qt.AlignmentFlag.AlignLeft))
+        self._sel_hud = hud_style if hud_style in ("face", "core") else "face"
+        self._hud_btns: dict[str, QPushButton] = {}
+        hud_row = QHBoxLayout(); hud_row.setSpacing(4)
+        for _v, _tag in (("face", "ANIMATED FACE"), ("core", "REACTOR CORE")):
+            b = QPushButton(f"🧑  {_tag}" if _v == "face" else f"◉  {_tag}")
+            b.setCheckable(True)
+            b.setFixedHeight(28)
+            b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, name=_v: self._on_hud_pick(name))
+            self._hud_btns[_v] = b
+            hud_row.addWidget(b)
+        lay.addLayout(hud_row)
+        self._refresh_hud_btns()
+
+        # ── Ambient animation level ─────────────────────────────────────────
+        lay.addSpacing(4)
+        lay.addWidget(_lbl("ANIMATION  —  ambient motion on the HUD", 8,
+                           color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
+        self._sel_anim = animation if animation in ("full", "light", "off") else "full"
+        self._anim_btns: dict[str, QPushButton] = {}
+        anim_row = QHBoxLayout(); anim_row.setSpacing(4)
+        for _v, _tag in (("full", "FULL"), ("light", "LIGHT"), ("off", "OFF")):
+            b = QPushButton(_tag)
+            b.setCheckable(True)
+            b.setFixedHeight(28)
+            b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, name=_v: self._on_anim_pick(name))
+            self._anim_btns[_v] = b
+            anim_row.addWidget(b)
+        lay.addLayout(anim_row)
+        anim_hint = _lbl("FULL — particles + breathing glow · LIGHT — calmer, "
+                         "lower CPU · OFF — still reacts to your voice",
+                         7, color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(anim_hint)
+        self._refresh_anim_btns()
+
         # ── UI colour — colour wheel ─────────────────────────────────────────
         lay.addSpacing(4)
         clr_hdr = QHBoxLayout()
@@ -1716,6 +1839,26 @@ class CustomizeOverlay(QWidget):
         self._hex_input.setStyleSheet(_fs)
         self._hex_input.textEdited.connect(self._on_hex_edited)
         lay.addWidget(self._hex_input)
+
+        # ── quick preset swatches ───────────────────────────────────────────
+        lay.addWidget(_lbl("PRESETS", 8, color=C.TEXT_DIM,
+                           align=Qt.AlignmentFlag.AlignLeft))
+        pres_row = QHBoxLayout(); pres_row.setSpacing(5)
+        for _name, _hex in (("CYAN", "#00d4ff"), ("AMBER", "#ffaa00"),
+                            ("VIOLET", "#a44dff"), ("ROSE", "#ff4d6d"),
+                            ("EMERALD", "#00e6a3")):
+            _b = QPushButton()
+            _b.setFixedSize(30, 24)
+            _b.setCursor(Qt.CursorShape.PointingHandCursor)
+            _b.setToolTip(f"{_name}  {_hex}")
+            _b.setStyleSheet(
+                f"QPushButton {{ background: {_hex}; border: 1px solid {C.BORDER_B};"
+                f" border-radius: 3px; }}"
+                f"QPushButton:hover {{ border: 2px solid {C.WHITE}; }}")
+            _b.clicked.connect(lambda _=False, h=_hex: self._set_color(h))
+            pres_row.addWidget(_b)
+        pres_row.addStretch()
+        lay.addLayout(pres_row)
 
         lay.addSpacing(6)
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
@@ -1819,8 +1962,40 @@ class CustomizeOverlay(QWidget):
     def _save(self):
         name = self._name_input.text().strip() or "JARVIS"
         user = self._user_input.text().strip()
-        self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice)
+        self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR,
+                        self._sel_voice, self._sel_hud, self._sel_anim)
         self.hide()
+
+    # ── HUD style / animation pills ─────────────────────────────────────────
+    def _on_hud_pick(self, name: str):
+        self._sel_hud = name
+        self._refresh_hud_btns()
+
+    def _refresh_hud_btns(self):
+        for name, b in self._hud_btns.items():
+            on = (name == self._sel_hud)
+            b.setChecked(on)
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {C.PRI_GHO if on else 'transparent'};
+                    color: {C.PRI if on else C.TEXT_MED};
+                    border: 1px solid {C.PRI if on else C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+            """)
+
+    def _on_anim_pick(self, name: str):
+        self._sel_anim = name
+        self._refresh_anim_btns()
+
+    def _refresh_anim_btns(self):
+        for name, b in self._anim_btns.items():
+            on = (name == self._sel_anim)
+            b.setChecked(on)
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {C.PRI_GHO if on else 'transparent'};
+                    color: {C.PRI if on else C.TEXT_MED};
+                    border: 1px solid {C.PRI if on else C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+            """)
 
 
 class PluginManagerOverlay(QWidget):
@@ -4537,7 +4712,7 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_fl("[F4] Mute  ·  [F11] Fullscreen"))
         lay.addStretch()
-        lay.addWidget(_fl("By FatihMakes", C.PRI_DIM))
+        lay.addWidget(_fl("ICE JARVIS · idkunknown657-cell", C.PRI_DIM))
         return w
 
     def _on_file_selected(self, path: str):
@@ -5015,12 +5190,15 @@ class MainWindow(QMainWindow):
         cfg = _read_full_config()
         if self._customize_overlay:
             self._customize_overlay.hide()
+        from memory.config_manager import get_hud_style, get_ui_animation
         cw = self.centralWidget()
         ov = CustomizeOverlay(
             cfg.get("assistant_name", "JARVIS") or "JARVIS",
             cfg.get("user_name", ""),
             cfg.get("ui_color", "") or DEFAULT_UI_COLOR,
             cfg.get("voice_name", ""),
+            hud_style=get_hud_style(),
+            animation=get_ui_animation(),
             parent=cw,
         )
         ow, oh = CustomizeOverlay._OW, CustomizeOverlay._OH
@@ -5033,6 +5211,7 @@ class MainWindow(QMainWindow):
         ov.on_preview = self._preview_ui_color
         ov.saved.connect(self._apply_name_update)
         ov.show()
+        self._fade_in_overlay(ov)
         self._customize_overlay = ov
 
     def _preview_ui_color(self, hex_color: str):
@@ -5042,7 +5221,8 @@ class MainWindow(QMainWindow):
             retheme_all_widgets(old, current_palette())
 
     def _apply_name_update(self, name: str, user_name: str, ui_color: str = "",
-                           voice: str = ""):
+                           voice: str = "", hud_style: str = "",
+                           animation: str = ""):
         """Update all name/theme-dependent UI elements and persist to config."""
         self._assistant_name = name.strip() or "JARVIS"
         display = self._assistant_name.upper()
@@ -5072,6 +5252,24 @@ class MainWindow(QMainWindow):
                 save_voice(voice)
                 voice_changed = True
 
+        # HUD centrepiece / animation level → persist and apply live, now.
+        if hud_style:
+            from memory.config_manager import save_hud_style
+            save_hud_style(hud_style)
+            try:
+                self.hud.hud_style = hud_style
+                self.hud.update()
+            except Exception:
+                pass
+            self._refresh_hud_btn()
+        if animation:
+            from memory.config_manager import save_ui_animation
+            save_ui_animation(animation)
+            try:
+                self.hud.set_ui_animation(animation)
+            except Exception:
+                pass
+
         try:
             data = _read_full_config()
             data["assistant_name"] = self._assistant_name
@@ -5084,6 +5282,13 @@ class MainWindow(QMainWindow):
                 self._log.append_log(f"SYS: UI colour applied — {ui_color}")
             if voice_changed:
                 self._log.append_log(f"SYS: Voice set — {voice}")
+            if hud_style:
+                self._log.append_log(
+                    "SYS: HUD switched to the animated face."
+                    if hud_style == "face"
+                    else "SYS: HUD switched to the reactor core.")
+            if animation:
+                self._log.append_log(f"SYS: UI animation set to {animation.upper()}")
         except Exception as e:
             self._log.append_log(f"ERR: Config save failed — {e}")
 
@@ -5101,6 +5306,39 @@ class MainWindow(QMainWindow):
         )
         ov.show()
         ov.raise_()
+        self._fade_in_overlay(ov)
+
+    def _fade_in_overlay(self, ov) -> None:
+        """Pop overlays in with a quick fade instead of a hard switch.
+
+        A transient QGraphicsOpacityEffect is removed once the fade finishes so
+        it can never interfere with later painting; the animation object is kept
+        on the window until then so it isn't garbage-collected mid-flight.
+        """
+        try:
+            eff = QGraphicsOpacityEffect(ov)
+            ov.setGraphicsEffect(eff)
+            eff.setOpacity(0.0)
+            anim = QPropertyAnimation(eff, b"opacity", ov)
+            anim.setDuration(170)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(lambda w=ov, a=anim: self._end_overlay_fade(w, a))
+            anim.start(QPropertyAnimation.DeletionPolicy.KeepWhenStopped)
+            self._overlay_anims = getattr(self, "_overlay_anims", [])
+            self._overlay_anims.append(anim)
+        except Exception:
+            pass      # fade is cosmetics — a hard show is always fine
+
+    def _end_overlay_fade(self, ov, anim) -> None:
+        try:
+            ov.setGraphicsEffect(None)
+        except Exception:
+            pass
+        anims = getattr(self, "_overlay_anims", [])
+        if anim in anims:
+            anims.remove(anim)
 
     # ── Audio devices ────────────────────────────────────────────────────────
 

@@ -156,7 +156,7 @@ def get_hud_style() -> str:
     """Which centrepiece the HUD draws: the animated head, or the reactor core.
 
     Taste, not capability — both render in the same software painter and cost
-    about the same. Defaults to the head because that is what MARK LIV shipped
+    about the same. Defaults to the head because that is what ICE JARVIS shipped
     with; anyone who preferred the older look can switch back in ⚙ and the
     choice survives a restart.
     """
@@ -167,6 +167,24 @@ def get_hud_style() -> str:
 def save_hud_style(style: str) -> None:
     s = str(style or "").strip().lower()
     _save_flag("hud_style", s if s in HUD_STYLES else "face")
+
+
+# ── UI animation level ───────────────────────────────────────────────────────
+# How much ambient motion the HUD draws. "off" still reacts to your voice and
+# to JARVIS's state — that is function, not decoration — but drops the idle
+# shimmer, the drifting particles and the breathing halo variation.
+
+UI_ANIMATION_LEVELS = ("full", "light", "off")
+
+
+def get_ui_animation() -> str:
+    v = str(load_api_keys().get("ui_animation", "full")).strip().lower()
+    return v if v in UI_ANIMATION_LEVELS else "full"
+
+
+def save_ui_animation(level: str) -> None:
+    lv = str(level or "").strip().lower()
+    _save_flag("ui_animation", lv if lv in UI_ANIMATION_LEVELS else "full")
 
 
 # ── Live-session tuning ──────────────────────────────────────────────────────
