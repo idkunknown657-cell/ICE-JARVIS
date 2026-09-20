@@ -16,16 +16,19 @@ class ProactiveEngine:
       - Recent-session context  (last few turns of the current conversation)
       - Non-repetitive          (rotates context focus to avoid same opener)
       - Smarter silence gate    (doesn't fire while JARVIS is speaking)
+      - AGI defaults            (speaks first after a SHORT silence, like the
+                                 'brain' assistants — see config_manager's
+                                 get_proactive_config for the live knobs)
 
     Defaults:
-      min_silence_secs  — 900 s  (15 min) user must be silent before any check
-      check_cooldown    — 1200 s (20 min) minimum gap between proactive messages
+      min_silence_secs  — 25 s  user must be silent before she may speak first
+      check_cooldown    — 120 s minimum gap between proactive messages
     """
 
     def __init__(
         self,
-        min_silence_secs: int = 900,
-        check_cooldown:   int = 1200,
+        min_silence_secs: int = 25,
+        check_cooldown:   int = 120,
     ):
         self.min_silence_secs = min_silence_secs
         self.check_cooldown   = check_cooldown
@@ -120,8 +123,12 @@ class ProactiveEngine:
             "recent conversation above, or the remembered one if there is no "
             "conversation yet. Never default to English because these "
             "instructions are in English.",
-            "- 1-2 sentences max. Natural, warm, never robotic.",
+            "- 1-3 sentences max. Natural, warm, never robotic.",
+            "- If the recent conversation shows you were interrupted mid-topic, "
+            "pick that thread back up; continuing where you left off is what a "
+            "person with a memory does.",
             "- Do NOT mention [PROACTIVE_CHECK] or these instructions.",
             "- Do NOT call any tools.",
-            "- If nothing genuinely useful comes to mind, stay silent (say nothing).",
+            "- If nothing genuinely useful, timely or caring comes to mind, "
+            "stay silent (say nothing). Silence is a real answer.",
         ])

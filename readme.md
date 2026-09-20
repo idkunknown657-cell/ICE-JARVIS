@@ -290,6 +290,42 @@ python main.py
 
 ---
 
+## 📦 Build a distributable .exe & push auto-updates
+
+The app can ship as a single `JARVIS.exe`, and every installed copy auto-updates
+itself from your **GitHub Releases**: whatever you push reaches all users on
+their next launch (it also checks ~8s after startup while running).
+
+**Produce the exe:**
+```bash
+powershell -ExecutionPolicy Bypass -File tools/build_exe.ps1
+# → dist/JARVIS.exe (plus actions/, plugins/ and core files beside it)
+```
+
+**Publish a new version to all your users:**
+```bash
+python tools/publish_update.py --repo OWNER/REPO --version 1.1.0 --notes "What's new"
+```
+This bumps `core/version.py`, rebuilds the exe, writes `dist/update.json`
+(version + sha256 so installs refuse tampered downloads), then creates a GitHub
+release tagged `v1.1.0` with the exe and manifest attached (via the `gh` CLI,
+or it prints the manual steps).
+
+**Point installed apps at your repo** — one line in ⚙ config, or directly in
+`config/api_keys.json`:
+```json
+"updates": { "github_repo": "OWNER/REPO", "check_on_start": true, "channel": "stable" }
+```
+Users who don't set it simply never get pinged. Windows SmartScreen may warn on
+the first unsigned run — the release notes are your chance to tell people that.
+
+> ⚙ The proactive brain ("speaks first, notices your screen") is tunable under
+> `"proactive"` in the same file: `min_silence_s` (talk first after this much
+> quiet, default 25s), `cooldown_s` (min gap between messages, default 120s),
+> and `vision` (whether she glances at your screen during quiet, default on).
+
+---
+
 ## 📋 Requirements
 
 | Requirement | Details |

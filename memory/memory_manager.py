@@ -165,6 +165,22 @@ def update_memory(memory_update: dict) -> dict:
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
     return memory
 
+
+def is_proactive_muted() -> bool:
+    """Whether the user has told JARVIS to be quiet until spoken to again.
+
+    She records it via save_memory (identity.proactive_mute = 'true') when
+    asked to shush; the app clears it the moment the user speaks again."""
+    m = load_memory()
+    entry = ((m.get("identity") or {}).get("proactive_mute") or {})
+    return str(entry.get("value", "")).strip().lower() in (
+        "true", "1", "yes", "on", "mute", "muted", "quiet")
+
+
+def set_proactive_muted(flag: bool) -> None:
+    """Set (or clear) the quiet flag used by the proactive brain."""
+    update_memory({"identity": {"proactive_mute": {"value": "true" if flag else "false"}}})
+
 def _entry_value(entry) -> str:
     """Accept both the {'value': ..., 'updated': ...} shape and a bare string,
     because early versions of the store wrote plain strings."""

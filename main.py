@@ -53,6 +53,7 @@ from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     save_session_summary, pop_last_session,
     search_memory, set_trim_notifier,
+    is_proactive_muted, set_proactive_muted,
 )
 
 # The file-backed tools (open_app, web_search, browser_control, …) are no longer
@@ -72,6 +73,7 @@ from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
+    get_proactive_config, get_updates_config,
 )
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
@@ -80,6 +82,10 @@ from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core.viseme               import VisemeStream
+from core.updater              import (
+    check_for_update, download_update, apply_update, complete_update,
+)
+from core.version              import APP_VERSION
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
@@ -1945,14 +1951,17 @@ class JarvisLive:
 
     async def _run_proactive_mode(self) -> None:
         """
-        Background task: periodically checks if the user has been silent long enough,
-        then hands time + memory context to Gemini so it can decide what (if anything)
-        to say proactively. No hardcoded rules — Gemini makes the call.
+        Background task: periodically checks if the user has been silent long
+        enough, then hands time + memory context to Gemini so it can decide what
+        (if anything) to say proactively. No hardcoded rules — Gemini makes the
+        call. The quiet threshold, cooldown and on/off live in the config
+        (get_proactive_config), so the cadence is tunable per install.
         """
         while True:
-            await asyncio.sleep(60)   # evaluate once per minute
+            await asyncio.sleep(5)   # responsive to config changes, cheap enough
 
-            if not self.session or not self._awake:
+            cfg = get_proactive_config()
+            if not (cfg["enabled"] and self.session and self._awake):
                 continue
 
             with self._speaking_lock:
@@ -1960,6 +1969,16 @@ class JarvisLive:
             if speaking:
                 continue
 
+            # The user said "be quiet". If they have spoken since, lift the
+            # mute; until then, stay silent no matter what.
+            if is_proactive_muted():
+                if (time.monotonic() - self._last_user_speech) < cfg["min_silence_s"]:
+                    set_proactive_muted(False)
+                    print("[Proactive] Mute lifted — user is talking again.")
+                continue
+
+            self._proactive.min_silence_secs = cfg["min_silence_s"]
+            self._proactive.check_cooldown   = cfg["cooldown_s"]
             if not self._proactive.should_trigger(self._last_user_speech):
                 continue
 
@@ -1981,6 +2000,94 @@ class JarvisLive:
                 print("[JARVIS] Proactive check-in.")
             except Exception as e:
                 print(f"[Proactive] ⚠️ {e}")
+
+    async def _run_vision_observation(self) -> None:
+        """
+        The AGI 'eyes': while the user is quietly working, glance at their
+        screen every `observe_s` seconds and hand the frame to the Live model
+        tagged [PROACTIVE_VISION]. She reacts out loud only when there is
+        genuinely something worth saying about what she sees (a file about to
+        be deleted, a new tab, a finished download…) — otherwise she stays
+        silent, exactly like a person who is giving you space. She also obeys
+        a standing "be quiet" and the proactive cooldown, so this can never
+        turn into chatter.
+        """
+        last_look  = time.monotonic()
+
+        while True:
+            await asyncio.sleep(5)
+            cfg = get_proactive_config()
+            if not (cfg["enabled"] and cfg["vision"] and self.session and self._awake):
+                continue
+            if is_proactive_muted():
+                continue
+            with self._speaking_lock:
+                if self._is_speaking:
+                    continue
+            # Only during real quiet, and not more often than configured.
+            if (time.monotonic() - self._last_user_speech) < cfg["min_silence_s"]:
+                continue
+            if (time.monotonic() - last_look) < cfg["observe_s"]:
+                continue
+            # Share the proactive cooldown so the two voice-first channels
+            # together never crowd the user.
+            if (time.monotonic() - self._proactive._last_triggered) < self._proactive.check_cooldown:
+                continue
+            last_look = time.monotonic()
+
+            try:
+                img_b, mime_t = await asyncio.to_thread(_capture_screen)
+                if not img_b:
+                    continue
+            except Exception as e:
+                print(f"[Vision] ⚠️ observe capture: {e}")
+                continue
+
+            import base64 as _b64
+            b64 = _b64.b64encode(img_b).decode("ascii")
+            print(f"[Vision] 👁 observe: {len(img_b):,} bytes")
+            try:
+                await self.session.send_client_content(
+                    turns={"role": "user", "parts": [
+                        {"inline_data": {"mime_type": mime_t, "data": b64}},
+                        {"text":
+                         "[PROACTIVE_VISION]\n"
+                         "The user is quiet and working. You just looked at their "
+                         "screen — react the way a person who notices would. If "
+                         "there is ONE genuinely useful, curious or caring thing "
+                         "to say about what you see, say it briefly and stop. If "
+                         "there is nothing worth saying, stay completely silent."},
+                    ]},
+                    turn_complete=True,
+                )
+            except Exception as e:
+                print(f"[Vision] ⚠️ observe send: {e}")
+
+    async def _run_update_check(self) -> None:
+        """Check GitHub Releases shortly after startup (never blocks boot, never
+        breaks it): log the outcome, and when a newer release exists ask the
+        user via the UI whether to download and install now."""
+        ups = get_updates_config()
+        if not (ups["check_on_start"] and ups["github_repo"]):
+            return
+        repo, channel = ups["github_repo"], ups["channel"]
+        try:
+            await asyncio.sleep(8)   # let the session settle first
+            info = await asyncio.to_thread(check_for_update, repo, channel)
+        except Exception as e:
+            print(f"[Update] ⚠️ check failed: {e}")
+            return
+        if info is None:
+            return
+
+        self.ui.write_log(
+            f"SYS: New version available — v{info.version}: {info.notes or 'update'}")
+        try:
+            self.ui._win._update_sig.emit(
+                json.dumps({"version": info.version, "notes": info.notes,
+                            "exe_url": info.exe_url, "sha256": info.sha256}))
+        except Exception as e:
+            print(f"[Update] ⚠️ prompt failed: {e}")
 
     # ── Phone audio relay ────────────────────────────────────────────────────────
 
@@ -2129,6 +2236,13 @@ class JarvisLive:
                         self.ui.set_state("LISTENING")
                         self.ui.write_log("SYS: JARVIS online.")
 
+                    # Greet a just-applied auto-update (--updated relaunch).
+                    _just_updated = complete_update()
+                    if _just_updated:
+                        self.ui.write_log(f"SYS: ✅ Updated to v{_just_updated}!")
+                    else:
+                        self.ui.write_log(f"SYS: JARVIS v{APP_VERSION}.")
+
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
 
@@ -2141,6 +2255,8 @@ class JarvisLive:
                     tg.create_task(self._run_system_monitor())
                     tg.create_task(self._run_background_monitor())
                     tg.create_task(self._run_proactive_mode())
+                    tg.create_task(self._run_vision_observation())
+                    tg.create_task(self._run_update_check())
                     tg.create_task(self._run_sleep_watch())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())

@@ -2946,6 +2946,7 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    _update_sig     = pyqtSignal(str)     # auto-update available: JSON {version, notes, exe_url, sha256}
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3095,6 +3096,7 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
+        self._update_sig.connect(self._on_update_available)
         self._camera_sig.connect(self._show_camera_frame)
         self._confirm_sig.connect(self._show_confirm_banner)
         self._confirm_hide_sig.connect(self._hide_confirm_banner)
@@ -4906,6 +4908,74 @@ class MainWindow(QMainWindow):
     def _on_wake_install_done(self, ok: bool, msg: str):
         self._log_sig.emit(f"SYS: {'Wake word ready.' if ok else 'Wake word setup failed: ' + msg}")
         self._refresh_wake_btns()
+
+    # ── Auto-update ──────────────────────────────────────────────────────────
+    def _on_update_available(self, payload: str):
+        """Auto-update prompt (from _update_sig): ask the user, download with
+        progress in the activity log, stage the swap, then close so the helper
+        .bat swaps in the new exe and relaunches."""
+        import json as _json
+        try:
+            info = _json.loads(payload)
+        except Exception:
+            return
+        version = str(info.get("version", "?"))
+        notes   = (info.get("notes") or "").strip()
+
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setWindowTitle("JARVIS update available")
+        box.setText(f"An updated JARVIS — v{version} — is ready.")
+        detail = "Download and install it now? The app will close and come back on the new version."
+        if notes:
+            detail = f"What's new:\n{notes}\n\n{detail}"
+        box.setInformativeText(detail)
+        box.setIcon(QMessageBox.Icon.Information)
+        later   = box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        install = box.addButton("Update now", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(install)
+        box.exec()
+        if box.clickedButton() is not install:
+            return
+
+        self._log_sig.emit(f"SYS: ⬇ Downloading JARVIS v{version}…")
+        import threading as _th
+        _th.Thread(target=self._download_and_apply_update, args=(info,), daemon=True).start()
+
+    def _download_and_apply_update(self, info: dict):
+        """Runs off the GUI thread: download → sha256-verify → stage → close.
+        The helper .bat launched by apply_update does the final swap + restart."""
+        from core.updater import UpdateInfo, download_update, apply_update
+        try:
+            obj = UpdateInfo(
+                version=str(info.get("version", "")),
+                notes=str(info.get("notes", "")),
+                exe_url=str(info.get("exe_url", "")),
+                sha256=str(info.get("sha256", "")),
+            )
+            def _prog(done, total):
+                if total:
+                    self._log_sig.emit(f"SYS: ⬇ Update: {done * 100 // total}%")
+            staged = download_update(obj, progress=_prog)
+        except Exception as e:
+            self._log_sig.emit(f"SYS: ⚠ Update download failed: {e}")
+            return
+        try:
+            ok = apply_update(staged, obj.version, obj.notes)
+        except Exception as e:
+            self._log_sig.emit(f"SYS: ⚠ Could not stage the update: {e}")
+            return
+        if not ok:
+            self._log_sig.emit(
+                "SYS: Update downloaded, but the self-update needs the packaged "
+                ".exe to install — this dev run keeps the old build.")
+            return
+        self._log_sig.emit("SYS: ✅ Update staged. Closing to apply it — see you in a second.")
+        try:
+            from PyQt6.QtWidgets import QApplication
+            QTimer.singleShot(1200, QApplication.instance().quit)
+        except Exception:
+            pass
 
     def _tap_wake_manual(self):
         if self.on_wake_manual:

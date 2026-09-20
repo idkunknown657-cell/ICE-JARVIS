@@ -405,3 +405,63 @@ def save_plugin_enabled(plugin_name: str, enabled: bool) -> None:
     plugins_cfg[plugin_name] = enabled
     data["plugins_enabled"] = plugins_cfg
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+# ── Proactive behaviour (the AGI layer: speaks first, notices your screen) ──
+# When JARVIS may talk unprompted: after you have been silent for
+# `min_silence_s` seconds, no more often than every `cooldown_s` seconds, and —
+# with `vision` on — she also glances at your screen every `observe_s` seconds
+# of quiet to react to what you are doing, the way a person actually would.
+
+def get_proactive_config() -> dict:
+    """Return the proactive-brain knobs with working defaults (25s silence to
+    speak first, 2 min between messages, a 45s screen-watch during quiet)."""
+    cfg = load_api_keys().get("proactive")
+    cfg = cfg if isinstance(cfg, dict) else {}
+
+    def _num(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(cfg.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "enabled":       bool(cfg.get("enabled", True)),
+        "min_silence_s": _num("min_silence_s", 25, 5, 3600),
+        "cooldown_s":    _num("cooldown_s", 120, 30, 7200),
+        "observe_s":     _num("observe_s", 45, 10, 3600),
+        "vision":        bool(cfg.get("vision", True)),
+    }
+
+
+def save_proactive_config(values: dict) -> None:
+    """Merge knobs into the stored `proactive` block (only known keys kept)."""
+    allowed = {"enabled", "min_silence_s", "cooldown_s", "observe_s", "vision"}
+    merged = {**get_proactive_config(),
+              **{k: v for k, v in (values or {}).items() if k in allowed}}
+    _patch_config(proactive=merged)
+
+
+# ── Auto-update ──────────────────────────────────────────────────────────────
+# The app polls GitHub Releases of `github_repo` (OWNER/REPO) on startup. The
+# newest release ahead of APP_VERSION is offered to the user; the publisher
+# script tools/publish_update.py attaches the built .exe and a signed
+# update.json manifest to each release.
+
+def get_updates_config() -> dict:
+    """Update settings. `github_repo` is the one thing a publisher must fill in
+    — put the public GitHub repo the app should watch, e.g. "kakud/jarvis"."""
+    cfg = load_api_keys().get("updates")
+    cfg = cfg if isinstance(cfg, dict) else {}
+    return {
+        "github_repo":    str(cfg.get("github_repo", "") or "").strip(),
+        "check_on_start": bool(cfg.get("check_on_start", True)),
+        "channel":        str(cfg.get("channel", "stable") or "stable").strip().lower(),
+    }
+
+
+def save_updates_config(values: dict) -> None:
+    allowed = {"github_repo", "check_on_start", "channel"}
+    merged = {**get_updates_config(),
+              **{k: v for k, v in (values or {}).items() if k in allowed}}
+    _patch_config(updates=merged)
