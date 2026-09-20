@@ -33,6 +33,7 @@ hiddenimports += [
     "core.avatar", "core.avatar_mesh", "core.action_loader",
     "core.plugin_loader", "core.updater", "core.version", "core.echo",
     "core.viseme", "core.confirm", "core.undo", "core.audio_devices",
+    "core.pc_input",
     "actions.proactive", "actions.screen_processor", "actions.system_monitor",
     "actions.background_monitor", "actions.web_search",
 ]
