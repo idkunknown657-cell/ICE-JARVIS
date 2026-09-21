@@ -52,6 +52,7 @@ def _empty_memory() -> dict:
         "relationships": {},
         "wishes":        {},
         "notes":         {},
+        "lessons":       {},
     }
 
 def load_memory() -> dict:
@@ -59,7 +60,7 @@ def load_memory() -> dict:
         return _empty_memory()
     with _lock:
         try:
-            data = json.loads(MEMORY_PATH.read_text(encoding="utf-8-sig"))
+            data = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 base = _empty_memory()
                 for key in base:
@@ -165,22 +166,6 @@ def update_memory(memory_update: dict) -> dict:
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
     return memory
 
-
-def is_proactive_muted() -> bool:
-    """Whether the user has told JARVIS to be quiet until spoken to again.
-
-    She records it via save_memory (identity.proactive_mute = 'true') when
-    asked to shush; the app clears it the moment the user speaks again."""
-    m = load_memory()
-    entry = ((m.get("identity") or {}).get("proactive_mute") or {})
-    return str(entry.get("value", "")).strip().lower() in (
-        "true", "1", "yes", "on", "mute", "muted", "quiet")
-
-
-def set_proactive_muted(flag: bool) -> None:
-    """Set (or clear) the quiet flag used by the proactive brain."""
-    update_memory({"identity": {"proactive_mute": {"value": "true" if flag else "false"}}})
-
 def _entry_value(entry) -> str:
     """Accept both the {'value': ..., 'updated': ...} shape and a bare string,
     because early versions of the store wrote plain strings."""
@@ -201,6 +186,7 @@ _CATEGORY_LABELS = {
     "relationships": "People in their life",
     "wishes":        "Wishes / plans",
     "notes":         "Notes",
+    "lessons":       "Lessons learned (self-improvement)",
 }
 
 _IDENTITY_FIELDS = ["name", "age", "birthday", "city", "job",
@@ -418,7 +404,8 @@ def all_entries_for_ui() -> list[dict]:
     return rows
 
 def remember(key: str, value: str, category: str = "notes") -> str:
-    valid = {"identity", "preferences", "projects", "relationships", "wishes", "notes"}
+    valid = {"identity", "preferences", "projects", "relationships",
+             "wishes", "notes", "lessons"}
     if category not in valid:
         category = "notes"
     update_memory({category: {key: {"value": value}}})
@@ -479,7 +466,7 @@ def pop_last_session() -> dict | None:
         if not MEMORY_PATH.exists():
             return None
         try:
-            memory   = json.loads(MEMORY_PATH.read_text(encoding="utf-8-sig"))
+            memory   = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
             sessions = memory.get("sessions", [])
             if not isinstance(sessions, list) or not sessions:
                 return None

@@ -14,13 +14,6 @@ try:
     _PYAUTOGUI = True
 except ImportError:
     _PYAUTOGUI = False
-    try:
-        # Dependency-free Win32 backend (ctypes/SendInput) — the shipped exe
-        # excludes pyautogui, so computer_settings falls back to this shim to
-        # keep volume keys, hotkeys, scrolling and typing working everywhere.
-        from core import pc_input as pyautogui
-    except Exception:
-        pyautogui = None
 
 try:
     import pyperclip
@@ -46,7 +39,7 @@ def _get_base_dir() -> Path:
 
 def _get_api_key() -> str:
     path = _get_base_dir() / "config" / "api_keys.json"
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 def _get_macos_wifi_interface() -> str:
@@ -794,8 +787,8 @@ def computer_settings(
     player=None,
     session_memory=None,
 ) -> str:
-    if pyautogui is None:
-        return ("No PC control backend available. Run: pip install pyautogui")
+    if not _PYAUTOGUI:
+        return "pyautogui is not installed. Run: pip install pyautogui"
 
     params      = parameters or {}
     raw_action  = params.get("action", "").strip()

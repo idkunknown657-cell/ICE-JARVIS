@@ -1,281 +1,290 @@
-"""Auto-update via GitHub Releases.
-
-The flow:
-
-    1. check_for_update(repo)  — asks GitHub's Releases API for the newest
-       release of `repo` ("OWNER/REPO"). If its tag is ahead of APP_VERSION,
-       returns an UpdateInfo (version, notes, exe URL, sha256).
-    2. download_update(info, ...) — streams the new .exe to a staging folder in
-       the app directory and verifies its sha256 before it is ever used.
-    3. apply_update(...) — writes a tiny pending marker and launches a detached
-       helper .bat that waits for the current app to exit, swaps the new .exe
-       in, and restarts with `--updated` so the app can greet the new version.
-
-The publisher owns the other half: tools/publish_update.py builds the .exe,
-computes its sha256, and attaches the .exe plus an update.json manifest to a
-GitHub release. Every installed copy polls that release at startup, so one
-publish reaches all users.
-
-Design notes:
-    - The update.json manifest is optional-but-recommended: it carries the
-      sha256 and channel. Without it the updater falls back to the release's
-      tag + body and downloads the exe unverified (still better than nothing,
-      but you should always attach the manifest).
-    - Staging lives in the exe directory, NOT in temp: a cross-volume rename
-      would fail the swap. The helper .bat is what survives the process exit —
-      a running exe cannot replace itself.
-    - In source mode (running from python, not a frozen exe) everything up to
-      apply_update works, and apply_update is a safe no-op that tells you so.
 """
+updater.py — self-update for the JARVIS distribution ("push updates from home").
 
+THE FLOW
+    You (the developer) run:  python make_update.py --url <public zip URL>
+        → packs dist/JARVIS into JARVIS_update.zip + writes update.json
+          (version, notes, sha256) for you to upload anywhere static — a GitHub
+          Release, a raw file, a bucket, your own server.
+
+    The app (recipient side) then:
+        check()                — fetch the manifest, compare versions
+        download_and_stage()   — fetch the zip, verify sha256, unpack to staging
+        apply_on_restart()     — write apply_update.bat, hand over, restart
+
+THE BAT (Windows can't overwrite a running exe, so the swap happens after exit)
+    1. wait for the app's PID to disappear (≤60 s)
+    2. robocopy the staged payload OVER the app folder (/E — never /MIR, the
+       user's config/ must survive every update)
+    3. keep the old exe as JARVIS.exe.bak, delete staging, relaunch, self-delete
+
+SAFETY RULES
+    - HTTPS only.  sha256 verified when the manifest carries one.
+    - Never touches config/api_keys.json, memory/, or any personal store:
+      updates copy code and assets over, they never delete.
+    - Every failure is a dict {"ok": False, "err": …} — never an exception
+      crossing into the UI thread.
+
+THE DEFAULT MANIFEST URL is a constant below — point it at YOUR hosted
+update.json to make every shipped exe check your channel. Users (or you, per
+install) can override it with the "update_manifest_url" key in api_keys.json.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import re
+import shutil
 import subprocess
 import sys
-import tempfile
-import threading
-import urllib.request
-from dataclasses import dataclass
+import zipfile
 from pathlib import Path
 
-from core.version import APP_VERSION
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
 
-GITHUB_API = "https://api.github.com/repos/{repo}/releases/latest"
-EXE_NAME   = "ICE.exe"
+VERSION_FILE   = BASE_DIR / "VERSION"
+_CONFIG_FILE   = BASE_DIR / "config" / "api_keys.json"
 
+STAGING_DIR    = BASE_DIR / "update_staging"     # zip + unpacked payload
+STAGED_MARK    = STAGING_DIR / "payload"
+STAGED_VERSION = STAGING_DIR / "STAGED_VERSION"
+APPLY_BAT      = BASE_DIR / "apply_update.bat"
 
-# ── Data ──────────────────────────────────────────────────────────────────────
+# ── point this at YOUR update channel (any HTTPS URL serving update.json) ────
+DEFAULT_MANIFEST_URL = "https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/update.json"
 
-@dataclass
-class UpdateInfo:
-    version: str
-    notes:   str            = ""
-    exe_url: str            = ""
-    sha256:  str            = ""
-    tag:     str            = ""
-    channel: str            = "stable"
-    update_json_url: str    = ""
-
-
-def parse_version(v: str) -> tuple:
-    """'v1.2.3' / '1.2.3' → (1, 2, 3). Non-numeric suffixes are ignored."""
-    m = re.search(r"(\d+)\.(\d+)\.(\d+)", str(v))
-    if not m:
-        return (0, 0, 0)
-    return tuple(int(g) for g in m.groups())
+_DOWNLOAD_TIMEOUT = 30      # per-request seconds
+_MAX_ZIP_BYTES    = 2 * 1024 * 1024 * 1024   # sanity cap: 2 GB
 
 
-def _request(url: str, timeout: float = 15.0) -> bytes:
-    req = urllib.request.Request(url, headers={
-        "User-Agent":   "JARVIS-updater",
-        "Accept":       "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    })
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-
-# ── Check ─────────────────────────────────────────────────────────────────────
+# ── version handling ─────────────────────────────────────────────────────────
 
 def current_version() -> str:
-    return APP_VERSION
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "0.0.0"
+    except Exception:
+        return "0.0.0"
 
 
-def check_for_update(repo: str, channel: str = "stable") -> UpdateInfo | None:
-    """Query GitHub Releases; return UpdateInfo when the newest release is
-    ahead of the running version and matches the channel, else None.
+def _as_tuple(v: str) -> tuple:
+    """'2026.9.20' → (2026, 9, 20). Non-numeric chunks are dropped, so a stray
+    suffix never breaks the comparison."""
+    out: list[int] = []
+    for part in str(v or "").strip().split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out) or (0, 0, 0)
 
-    Raises (e.g. network down, 404, rate limit) — callers decide what that
-    means; a failed check must never break startup.
+
+def is_newer(latest: str, current: str) -> bool:
+    return _as_tuple(latest) > _as_tuple(current)
+
+
+def _manifest_url() -> str:
+    """Config override wins; else the baked-in default channel."""
+    try:
+        cfg = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        url = str(cfg.get("update_manifest_url") or "").strip()
+        if url.startswith("https://"):
+            return url
+    except Exception:
+        pass
+    return DEFAULT_MANIFEST_URL
+
+
+# ── check ────────────────────────────────────────────────────────────────────
+
+def check(timeout: float = _DOWNLOAD_TIMEOUT) -> dict:
+    """Fetch the update manifest. Never raises. Returns:
+    {"ok": bool, "update_available": bool, "current": str, "latest": str,
+     "notes": str, "url": str, "sha256": str, "err": str}
     """
-    repo = (repo or "").strip().strip("/")
-    if not repo or "/" not in repo:
-        raise ValueError("No GitHub repo configured (OWNER/REPO).")
+    import requests
 
-    release = json.loads(_request(GITHUB_API.format(repo=repo)).decode("utf-8"))
-    tag     = str(release.get("tag_name") or "").strip()
-    notes   = str(release.get("body") or "").strip()
-    assets  = release.get("assets") or []
-
-    def _asset_url(name: str) -> str:
-        for a in assets:
-            if str(a.get("name", "")).lower() == name.lower():
-                return str(a.get("browser_download_url") or "")
-        return ""
-
-    info = UpdateInfo(
-        version=tag.lstrip("v"),
-        notes=notes,
-        tag=tag,
-        update_json_url=_asset_url("update.json"),
-    )
-
-    # Manifest wins when present: it carries the sha256 and the channel.
-    if info.update_json_url:
-        try:
-            man = json.loads(_request(info.update_json_url).decode("utf-8"))
-            info.version     = str(man.get("version") or info.version).lstrip("v")
-            info.sha256      = str(man.get("sha256") or "").lower().strip()
-            info.exe_url     = str(man.get("exe_url") or info.exe_url or "").strip()
-            info.notes       = str(man.get("notes") or notes).strip()
-            info.channel     = str(man.get("channel") or "stable").strip().lower()
-        except Exception as e:
-            print(f"[Update] ⚠️ manifest unreadable ({e}); using release data")
-
-    if not info.exe_url:
-        info.exe_url = _asset_url(EXE_NAME)
-    if not info.exe_url:
-        print("[Update] ⚠️ release has no ICE.exe asset")
-        return None
-
-    if info.channel != (channel or "stable").lower():
-        return None
-
-    if parse_version(info.version) <= parse_version(APP_VERSION):
-        return None
-
-    return info
+    current = current_version()
+    out = {"ok": False, "update_available": False, "current": current,
+           "latest": "", "notes": "", "url": "", "sha256": "", "err": ""}
+    url = _manifest_url()
+    if not url:
+        out["err"] = "no update source configured"
+        return out
+    try:
+        r = requests.get(url, timeout=timeout, headers={"Cache-Control": "no-cache"})
+    except Exception as e:
+        out["err"] = f"manifest unreachable ({type(e).__name__})"
+        return out
+    if r.status_code != 200:
+        out["err"] = f"manifest HTTP {r.status_code}"
+        return out
+    try:
+        m = r.json()
+    except Exception:
+        out["err"] = "manifest is not JSON"
+        return out
+    if not isinstance(m, dict):
+        out["err"] = "manifest is not a JSON object"
+        return out
+    latest = str(m.get("version") or "").strip()
+    if not latest:
+        out["err"] = "manifest has no version"
+        return out
+    out.update(ok=True, latest=latest,
+               notes=str(m.get("notes") or "")[:300],
+               url=str(m.get("url") or "").strip(),
+               sha256=str(m.get("sha256") or "").strip().lower())
+    out["update_available"] = is_newer(latest, current) and bool(out["url"])
+    if out["update_available"] and not out["url"].startswith("https://"):
+        out.update(update_available=False,
+                   err="update url is not https — refusing")
+    return out
 
 
-# ── Download ──────────────────────────────────────────────────────────────────
+# ── download + stage ─────────────────────────────────────────────────────────
 
 def _sha256_of(path: Path) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
-def download_update(info: UpdateInfo,
-                    progress: callable | None = None,
-                    timeout: float = 600.0) -> Path:
-    """Stream the new exe to the staging folder, verify its sha256 (when the
-    manifest provided one), and return the staged path."""
-    exe_dir  = _exe_dir()
-    stage    = exe_dir / ".update"
-    stage.mkdir(parents=True, exist_ok=True)
-    dst      = stage / "ICE.exe.new"
+def download_and_stage(progress=None) -> dict:
+    """Download the manifest's zip, verify it, unpack into update_staging/.
+    Returns {"ok": bool, "err": str, "path": str}. Never raises."""
+    import requests
 
-    req = urllib.request.Request(info.exe_url, headers={"User-Agent": "ICE-updater"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        total   = int(r.headers.get("Content-Length") or 0)
-        got     = 0
-        h       = hashlib.sha256()
-        with open(dst, "wb") as f:
-            while True:
-                chunk = r.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
-                h.update(chunk)
-                got += len(chunk)
-                if progress:
-                    progress(got, total)
+    info = check()
+    if not info["ok"]:
+        return {"ok": False, "err": info["err"] or "check failed", "path": ""}
+    if not info["update_available"]:
+        return {"ok": False,
+                "err": f"already up to date ({info['current']})", "path": ""}
 
-    if info.sha256:
-        real = h.hexdigest()
-        if real != info.sha256:
-            dst.unlink(missing_ok=True)
-            raise ValueError(
-                f"sha256 mismatch: expected {info.sha256}, got {real} — refusing to install.")
-    return dst
-
-
-# ── Apply ─────────────────────────────────────────────────────────────────────
-
-def _exe_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(tempfile.gettempdir())
-
-
-def _frozen() -> bool:
-    return bool(getattr(sys, "frozen", False))
-
-
-def apply_update(new_exe: Path, version: str, notes: str = "") -> bool:
-    """Stash the staged exe into the app directory and schedule the swap.
-
-    Returns True when an update is staged and will replace this process on
-    exit; False in source mode (nothing to replace). Safe to call twice —
-    the second call overwrites the pending marker.
-    """
-    if not _frozen():
-        print(f"[Update] Source mode — v{version} staged at {new_exe} but not installed.")
-        return False
-
-    exe_dir  = _exe_dir()
-    target   = exe_dir / EXE_NAME
-    stage    = new_exe if new_exe.parent == exe_dir / ".update" else exe_dir / ".update" / new_exe.name
-    marker   = exe_dir / ".update" / "pending.json"
-    bat      = exe_dir / ".update" / "apply_update.bat"
-
-    marker.write_text(json.dumps({
-        "version": version,
-        "notes":   notes,
-        "target":  str(target),
-        "exe":     str(stage),
-    }, indent=2), encoding="utf-8")
-
-    _write_helper_bat(bat, stage, target, marker)
-
-    # Detached, hidden — it outlives us and swaps once we exit.
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
     try:
-        subprocess.Popen(
-            [str(bat), str(stage), str(target), str(os.getpid()), str(marker)],
-            creationflags=creationflags,
-            close_fds=True,
+        STAGING_DIR.mkdir(parents=True, exist_ok=True)
+        zip_path = STAGING_DIR / "update.zip"
+        with requests.get(info["url"], stream=True, timeout=_DOWNLOAD_TIMEOUT) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length") or 0)
+            done = 0
+            with zip_path.open("wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if done > _MAX_ZIP_BYTES:
+                        raise RuntimeError("update download exceeds size cap")
+                    if progress and total:
+                        progress(done / total)
+        if info["sha256"] and _sha256_of(zip_path) != info["sha256"]:
+            return {"ok": False, "err": "sha256 mismatch — download corrupted",
+                    "path": ""}
+
+        payload = STAGED_MARK
+        shutil.rmtree(payload, ignore_errors=True)
+        payload.mkdir(parents=True)
+        with zipfile.ZipFile(zip_path) as z:
+            names = z.namelist()
+            if any(n.startswith(("/", "\\")) or ".." in Path(n).parts for n in names):
+                return {"ok": False, "err": "unsafe zip layout — refused",
+                        "path": ""}
+            z.extractall(payload)
+
+        # a flat zip (exe at root) and a wrapped zip (dist/JARVIS/…) both work
+        root = _payload_root(payload)
+        if not ((root / "JARVIS.exe").exists() or (root / "main.py").exists()):
+            return {"ok": False, "err": "payload has no JARVIS.exe/main.py",
+                    "path": ""}
+        # keep the version we are moving to, for the record (written OUTSIDE
+        # the root so _payload_root's single-wrapper detection still works)
+        (payload / "STAGED_VERSION").write_text(info["latest"], encoding="utf-8")
+        return {"ok": True, "err": "", "path": str(root),
+                "version": info["latest"], "notes": info["notes"]}
+    except Exception as e:
+        return {"ok": False, "err": f"{type(e).__name__}: {str(e)[:120]}",
+                "path": ""}
+
+
+def _payload_root(payload: Path) -> Path:
+    """Strip a single wrapper folder from the extracted payload if present."""
+    entries = [p for p in payload.iterdir() if p.name != "STAGED_VERSION"]
+    if len(entries) == 1 and entries[0].is_dir() \
+            and not (payload / "JARVIS.exe").exists():
+        return entries[0]
+    return payload
+
+
+# ── apply ────────────────────────────────────────────────────────────────────
+
+def apply_on_restart() -> dict:
+    """Write apply_update.bat and spawn it detached. The CALLER must exit right
+    after (the UI closes the window); the bat waits for this process to die,
+    swaps the files and relaunches. Never raises."""
+    try:
+        payload = STAGED_MARK
+        if not payload.exists():
+            return {"ok": False, "err": "nothing staged"}
+        if os.name != "nt":
+            # POSIX (dev machine): swap in place, no bat needed
+            src_root = _payload_root(payload)
+            for item in src_root.iterdir():
+                dst = BASE_DIR / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dst)
+            shutil.rmtree(STAGING_DIR, ignore_errors=True)
+            return {"ok": True, "err": "", "relaunch": False}
+
+        exe = Path(sys.executable) if getattr(sys, "frozen", False) \
+            else Path(sys.executable)
+        pid = os.getpid()
+        src = str(_payload_root(payload)) + "\\*"
+        # NOTE: goto-style flow on purpose — %tries% inside a parenthesized
+        # block would expand at parse time and never increment.
+        bat = (
+            "@echo off\r\n"
+            "title JARVIS updater\r\n"
+            f"set /a tries=0\r\n"
+            ":wait\r\n"
+            f"tasklist /FI \"PID eq {pid}\" 2>nul | find /I \"{pid}\" >nul\r\n"
+            "if errorlevel 1 goto done\r\n"
+            "timeout /t 1 /nobreak >nul\r\n"
+            "set /a tries+=1\r\n"
+            "if %tries% LSS 60 goto wait\r\n"
+            ":done\r\n"
+            f"if exist \"{exe}\" copy /y \"{exe}\" \"{exe}.bak\" >nul\r\n"
+            f"robocopy \"{src}\" \"{BASE_DIR}\" /E /NFL /NDL /NJH /NJS /NP /R:2 /W:1\r\n"
+            f"rmdir /s /q \"{STAGING_DIR}\"\r\n"
+            f"start \"\" \"{exe}\"\r\n"
+            "del \"%~f0\"\r\n"
         )
+        APPLY_BAT.write_text(bat, encoding="utf-8")
+        # DETACHED so the helper outlives this process no matter how it exits
+        subprocess.Popen(
+            ["cmd", "/c", "start", "/min", str(APPLY_BAT)],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) |
+                          getattr(subprocess, "DETACHED_PROCESS", 0),
+            close_fds=True)
+        return {"ok": True, "err": "", "relaunch": True}
     except Exception as e:
-        print(f"[Update] ⚠️ could not launch helper: {e}")
-        return False
-    return True
+        return {"ok": False, "err": f"{type(e).__name__}: {str(e)[:120]}"}
 
 
-def _write_helper_bat(bat: Path, new: Path, target: Path, marker: Path) -> None:
-    """A tiny .bat that waits for us to exit, swaps the exe, cleans up, restarts.
-
-    Args (%1..%4): new exe, target exe, running PID, marker path.
-    """
-    body = "\r\n".join([
-        "@echo off",
-        "set NEW=%~1",
-        "set TARGET=%~2",
-        "set PID=%~3",
-        "set MARKER=%~4",
-        ":wait",
-        'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
-        "if %errorlevel%==0 (",
-        "  timeout /t 1 /nobreak >nul",
-        "  goto wait",
-        ")",
-        "move /Y \"%NEW%\" \"%TARGET%\" >nul",
-        'start "" "%TARGET%" --updated',
-        "",
-    ])
-    bat.write_text(body, encoding="ascii")
+def pending() -> bool:
+    """True when a verified update is staged and waiting to be applied."""
+    return STAGED_MARK.exists()
 
 
-def complete_update() -> str | None:
-    """Called at startup: when we relaunched with --updated, read the version
-    the helper bat left behind (the marker survives the swap and is deleted
-    HERE, by the new process, so the greeting can name the version)."""
-    if "--updated" not in sys.argv:
-        return None
+def pending_version() -> str:
+    """The version recorded at staging time ("" when nothing is staged).
+    Lets the UI offer "Restart & install vX" without another network check."""
+    if not pending():
+        return ""
     try:
-        exe_dir  = _exe_dir()
-        marker   = exe_dir / ".update" / "pending.json"
-        data     = json.loads(marker.read_text(encoding="utf-8-sig")) if marker.exists() else {}
-        version  = str(data.get("version") or "")
-        marker.unlink(missing_ok=True)
-        (exe_dir / ".update" / "ICE.exe.new").unlink(missing_ok=True)
-        return version or "unknown"
-    except Exception as e:
-        print(f"[Update] ⚠️ complete_update: {e}")
-        return "unknown"
+        return STAGED_VERSION.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""

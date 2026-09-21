@@ -5,12 +5,17 @@
 # never be.
 
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
-config/api_keys.json          # your Gemini API key, plus per-plugin credentials
-config/certs/                 # the dashboard's TLS private key and certificate
-config/whatsapp_web/          # a LINKED WhatsApp session — committing it hands
-                              # somebody your WhatsApp account, not just a key
-**/token*.json                # Google OAuth tokens (Gmail / Calendar plugins)
-**/client_secret*.json        # Google OAuth client secrets
+# Your Gemini API key, plus per-plugin credentials.
+config/api_keys.json
+# The dashboard's TLS private key and certificate.
+config/certs/
+# A LINKED WhatsApp session — committing it hands somebody your WhatsApp
+# account, not just a key.
+config/whatsapp_web/
+# Google OAuth tokens (Gmail / Calendar plugins), OAuth client secrets, and
+# any file that looks like it holds credentials.
+**/token*.json
+**/client_secret*.json
 *credentials*.json
 .env
 .env.*
@@ -48,3 +53,7 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+update_staging/
+apply_update.bat
+ICE_update.zip
+update.json

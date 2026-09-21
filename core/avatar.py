@@ -545,11 +545,16 @@ class HoloAvatar:
         # A rim term for the glass edge plus a key light high on the left. The
         # light leans off-axis on purpose: weight it towards the camera and
         # every front-facing facet returns the same value, which is a flat mask.
-        fres = np.clip(1.0 - nz, 0.0, 2.0) ** 1.7
+        # Premium regrade: a slightly raised floor (deep-lit shadow, never
+        # black), a tighter fresnel for a glass rim, a cool key light from the
+        # upper left and a soft top-down white wash - the "deep blue to cyan to
+        # white" ramp the design calls for, produced entirely by shading.
+        fres = np.clip(1.0 - nz, 0.0, 2.0) ** 1.5
         lam = np.clip(fn[:, 0] * -0.55 + fn[:, 1] * 0.50 + nz * 0.52, 0.0, 1.0)
-        bright = 0.26 + 0.20 * fres + 0.66 * lam ** 1.05
+        bright = 0.30 + 0.22 * fres + 0.60 * lam ** 1.05
+        bright += 0.10 * np.clip(fn[:, 1], 0.0, 1.0) ** 2.0   # top-down wash
         bright *= (self._fade[a][vis] + self._fade[b][vis] + self._fade[c][vis]) / 3.0
-        bright *= 0.88 + 0.24 * amp
+        bright *= 0.90 + 0.22 * amp
 
         idx = np.clip((bright * _LUT_N).astype(np.int32), 0, _LUT_N - 1)
 

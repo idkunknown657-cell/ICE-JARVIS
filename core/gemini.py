@@ -199,7 +199,7 @@ def api_key(refresh: bool = False) -> str:
         if _cached_key is not None and not refresh:
             return _cached_key
         try:
-            data = json.loads(_KEY_FILE.read_text(encoding="utf-8-sig"))
+            data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
             _cached_key = str(data.get("gemini_api_key") or "")
         except Exception:
             _cached_key = ""
@@ -413,12 +413,30 @@ def call(contents, tier: str = FAST, config=None,
 
 def text(contents, tier: str = FAST, config=None,
          timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = "", default: str = "") -> str:
-    """`call`, reduced to the reply text. `default` when nothing answered."""
+    """`call`, reduced to the reply text. `default` when nothing answered.
+
+    When every Gemini model on the ladder fails, and at least one free provider
+    is configured, the fallback answers instead — so proactive checks, screen
+    glances, goal agents and verification keep producing text instead of a
+    silent failure. The fallback is text-only; contents are collapsed to a
+    prompt string for it."""
     resp = call(contents, tier=tier, config=config,
                 timeout_ms=timeout_ms, key=key)
-    if resp is None:
-        return default
-    return (getattr(resp, "text", None) or "").strip() or default
+    if resp is not None:
+        text_ = (getattr(resp, "text", None) or "").strip()
+        if text_:
+            return text_
+    try:
+        from core import free_providers
+        if free_providers.enabled():
+            prompt = free_providers.from_contents(contents)
+            if prompt:
+                got = free_providers.text(prompt)
+                if got:
+                    return got
+    except Exception as e:
+        print(f"[Gemini] free-provider fallback failed: {e}")
+    return default
 
 
 def as_json(contents, tier: str = FAST, config=None,

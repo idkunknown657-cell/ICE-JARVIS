@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ICE JARVIS — AI Assistant</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ══════════════ TITLEBAR ══════════════ -->
+  <header id="titlebar" class="pywebview-drag-region">
+    <div class="brand pywebview-drag-region">
+      <div class="brand-mark" aria-hidden="true"><span>◈</span></div>
+      <div class="brand-text">
+        <div class="brand-name" id="brandName">ICE JARVIS</div>
+        <div class="brand-sub" id="brandSub">AI Assistant</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="mainNav" aria-label="Sections">
+      <button class="nav-btn active" data-view="home" title="Home">Home</button>
+      <button class="nav-btn" data-view="chat"  title="Conversation">Chat</button>
+      <button class="nav-btn" data-view="settings" title="Settings">Settings</button>
+    </nav>
+
+    <div class="title-right">
+      <span class="state-pill" id="statePill" data-state="BOOTING">BOOTING</span>
+      <span class="chip" id="chipCpu" title="CPU usage">CPU --</span>
+      <span class="chip chip-alt" id="chipMem" title="RAM usage">MEM --</span>
+      <span class="chip" id="chipEyes" title="Screen awareness" hidden>👁 OFF</span>
+      <div class="clock pywebview-drag-region">
+        <div class="clock-time" id="clockTime">--:--</div>
+        <div class="clock-date" id="clockDate">&nbsp;</div>
+      </div>
+      <div class="win-controls">
+        <button id="btnMin" class="wbtn" title="Minimise">&#x2013;</button>
+        <button id="btnMax" class="wbtn" title="Maximise / restore">&#x25A1;</button>
+        <button id="btnBg"  class="wbtn" title="Background mode — hide to tray, JARVIS keeps running">&#x2304;</button>
+        <button id="btnClose" class="wbtn wbtn-close" title="Hide to tray (JARVIS keeps running)">&#x2715;</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════════════ MAIN ══════════════ -->
+  <main id="main">
+
+    <!-- ─────────── HOME ─────────── -->
+    <section class="view active" id="view-home">
+      <div class="home-grid">
+
+        <div class="home-face-col">
+          <div class="face-stage pywebview-drag-region" id="faceStage">
+            <canvas id="face" class="pywebview-drag-region" width="640" height="640" aria-label="JARVIS status face"></canvas>
+            <div id="avatar3dMount" class="pywebview-drag-region" hidden></div>
+          </div>
+          <div class="face-caption" id="faceCaption">Initialising…</div>
+
+          <div class="task-chip" id="taskChip" hidden>
+            <span class="task-dot"></span>
+            <span class="task-label" id="taskLabel">Working…</span>
+            <span class="task-done" id="taskDone" hidden>Completed ✓</span>
+          </div>
+        </div>
+
+        <div class="home-side-col">
+          <div class="status-grid">
+            <div class="status-tile" id="tileWake" title="Wake word state">
+              <span class="status-ico">👋</span><span class="status-name">Wake word</span><span class="status-val" id="valWake">—</span>
+            </div>
+            <div class="status-tile" id="tileMic" title="Microphone (F4 to toggle)">
+              <span class="status-ico">🎙</span><span class="status-name">Microphone</span><span class="status-val" id="valMic">Live</span>
+            </div>
+            <div class="status-tile" id="tileEyes" title="Screen awareness">
+              <span class="status-ico">👁</span><span class="status-name">Screen</span><span class="status-val" id="valEyes">Off</span>
+            </div>
+            <div class="status-tile" id="tileMem" title="Persistent memory">
+              <span class="status-ico">🧠</span><span class="status-name">Memory</span><span class="status-val" id="valMemory">—</span>
+            </div>
+          </div>
+
+          <div class="card content-card" id="contentCard" hidden>
+            <div class="card-head">
+              <span class="card-title" id="contentTitle">Content</span>
+              <button class="xbtn" id="contentClose" title="Dismiss">✕</button>
+            </div>
+            <div class="card-body content-body" id="contentBody"></div>
+          </div>
+
+          <div class="card review-card" id="reviewCard" hidden>
+            <div class="card-head">
+              <span class="card-title" id="reviewTitle">Review</span>
+              <button class="xbtn" id="reviewClose" title="Dismiss">✕</button>
+            </div>
+            <div class="card-body content-body" id="reviewBody"></div>
+          </div>
+
+          <div class="card activity-card">
+            <div class="card-head"><span class="card-title">Activity</span>
+              <button class="xbtn" id="activityClear" title="Clear">⌫</button></div>
+            <div class="card-body activity-body" id="activityList"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── CHAT ─────────── -->
+    <section class="view" id="view-chat">
+      <div class="chat-wrap">
+        <div class="chat-scroll" id="chatScroll">
+          <div class="chat-list" id="chatList">
+            <div class="chat-empty" id="chatEmpty">
+              <div class="chat-empty-mark">◈</div>
+              <div class="chat-empty-title">Say hello</div>
+              <div class="chat-empty-sub">Type below or just talk — this is where the conversation lives.</div>
+            </div>
+          </div>
+        </div>
+        <button class="scroll-latest" id="scrollLatest" title="Jump to latest" hidden>↓</button>
+      </div>
+    </section>
+
+    <!-- ─────────── SETTINGS ─────────── -->
+    <section class="view" id="view-settings">
+      <aside class="settings-nav" id="settingsNav"></aside>
+      <div class="settings-body" id="settingsBody">
+        <div class="settings-placeholder">Select a category</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══════════════ INPUT DOCK ══════════════ -->
+  <footer id="dock">
+    <div class="quick-row" id="quickRow"></div>
+    <div class="input-row">
+      <button class="dock-btn" id="btnAttach" title="Attach a file for JARVIS">📎</button>
+      <div class="input-shell">
+        <textarea id="input" rows="1" placeholder="Type a message…  (Enter to send)" spellcheck="false"></textarea>
+        <span class="attach-chip" id="attachChip" hidden><span id="attachName"></span><button id="attachClear" title="Remove">✕</button></span>
+      </div>
+      <button class="dock-btn" id="btnMic" title="Mute / unmute microphone  [F4]">🎙</button>
+      <button class="dock-btn dock-call" id="btnCall" title="Hold to talk (or tap to wake / sleep)">📞</button>
+      <button class="dock-btn dock-stop" id="btnStop" title="Stop JARVIS mid-speech  [Esc]" hidden>⏹</button>
+      <button class="dock-btn dock-send" id="btnSend" title="Send">➤</button>
+    </div>
+  </footer>
+
+  <!-- ══════════════ CAMERA FEED (replaces face while vision is active) ══ -->
+  <div id="cameraView" hidden>
+    <div class="cam-head"><span>◈ CAMERA</span><button class="xbtn" id="camClose">✕</button></div>
+    <img id="camImg" alt="camera">
+  </div>
+
+  <!-- ══════════════ CONFIRM BANNER ══════════════ -->
+  <div class="modal-veil" id="confirmVeil" hidden>
+    <div class="confirm-card" role="alertdialog" aria-modal="true">
+      <div class="confirm-head"><span class="confirm-ico">⚠</span><span id="confirmTitle">Confirm</span></div>
+      <div class="confirm-detail" id="confirmDetail"></div>
+      <div class="confirm-actions">
+        <button class="btn btn-ghost" id="confirmCancel">Cancel</button>
+        <button class="btn btn-danger" id="confirmOk">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SETUP / API KEY ══════════════ -->
+  <div class="setup-veil" id="setupVeil" hidden>
+    <div class="setup-card">
+      <div class="setup-brand"><span class="brand-mark big"><span>◈</span></span></div>
+      <h1 id="setupTitle">Initialise J.A.R.V.I.S</h1>
+      <p class="setup-sub">Configure the assistant before first boot.</p>
+
+      <label class="field-label" for="setupGemini">Gemini API key</label>
+      <div class="key-row">
+        <input type="password" id="setupGemini" class="text-input" placeholder="AIza…" autocomplete="off">
+        <button class="btn btn-ghost" id="setupShow" title="Show / hide">👁</button>
+        <button class="btn btn-ghost" id="setupTest">Test</button>
+      </div>
+      <div class="test-status" id="setupTestStatus"></div>
+
+      <label class="field-label">Optional — free fallback keys <span class="dim">(used when Gemini quota runs out)</span></label>
+      <div id="setupProviders"></div>
+
+      <div class="setup-names">
+        <div class="name-field">
+          <label class="field-label" for="setupAsst">Assistant name</label>
+          <input type="text" id="setupAsst" class="text-input" placeholder="JARVIS" value="JARVIS">
+        </div>
+        <div class="name-field">
+          <label class="field-label" for="setupUser">Your name <span class="dim">(optional)</span></label>
+          <input type="text" id="setupUser" class="text-input" placeholder="Sir">
+        </div>
+      </div>
+
+      <div class="os-row" id="setupOsRow"></div>
+
+      <button class="btn btn-primary setup-go" id="setupGo">▸&nbsp; Initialise systems</button>
+      <div class="setup-msg" id="setupMsg"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════ REMOTE PAIR ══════════════ -->
+  <div class="modal-veil" id="remoteVeil" hidden>
+    <div class="remote-card">
+      <div class="card-head"><span class="card-title">Remote dashboard</span><button class="xbtn" id="remoteClose">✕</button></div>
+      <div class="remote-body">
+        <img id="remoteQr" alt="QR code" hidden>
+        <p class="dim" id="remoteText"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ COMMANDS POPOVER ══════════════ -->
+  <div class="popover" id="cmdPopover" hidden></div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</div>
+
+<script src="js/markdown.js"></script>
+<script src="js/avatar.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-"""
-Local LLM client for MARK XL.
+﻿"""
+Local LLM client for ICE.
 
 Supports two backends — selected via  "llm_provider"  in config/api_keys.json:
 
@@ -54,7 +54,7 @@ def get_llm_provider() -> str:
 
 def _load_config() -> dict:
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
 

@@ -1,19 +1,21 @@
 #computer_control.py
+import ctypes
 import io
 import json
 import platform
-import random
 import re
 import string
 import subprocess
 import sys
+
+if platform.system() == "Windows":
+    _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
+else:
+    _WIN_HIDE: dict = {}
 import time
+import random
 from pathlib import Path
 
-# The engine for every physical action. core/pc_input is a dependency-free
-# Windows backend (ctypes / SendInput), so this whole tool works inside the
-# one-file ICE.exe where pyautogui is deliberately NOT shipped. pyautogui
-# remains only as the non-Windows fallback.
 try:
     import pyautogui
     pyautogui.FAILSAFE = True
@@ -22,21 +24,11 @@ try:
 except ImportError:
     _PYAUTOGUI = False
 
-from core import pc_input    # noqa: E402 — engine must exist for this module to load
-from core import confirm      # noqa: E402 — irreversible-process gate
-from core.undo import push_undo  # noqa: E402 — reversible changes register here
-
-if platform.system() == "Windows":
-    _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
-else:
-    _WIN_HIDE: dict = {}
-
 try:
     import pyperclip
     _PYPERCLIP = True
 except ImportError:
     _PYPERCLIP = False
-
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -48,30 +40,64 @@ _BASE         = _base_dir()
 _CONFIG_PATH  = _BASE / "config" / "api_keys.json"
 _MEMORY_PATH  = _BASE / "memory" / "long_term.json"
 
-
 def _load_config() -> dict:
     try:
-        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
-
 
 def _platform_os() -> str:
     return {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
         platform.system(), "linux"
     )
 
-
 def _get_os() -> str:
     return _load_config().get("os_system", _platform_os()).lower()
+
+
+def _log(msg: str) -> None:
+    """Console logging that can never crash a control action.
+
+    Several consoles default to a legacy codepage (cp1252, cp932...); a stray
+    emoji or a non-Latin character in the text being typed would raise
+    UnicodeEncodeError from a bare `print` and abort the action. Logging is
+    diagnostics, so it degrades to ASCII instead of taking the action down.
+    """
+    try:
+        print(str(msg).encode("ascii", "replace").decode("ascii"))
+    except Exception:
+        pass
 
 
 def _get_api_key() -> str:
     return _load_config().get("gemini_api_key", "")
 
 
-_SAFE_SCREENSHOT_ROOTS = (Path.home(),)
+def _focused_app_name() -> str:
+    """Best-effort focused application name, used to key strategy memory.
+    Falls back to the process' own window title when the foreground query
+    fails; never raises."""
+    try:
+        if platform.system() == "Windows":
+            from win32gui import GetForegroundWindow, GetWindowText
+            title = GetWindowText(GetForegroundWindow()) or ""
+        else:
+            title = ""
+        if not title:
+            try:
+                import pyautogui
+                aw = pyautogui.getActiveWindow()
+                title = getattr(aw, "title", "") or ""
+            except Exception:
+                title = ""
+        return (title.split(" - ")[-1].split(" — ")[-1].strip()
+                or "unknown")[:40]
+    except Exception:
+        return "unknown"
 
+_SAFE_SCREENSHOT_ROOTS = (
+    Path.home(),
+)
 
 def _safe_screenshot_path(requested: str | None) -> Path:
     fallback = Path.home() / "Desktop" / "jarvis_screenshot.png"
@@ -87,6 +113,116 @@ def _safe_screenshot_path(requested: str | None) -> Path:
         pass
     return fallback
 
+def _require_pyautogui():
+    if not _PYAUTOGUI:
+        raise RuntimeError("PyAutoGUI not installed. Run: pip install pyautogui")
+
+
+# ── DPI awareness + coordinate mapping ───────────────────────────────────────
+# The mouse-miss bug: on a scaled display (125% / 150% Windows scaling) an
+# unaware process gets a *virtualised* `pyautogui.size()` while the screenshot
+# is captured at *physical* pixels. A coordinate the vision model reads off the
+# screenshot is then in a different space from the one the mouse moves in, so
+# every click lands offset by the scale factor. Two defences:
+#   1. Declare the process per-monitor DPI aware, so the two spaces agree.
+#   2. Never trust them to agree: measure the ratio between the screenshot and
+#      `pyautogui.size()` on every capture and convert explicitly.
+
+def _rescue_pag(fn, *args, **kwargs):
+    """Run a pyautogui mouse op, recovering from the fail-safe corner abort.
+
+    pyautogui aborts EVERY move/click with FailSafeException while the pointer
+    sits at (0,0), and it checks before moving — so even the clearing move is
+    blocked. A remote or virtualised session can idle the cursor there, which
+    makes mouse control look completely dead. On that specific failure we
+    temporarily disable the fail-safe, pull the pointer to the middle of the
+    screen, restore it, and retry once; anything else propagates."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        if _PYAUTOGUI and isinstance(e, pyautogui.FailSafeException):
+            w, h = _screen_size()
+            pyautogui.FAILSAFE = False
+            try:
+                pyautogui.moveTo(max(w // 2, 8), max(h // 2, 8), duration=0.1)
+                time.sleep(0.05)
+            finally:
+                pyautogui.FAILSAFE = True
+            return fn(*args, **kwargs)
+        raise
+
+
+def _enable_dpi_awareness() -> None:
+    """Make this process per-monitor DPI aware on Windows, but never fight a
+    mode the host already set (Qt sets its own early). Best-effort, silent."""
+    if platform.system() != "Windows":
+        return
+    try:
+        aware = ctypes.c_int(0)
+        ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(aware))
+        if aware.value != 0:
+            return                      # already aware - leave it alone
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()    # pre-8.1 fallback
+        except Exception:
+            pass
+
+
+_enable_dpi_awareness()
+
+
+def _screen_size() -> tuple[int, int]:
+    _require_pyautogui()
+    size = pyautogui.size()
+    return int(size[0]), int(size[1])
+
+
+def _clamp_to_screen(x, y) -> tuple[int, int]:
+    """Keep a coordinate inside the screen. A hallucinated or off-by-scale
+    coordinate is a wrong click; a clamped one is merely an edge click.
+
+    Also steers away from the screen's four corners: pyautogui treats every
+    corner as a failsafe-abort point, so parking the pointer on one makes the
+    *next* control call raise FailSafeException. A clamped coordinate must not
+    be able to wedge the controller like that.
+    """
+    w, h = _screen_size()
+    try:
+        cx = int(round(float(x)))
+        cy = int(round(float(y)))
+    except (TypeError, ValueError):
+        cx, cy = 0, 0
+    cx = max(0, min(cx, w - 1))
+    cy = max(0, min(cy, h - 1))
+    if w >= 3 and h >= 3:
+        if cx == 0:
+            cx = 1
+        elif cx == w - 1:
+            cx = w - 2
+        if cy == 0:
+            cy = 1
+        elif cy == h - 1:
+            cy = h - 2
+    return cx, cy
+
+
+def _capture_with_mapping():
+    """Screenshot plus the factor that converts screenshot pixels to mouse
+    coordinates. Returns (pil_image, scale_x, scale_y). scale is 1.0 on a
+    correctly DPI-aware process; it silently corrects the offset when it is not.
+    """
+    _require_pyautogui()
+    img = pyautogui.screenshot()
+    sw, sh = _screen_size()
+    iw, ih = img.size
+    sx = (sw / iw) if iw else 1.0
+    sy = (sh / ih) if ih else 1.0
+    return img, sx, sy
 
 _FIRST_NAMES = [
     "Alex", "Jordan", "Taylor", "Morgan", "Casey", "Riley", "Drew", "Quinn",
@@ -152,453 +288,398 @@ def _random_data(data_type: str) -> str:
 
     return f"random_{data_type}_{random.randint(1000, 9999)}"
 
-
 def _user_profile() -> dict:
     """Read identity fields from long-term memory."""
     try:
         if _MEMORY_PATH.exists():
-            data     = json.loads(_MEMORY_PATH.read_text(encoding="utf-8-sig"))
+            data     = json.loads(_MEMORY_PATH.read_text(encoding="utf-8"))
             identity = data.get("identity", {})
             return {k: v.get("value", "") for k, v in identity.items()}
     except Exception:
         pass
     return {}
 
-
-# ── engine helpers ────────────────────────────────────────────────────────────
-
-def _engine(fn, *args, **kwargs):
-    """Run a pc_input operation, turning failures into a spoken result string."""
-    try:
-        result = fn(*args, **kwargs)
-        return result if isinstance(result, str) else "" if result is None else str(result)
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"Failed: {e}"
-
-
 def _type(text: str, interval: float = 0.03) -> str:
+    _require_pyautogui()
     time.sleep(0.3)
-    return pc_input.key_type(text, interval=interval) or f"Typed: {text[:60]}{'…' if len(text) > 60 else ''}"
+    pyautogui.typewrite(text, interval=interval)
+    return f"Typed: {text[:60]}{'...' if len(text) > 60 else ''}"
 
 
 def _smart_type(text: str, clear_first: bool = True) -> str:
+    _require_pyautogui()
     if clear_first:
         _clear_field()
         time.sleep(0.1)
 
     if len(text) > 20 and _PYPERCLIP:
-        try:
-            pyperclip.copy(text)
-            time.sleep(0.1)
-            paste_key = "command" if _get_os() == "mac" else "ctrl"
-            if _get_os() == "mac" and _PYAUTOGUI:
-                pyautogui.hotkey("command", "v")
-            else:
-                pc_input.key_hotkey("ctrl", "v")
-            return f"Smart-typed (clipboard): {text[:60]}{'…' if len(text) > 60 else ''}"
-        except Exception:
-            pass  # fall through to plain typing
+        pyperclip.copy(text)
+        time.sleep(0.1)
+        paste_key = "command" if _get_os() == "mac" else "ctrl"
+        pyautogui.hotkey(paste_key, "v")
+        return f"Smart-typed (clipboard): {text[:60]}{'...' if len(text) > 60 else ''}"
 
-    pc_input.key_type(text, interval=0.04)
-    return f"Smart-typed: {text[:60]}{'…' if len(text) > 60 else ''}"
+    pyautogui.typewrite(text, interval=0.04)
+    return f"Smart-typed: {text[:60]}{'...' if len(text) > 60 else ''}"
 
 
 def _click(x=None, y=None, button: str = "left", clicks: int = 1) -> str:
-    try:
-        pc_input.mouse_click(x, y, button=button, clicks=clicks)
-    except pc_input._WinNotSupported as e:
-        if _PYAUTOGUI:
-            try:
-                if x is not None and y is not None:
-                    pyautogui.click(x, y, button=button, clicks=clicks)
-                else:
-                    pyautogui.click(button=button, clicks=clicks)
-                return f"Clicked at ({x}, {y}) [{button}]" if x is not None else f"Clicked at current position [{button}]"
-            except Exception as e2:
-                return f"click failed: {e2}"
-        return f"Not available here: {e}"
-    where = f" at ({x}, {y})" if x is not None and y is not None else ""
-    label = "Double-clicked" if clicks == 2 else "Clicked"
-    return f"{label} [{button}]{where}"
+    _require_pyautogui()
+    if x is not None and y is not None:
+        cx, cy = _clamp_to_screen(x, y)
+        _rescue_pag(pyautogui.click, cx, cy, button=button, clicks=clicks)
+        note = "" if (cx, cy) == (int(round(float(x))), int(round(float(y)))) else \
+               f" (clamped from {int(float(x))},{int(float(y))})"
+        return f"{'Double-c' if clicks == 2 else 'C'}licked ({cx}, {cy}) [{button}]{note}"
+    _rescue_pag(pyautogui.click, button=button, clicks=clicks)
+    return f"Clicked at current position [{button}]"
 
 
 def _hotkey(*keys) -> str:
-    try:
-        pc_input.key_hotkey(*keys)
-    except pc_input._WinNotSupported as e:
-        if _PYAUTOGUI:
-            try:
-                pyautogui.hotkey(*keys)
-            except Exception as e2:
-                return f"hotkey failed: {e2}"
-            return f"Hotkey: {'+'.join(keys)}"
-        return f"Not available here: {e}"
+    _require_pyautogui()
+    pyautogui.hotkey(*keys)
     return f"Hotkey: {'+'.join(keys)}"
 
 
-def _press(key: str, hold_ms: float = 0) -> str:
-    try:
-        if hold_ms and hold_ms > 0:
-            pc_input.key_hold(key, hold_ms / 1000.0)
-        else:
-            pc_input.key_press(key)
-    except pc_input._WinNotSupported as e:
-        if _PYAUTOGUI:
-            try:
-                pyautogui.press(key)
-            except Exception as e2:
-                return f"press failed: {e2}"
-            return f"Pressed: {key}"
-        return f"Not available here: {e}"
+def _press(key: str) -> str:
+    _require_pyautogui()
+    pyautogui.press(key)
     return f"Pressed: {key}"
 
 
 def _scroll(direction: str = "down", amount: int = 3) -> str:
-    direction = direction.lower()
-    if direction in ("up", "down"):
-        delta = int(amount) if direction == "up" else -int(amount)
-        try:
-            pc_input.mouse_scroll(delta)
-        except pc_input._WinNotSupported as e:
-            if _PYAUTOGUI:
-                try:
-                    pyautogui.scroll(delta)
-                except Exception as e2:
-                    return f"scroll failed: {e2}"
-                return f"Scrolled {direction} ×{amount}"
-            return f"Not available here: {e}"
-        except Exception as e:
-            return f"scroll failed: {e}"
-        return f"Scrolled {direction} ×{amount}"
-    if direction in ("left", "right"):
-        delta = int(amount) if direction == "right" else -int(amount)
-        try:
-            pc_input.mouse_wheel_raw(delta, horizontal=True)
-        except pc_input._WinNotSupported as e:
-            if _PYAUTOGUI:
-                try:
-                    pyautogui.hscroll(delta)
-                except Exception as e2:
-                    return f"scroll failed: {e2}"
-                return f"Scrolled {direction} ×{amount}"
-            return f"Not available here: {e}"
-        except Exception as e:
-            return f"scroll failed: {e}"
-        return f"Scrolled {direction} ×{amount}"
-    return f"Unknown scroll direction: '{direction}' (use up|down|left|right)"
+    _require_pyautogui()
+    vertical   = direction in ("up", "down")
+    clicks     = amount if direction in ("up", "right") else -amount
+    pyautogui.scroll(clicks) if vertical else pyautogui.hscroll(clicks)
+    return f"Scrolled {direction} x{amount}"
 
 
-def _move(x: int, y: int, relative: bool = False) -> str:
-    try:
-        pc_input.mouse_move(x, y, relative=relative)
-    except pc_input._WinNotSupported as e:
-        if _PYAUTOGUI:
-            try:
-                pyautogui.moveTo(x, y, duration=0.3)
-            except Exception as e2:
-                return f"move failed: {e2}"
-            return f"Mouse → ({x}, {y})"
-        return f"Not available here: {e}"
-    return f"Mouse → ({x}, {y})" + (" (relative)" if relative else "")
+def _mouse_position() -> str:
+    _require_pyautogui()
+    x, y = pyautogui.position()
+    w, h = _screen_size()
+    return f"{int(x)},{int(y)} (screen {w}x{h})"
 
 
-def _drag(x1: int, y1: int, x2: int, y2: int) -> str:
-    return _engine(pc_input.mouse_drag, x1, y1, x2, y2) or f"Dragged ({x1},{y1}) → ({x2},{y2})"
+def _move(x: int, y: int, duration: float = 0.3) -> str:
+    _require_pyautogui()
+    cx, cy = _clamp_to_screen(x, y)
+    _rescue_pag(pyautogui.moveTo, cx, cy, duration=duration)
+    time.sleep(0.05)
+    ax, ay = pyautogui.position()
+    ax, ay = int(round(ax)), int(round(ay))
+    if abs(ax - cx) <= 2 and abs(ay - cy) <= 2:
+        return f"Mouse -> ({cx}, {cy})"
+    # The pointer did not land where it was told: on Windows this is almost
+    # always display scaling with a DPI-unaware process. Say so instead of
+    # reporting a clean move.
+    return (f"Mouse -> requested ({cx}, {cy}) but the pointer is at ({ax}, {ay}) "
+            f"- display scaling/DPI mismatch is moving it; recalibrate with "
+            f"'mouse_position' and use relative moves.")
+
+
+def _move_rel(dx: int, dy: int, duration: float = 0.2) -> str:
+    _require_pyautogui()
+    _rescue_pag(pyautogui.moveRel, int(dx), int(dy), duration=duration)
+    time.sleep(0.05)
+    ax, ay = pyautogui.position()
+    return f"Mouse moved by ({int(dx)}, {int(dy)}) -> now at ({int(ax)}, {int(ay)})"
+
+
+def _drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.5) -> str:
+    _require_pyautogui()
+    sx, sy = _clamp_to_screen(x1, y1)
+    ex, ey = _clamp_to_screen(x2, y2)
+    _rescue_pag(pyautogui.moveTo, sx, sy, duration=0.2)
+    _rescue_pag(pyautogui.dragTo, ex, ey, duration=duration, button="left")
+    return f"Dragged ({sx},{sy}) -> ({ex},{ey})"
 
 
 def _clipboard_get() -> str:
-    return pc_input.clipboard_get()
+    if _PYPERCLIP:
+        return pyperclip.paste()
+    _hotkey("ctrl", "c")
+    time.sleep(0.2)
+    return "(copied - pyperclip unavailable for read)"
 
 
-def _clipboard_set(text: str, paste: bool = True) -> str:
-    try:
-        pc_input.clipboard_set(text)
-    except Exception as e:
-        return f"clipboard_set failed: {e}"
-    if paste:
-        try:
-            _hotkey("ctrl", "v")
-        except Exception:
-            pass
-    return f"Clipboard set: {text[:60]}{'…' if len(text) > 60 else ''}"
+def _clipboard_paste(text: str) -> str:
+    if _PYPERCLIP:
+        pyperclip.copy(text)
+        time.sleep(0.1)
+        _require_pyautogui()
+        paste_key = "command" if _get_os() == "mac" else "ctrl"
+        pyautogui.hotkey(paste_key, "v")
+        return f"Pasted: {text[:60]}{'...' if len(text) > 60 else ''}"
+    return "pyperclip not available"
 
 
 def _screenshot(save_path: str | None = None) -> str:
+    _require_pyautogui()
     path = _safe_screenshot_path(save_path)
-    try:
-        # pc_input.screenshot saves when a path is given and returns it.
-        result = pc_input.screenshot(str(path))
-        return f"Screenshot saved: {result}"
-    except pc_input._WinNotSupported as e:
-        if _PYAUTOGUI:
-            try:
-                img = pyautogui.screenshot()
-                img.save(str(path))
-                return f"Screenshot saved: {path}"
-            except Exception as e2:
-                return f"screenshot failed: {e2}"
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"Screenshot failed: {e}"
+    img  = pyautogui.screenshot()
+    img.save(str(path))
+    return f"Screenshot saved: {path}"
 
 
 def _clear_field() -> str:
-    try:
-        _hotkey("ctrl", "a")
-        time.sleep(0.1)
-        _press("delete")
-    except Exception as e:
-        return f"clear_field failed: {e}"
+    _require_pyautogui()
+    select_key = "command" if _get_os() == "mac" else "ctrl"
+    pyautogui.hotkey(select_key, "a")
+    time.sleep(0.1)
+    pyautogui.press("delete")
     return "Field cleared"
 
+def _focus_window(title: str) -> str:
+    os_name = _get_os()
 
-# ── windows / processes / system ──────────────────────────────────────────────
+    if os_name == "windows":
+        try:
+            script = f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, timeout=5, **_WIN_HIDE,
+            )
+            time.sleep(0.3)
+            return f"Focused window: {title}"
+        except Exception as e:
+            return f"focus_window (Windows) failed: {e}"
 
-def _window_list(limit: int = 30) -> str:
+    if os_name == "mac":
+        script = (
+            f'tell application "System Events" to '
+            f'set frontmost of (first process whose name contains "{title}") to true'
+        )
+        try:
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, timeout=5,
+            )
+            time.sleep(0.3)
+            return f"Focused window: {title}"
+        except Exception as e:
+            return f"focus_window (macOS) failed: {e}"
+
+    if os_name == "linux":
+        try:
+            result = subprocess.run(
+                ["wmctrl", "-a", title],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode == 0:
+                time.sleep(0.3)
+                return f"Focused window: {title}"
+        except FileNotFoundError:
+            pass
+        try:
+            result = subprocess.run(
+                ["xdotool", "search", "--name", title, "windowactivate"],
+                capture_output=True, timeout=5,
+            )
+            time.sleep(0.3)
+            return f"Focused window: {title}"
+        except FileNotFoundError:
+            return "focus_window (Linux) requires wmctrl or xdotool"
+        except Exception as e:
+            return f"focus_window (Linux) failed: {e}"
+
+    return f"focus_window: unknown OS '{os_name}'"
+
+def _grid_overlay(img, step: int = 100):
+    """Draw a labelled coordinate grid over a screenshot.
+
+    Vision models estimate pixel coordinates far better when the coordinate
+    system is on the image than when they have to infer it from a blank
+    screenshot. A labelled grid turns 'somewhere in the middle-left' into
+    'read the nearest red line and count'. Best-effort: if Pillow's text
+    rendering is unavailable the lines alone still help, and any failure
+    returns the original frame untouched.
+    """
     try:
-        rows = pc_input.window_list(limit=int(limit))
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"window_list failed: {e}"
-    if not rows:
-        return "No visible windows found."
-    return "\n".join(f"{hwnd} | {title} | pid {pid}"
-                     for hwnd, title, pid in rows[:int(limit)])
-
-
-def _window_op(action: str, title: str, **kw):
-    fn = {
-        "window_focus":   pc_input.window_focus,
-        "window_minimize": pc_input.window_minimize,
-        "window_maximize": pc_input.window_maximize,
-        "window_restore":  pc_input.window_restore,
-        "window_close":    pc_input.window_close,
-    }.get(action)
-    if fn is None:
-        return f"Unknown window action: '{action}'"
+        from PIL import ImageDraw, ImageFont
+    except Exception:
+        return img
     try:
-        ok = fn(title)
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"{action} failed: {e}"
-    if not ok:
-        return f"Window not found: '{title}'"
-    verb = action.removeprefix("window_").replace("_", " ")
-    return f"{verb.title()} window: {title}"
+        draw = ImageDraw.Draw(img)
+        w, h = img.size
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            font = None
+        for x in range(0, w, step):
+            draw.line([(x, 0), (x, h)], fill=(255, 60, 60), width=1)
+            if font is not None:
+                draw.text((x + 2, 2), str(x), fill=(255, 60, 60), font=font)
+        for y in range(0, h, step):
+            draw.line([(0, y), (w, y)], fill=(255, 60, 60), width=1)
+            if font is not None:
+                draw.text((2, y + 2), str(y), fill=(255, 60, 60), font=font)
+    except Exception:
+        return img
+    return img
 
 
-def _window_move(title: str, x: int, y: int, width=None, height=None) -> str:
-    try:
-        ok = pc_input.window_move(title, int(x), int(y),
-                                  int(width) if width is not None else None,
-                                  int(height) if height is not None else None)
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"window_move failed: {e}"
-    if not ok:
-        return f"Window not found: '{title}'"
-    dims = f", {width}×{height}" if width or height else ""
-    return f"Moved window '{title}' to ({x}, {y}){dims}"
+def _screen_find(description: str, retries: int = 2) -> tuple[int, int] | None:
+    """Locate a UI element by description and return its *screen* coordinates.
 
-
-def _foreground_window() -> str:
-    return pc_input.foreground_window_title() or "(none visible)"
-
-
-def _process_list(filter_str: str = "") -> str:
-    try:
-        rows = pc_input.process_list(filter_str)
-    except Exception as e:
-        return f"process_list failed: {e}"
-    if not rows:
-        return f"No matching processes" + (f" for '{filter_str}'" if filter_str else "") + "."
-    lines = [f"{pid} | {name} | {mem:.0f} MB" for pid, name, mem in rows[:40]]
-    total = f" ({len(rows)} total)" if len(rows) > 40 else ""
-    return "Processes:\n" + "\n".join(lines) + total
-
-
-def _process_start(command: str) -> str:
-    if not command:
-        return "process_start needs a command, app name or path."
-    try:
-        return pc_input.process_start(command)
-    except Exception as e:
-        return f"process_start failed: {e}"
-
-
-def _process_kill(name_or_pid) -> str:
-    try:
-        return pc_input.process_kill(name_or_pid)
-    except Exception as e:
-        return f"process_kill failed: {e}"
-
-
-# ── volumes / brightness / media with undo ────────────────────────────────────
-
-def _volume_up_down(action: str) -> str:
-    before = pc_input.volume_get()
-    try:
-        if action == "volume_up":
-            pc_input.volume_up(steps=int(1))
-        elif action == "volume_down":
-            pc_input.volume_down(steps=int(1))
-        else:
-            pc_input.volume_mute()
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"{action} failed: {e}"
-    if before is not None:
-        push_undo(f"volume ({action})",
-                  lambda b=before: (pc_input.volume_set(b), f"Volume back to {b}%.")[1])
-    return f"Done: {action}."
-
-
-def _volume_set(value: int) -> str:
-    try:
-        before = pc_input.volume_get()
-        pc_input.volume_set(int(value))
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"volume_set failed: {e}"
-    if before is not None:
-        push_undo(f"volume {before}% → {int(value)}%",
-                  lambda b=before: (pc_input.volume_set(b), f"Volume back to {b}%.")[1])
-    return f"Volume set to {int(value)}%."
-
-
-def _brightness_set(value: int) -> str:
-    try:
-        before = pc_input.brightness_get()
-        pc_input.brightness_set(int(value))
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"brightness_set failed: {e}"
-    if before is not None:
-        push_undo(f"brightness {before}% → {int(value)}%",
-                  lambda b=before: (pc_input.brightness_set(b), f"Brightness back to {b}%.")[1])
-    return f"Brightness set to {int(value)}%."
-
-
-def _media(action: str) -> str:
-    fn = {
-        "prev":        pc_input.media_prev,
-        "next":        pc_input.media_next,
-        "play_pause":  pc_input.media_play_pause,
-        "stop":        pc_input.media_stop,
-    }.get(action)
-    if fn is None:
-        return f"Unknown media action: '{action}' (use prev|next|play_pause|stop)"
-    try:
-        fn()
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"media {action} failed: {e}"
-    return f"Media: {action}"
-
-
-def _system_info() -> str:
-    try:
-        info = pc_input.system_info()
-    except Exception as e:
-        return f"system_info failed: {e}"
-    parts = [f"OS {info.get('system')} {info.get('release')} ({info.get('machine')})",
-             f"{info.get('cpu_count', 0)} CPUs"]
-    if info.get("processor"):
-        parts.append(info["processor"])
-    if info.get("ram_total_gb"):
-        parts.append(f"RAM {info.get('ram_used_gb')}/{info.get('ram_total_gb')} GB used "
-                     f"({info.get('ram_percent')}%)")
-    if info.get("disk_total_gb"):
-        parts.append(f"Disk {info.get('disk_free_gb')}/{info.get('disk_total_gb')} GB free")
-    if info.get("uptime_hours"):
-        parts.append(f"Up {info.get('uptime_hours')}h")
-    if info.get("battery_percent") is not None:
-        plug = "plugged in" if info.get("battery_plugged") else "on battery"
-        parts.append(f"Battery {info.get('battery_percent')}% ({plug})")
-    return "System: " + " | ".join(parts)
-
-
-def _screen_size() -> str:
-    try:
-        w, h = pc_input.screen_size()
-        return f"Screen: {w}×{h}"
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"screen_size failed: {e}"
-
-
-def _monitors() -> str:
-    try:
-        mons = pc_input.screen_monitors()
-    except pc_input._WinNotSupported as e:
-        return f"Not available here: {e}"
-    except Exception as e:
-        return f"monitors failed: {e}"
-    return f"{len(mons)} monitor(s): " + "; ".join(
-        f"{m['width']}×{m['height']} at ({m['x']},{m['y']})" for m in mons)
-
-
-# ── screen find (vision) ──────────────────────────────────────────────────────
-
-def _screen_find(description: str) -> tuple[int, int] | None:
+    Captures with DPI mapping (so screenshot pixels are converted to the mouse's
+    coordinate space), overlays a labelled grid (so the model can read the
+    coordinate accurately), and retries once if the element is not found - a
+    window may simply still be painting.
+    """
     api_key = _get_api_key()
     if not api_key:
-        print("[ComputerControl] ⚠️ No API key for screen_find")
+        _log("[ComputerControl] no API key for screen_find")
+        return None
+    try:
+        from google.genai import types as gtypes
+        from core import gemini
+    except Exception as e:
+        _log(f"[ComputerControl] screen_find import failed: {e}")
         return None
 
-    try:
-        from google import genai
-        from google.genai import types as gtypes
+    for attempt in range(max(1, int(retries))):
+        try:
+            img, sx, sy = _capture_with_mapping()
+            iw, ih = img.size
+            sw, sh = _screen_size()
+            buf = io.BytesIO()
+            _grid_overlay(img).save(buf, format="PNG")
 
-        w, h = pc_input.screen_size()
-        img  = pc_input.screenshot()          # PIL image (pillow ships in exe)
-        if not hasattr(img, "save"):
-            print("[ComputerControl] ⚠️ screenshot backend returned no image")
+            prompt = (
+                f"Screenshot of a computer screen. The real screen is {sw}x{sh} "
+                f"pixels; this image is {iw}x{ih} pixels. A faint red grid is "
+                f"drawn every 100 px and each line is labelled with its pixel "
+                f"coordinate. Find the UI element described as: '{description}'. "
+                f"Read the element's centre off the grid labels. Reply with ONLY "
+                f"the centre as: x,y (two integers, in image-pixel coordinates). "
+                f"If the element is not visible, reply NOT_FOUND."
+            )
+            response = gemini.call(
+                [gtypes.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"), prompt],
+                tier=gemini.FAST, timeout_ms=20_000,
+            )
+            if response is None:
+                return None
+            text = (response.text or "").strip()
+            if "NOT_FOUND" in text.upper():
+                if attempt < int(retries) - 1:
+                    time.sleep(0.5)
+                    continue
+                return None
+            match = re.search(r"(\d{1,5})\s*,\s*(\d{1,5})", text)
+            if match:
+                ix, iy = int(match.group(1)), int(match.group(2))
+                return _clamp_to_screen(ix * sx, iy * sy)
+        except Exception as e:
+            _log(f"[ComputerControl] screen_find failed: {e}")
             return None
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        image_bytes = buf.getvalue()
-
-        prompt = (
-            f"This is a screenshot of a {w}×{h} pixel screen. "
-            f"Locate the UI element described as: '{description}'. "
-            f"Reply with ONLY the center coordinates as: x,y "
-            f"If the element is not visible, reply: NOT_FOUND"
-        )
-
-        from core import gemini
-        response = gemini.call(
-            [gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"), prompt],
-            tier=gemini.FAST, timeout_ms=20_000,
-        )
-        if response is None:
-            return None
-
-        text = (response.text or "").strip()
-        if "NOT_FOUND" in text.upper():
-            return None
-
-        match = re.search(r"(\d+)\s*,\s*(\d+)", text)
-        if match:
-            return int(match.group(1)), int(match.group(2))
-
-    except Exception as e:
-        print(f"[ComputerControl] ⚠️ screen_find failed: {e}")
-
     return None
 
 
-# ── main dispatch ─────────────────────────────────────────────────────────────
+def _verify_after_click(description: str, coords: tuple[int, int]) -> str:
+    """Post-action verification (#23 - never assume an action succeeded).
+
+    Takes a fresh screenshot after the click and asks the model whether the
+    described goal was actually achieved. Costs one extra FAST call per click;
+    gated by the `verify_clicks` config flag (default on). Returns one of:
+      DONE:<why>      - the click achieved its goal
+      FAILED:<why>    - the element / expected result is clearly not there
+      UNCERTAIN:<why> - cannot tell from the screen either way
+    """
+    try:
+        _require_pyautogui()
+        w, h  = pyautogui.size()
+        img   = pyautogui.screenshot()
+        buf   = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        prompt = (
+            f"A moment ago I clicked on the element described as: '{description}' "
+            f"at pixel ({coords[0]},{coords[1]}) on a {w}x{h} screen. "
+            "Look at the screenshot below and judge whether that click achieved its "
+            "goal. Reply with ONLY one line, choosing one prefix:\n"
+            "DONE: <one short reason>\n"
+            "FAILED: <one short reason - the element or its expected result is not visible>\n"
+            "UNCERTAIN: <one short reason>\n"
+            "Do not mention the prefix is part of my format - just answer it."
+        )
+        from core import gemini
+        from google.genai import types as gtypes
+        response = gemini.call(
+            [gtypes.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"), prompt],
+            tier=gemini.FAST, timeout_ms=20_000,
+        )
+        text = (response.text or "").strip()
+        if "DONE" in text.upper().split(":")[0]:
+            return "DONE"
+        if "FAILED" in text.upper().split(":")[0]:
+            return "FAILED"
+        return "UNCERTAIN"
+    except Exception as e:
+        _log(f"[ComputerControl] verify_after_click failed: {e}")
+        return "UNCERTAIN"
+
+
+def _do_screen_click(description: str, button: str = "left",
+                     clicks: int = 1, verify=None) -> str:
+    """Locate an element by description, click it, and (optionally) verify."""
+    desc = str(description or "").strip()
+    if not desc:
+        return "screen_click needs a 'description' of the element to click."
+    coords = _screen_find(desc)
+    if not coords:
+        return f"Element not found on screen: '{desc}'"
+    time.sleep(0.2)
+    _click(x=coords[0], y=coords[1], button=button, clicks=clicks)
+    verb = ("Double-clicked" if clicks == 2
+            else ("Right-clicked" if button == "right" else "Clicked"))
+    if verify is None:
+        try:
+            from memory.config_manager import get_verify_clicks
+            verify = get_verify_clicks()
+        except Exception:
+            verify = False
+    # Verification only makes sense for a single left click on a result-bearing
+    # control; a right-click opens a menu and a double-click is already a
+    # distinct gesture, so neither is judged by the click verifier.
+    if verify and clicks == 1 and button == "left":
+        verdict = _verify_after_click(desc, coords)
+        if verdict == "DONE":
+            try:
+                from core import strategy_memory
+                strategy_memory.record(_focused_app_name(), desc, "vision",
+                                       True)
+            except Exception:
+                pass
+            return f"{verb} '{desc}' at {coords} and verified it worked."
+        if verdict == "FAILED":
+            try:
+                from core import strategy_memory
+                strategy_memory.record(_focused_app_name(), desc, "vision",
+                                       False,
+                                       "expected result not visible after click")
+            except Exception:
+                pass
+            return (f"{verb} '{desc}' at {coords} but verification shows it did "
+                    f"NOT take effect - the expected result is not visible on "
+                    f"screen. Do not report success; diagnose and retry if sensible.")
+        return (f"{verb} '{desc}' at {coords}; verification could not confirm "
+                f"whether it took effect. Say so if it matters.")
+    return f"{verb} '{desc}' at {coords}"
+
+
+def _do_screen_move(description: str) -> str:
+    """Locate an element and move the pointer onto it without clicking."""
+    desc = str(description or "").strip()
+    if not desc:
+        return "screen_move needs a 'description' of the element to move to."
+    coords = _screen_find(desc)
+    if not coords:
+        return f"Element not found on screen: '{desc}'"
+    return _move(coords[0], coords[1]) + f"  [element: '{desc}']"
+
 
 def computer_control(
     parameters: dict,
@@ -607,31 +688,20 @@ def computer_control(
     session_memory=None,
 ) -> str:
     """
-    Full PC control: mouse, keyboard, clipboard, windows, processes, volume,
-    brightness, media, screenshots and system queries. Works with no extra
-    packages (even inside the ICE.exe build).
+    Dispatch table for all computer control actions.
 
     parameters keys (all optional unless noted):
       action        : (required) one of the actions listed below
-      text          : text to type, paste, or put on the clipboard
-      x, y          : coordinates (or dx,dy when relative=1)
-      x1, y1, x2, y2: for drag
-      button        : 'left' | 'right' | 'middle' (default: left)
-      clicks        : number of clicks (default: 1)
-      relative      : 1 = move by delta instead of absolute
+      text          : text to type or paste
+      x, y          : screen coordinates
+      dx, dy        : relative move delta (move_rel)
+      button        : 'left' | 'right' (default: left; used by click/screen_click)
       keys          : hotkey string, e.g. 'ctrl+c'
       key           : single key name, e.g. 'enter'
-      hold_ms       : hold a key for this many milliseconds
       direction     : 'up' | 'down' | 'left' | 'right'
       amount        : scroll amount (default: 3)
-      horizontal    : scroll sideways instead of vertically
       seconds       : wait duration
-      title         : window title fragment for window actions
-      width, height : window size
-      name / pid    : process name or PID
-      command       : command / path / URL to launch
-      value         : volume or brightness level 0-100
-      filter        : process name filter
+      title         : window title fragment for focus_window
       description   : natural-language element description for screen_find/click
       type          : data type for random_data
       field         : memory field name for user_data
@@ -639,25 +709,34 @@ def computer_control(
       path          : save path for screenshot (must be inside home dir)
 
     Actions:
-      Mouse:       mouse_position | mouse_move | mouse_click | click |
-                   double_click | right_click | middle_click | drag | scroll |
-                   wheel_up | wheel_down
-      Keyboard:    type | smart_type | hotkey | press | key_hold |
-                   clear_field
-      Clipboard:   copy | clipboard_get | clipboard_set | clipboard_clear
-      Windows:     window_list | window_focus | window_minimize |
-                   window_maximize | window_restore | window_move |
-                   window_close | foreground_window
-      Processes:   process_list | process_start | process_kill (asks the user
-                   to confirm on screen first)
-      Audio:       volume_get | volume_set | volume_up | volume_down | mute
-                   (all reversible with the `undo` tool)
-      Media keys:  media (prev|next|play_pause|stop)
-      System:      brightness_set (undoable) | lock_screen | sleep_display |
-                   show_desktop | run_dialog | system_info | screen_size |
-                   monitors | screenshot
-      Vision:      screen_find | screen_click
-      Utilities:   random_data | user_data | wait
+      type          - type text at cursor
+      smart_type    - clear field + type (clipboard-backed)
+      click         - left click (x,y optional -> current position)
+      double_click  - double left click
+      right_click   - right click
+      move          - move mouse to absolute (x,y); reports where it landed
+      move_rel      - move mouse by a relative (dx,dy)
+      mouse_position- read the current pointer position + screen size
+      drag          - click-drag between two points
+      hotkey        - key combination
+      press         - single key
+      scroll        - scroll the wheel
+      copy          - read clipboard
+      paste         - write + paste clipboard
+      screenshot    - capture screen (safe path only)
+      wait          - sleep N seconds
+      clear_field   - select-all + delete
+      focus_window  - bring window to foreground
+      screen_find   - AI element finder (returns x,y in screen coords)
+      screen_click  - find element -> click -> (optional) verify
+      screen_double_click - find element -> double-click
+      screen_right_click  - find element -> right-click
+      screen_move   - find element -> move pointer onto it (no click); 'hover' alias
+      random_data   - generate fake form data
+      user_data     - pull real data from memory
+
+    Element-finding (`screen_*`) is DPI-corrected and uses a labelled coordinate
+    grid so the returned point is the element's real position, not a scaled guess.
     """
     params = parameters or {}
     action = params.get("action", "").lower().strip()
@@ -668,61 +747,10 @@ def computer_control(
     if player:
         player.write_log(f"[Computer] {action}")
 
-    print(f"[ComputerControl] ▶ {action}  {params}")
+    _log(f"[ComputerControl] >> {action}  {params}")
 
     try:
 
-        # ── mouse ───────────────────────────────────────────────────────────
-        if action == "mouse_position":
-            try:
-                x, y = pc_input.mouse_position()
-                return f"{x},{y}"
-            except pc_input._WinNotSupported as e:
-                if _PYAUTOGUI:
-                    return f"{pyautogui.position()[0]},{pyautogui.position()[1]}"
-                return f"Not available here: {e}"
-            except Exception as e:
-                return f"mouse_position failed: {e}"
-
-        if action == "mouse_move":
-            return _move(int(params.get("x", 0)), int(params.get("y", 0)),
-                         relative=bool(params.get("relative", False)))
-
-        if action in ("mouse_click", "click", "left_click"):
-            return _click(params.get("x"), params.get("y"), "left",
-                          int(params.get("clicks", 1) or 1))
-
-        if action == "double_click":
-            return _click(params.get("x"), params.get("y"), "left", 2)
-
-        if action == "right_click":
-            return _click(params.get("x"), params.get("y"), "right", 1)
-
-        if action == "middle_click":
-            return _click(params.get("x"), params.get("y"), "middle", 1)
-
-        if action == "move":
-            return _move(int(params.get("x", 0)), int(params.get("y", 0)))
-
-        if action == "drag":
-            return _drag(
-                int(params.get("x1", 0)), int(params.get("y1", 0)),
-                int(params.get("x2", 0)), int(params.get("y2", 0)),
-            )
-
-        if action == "scroll":
-            return _scroll(
-                direction=params.get("direction", "down"),
-                amount=int(params.get("amount", 3)),
-            )
-
-        if action == "wheel_up":
-            return _engine(pc_input.mouse_wheel_up, int(params.get("amount", 1))) or "Scrolled up"
-
-        if action == "wheel_down":
-            return _engine(pc_input.mouse_wheel_down, int(params.get("amount", 1))) or "Scrolled down"
-
-        # ── keyboard ────────────────────────────────────────────────────────
         if action == "type":
             return _type(params.get("text", ""))
 
@@ -732,161 +760,82 @@ def computer_control(
                 clear_first=params.get("clear_first", True),
             )
 
+        if action in ("click", "left_click"):
+            return _click(params.get("x"), params.get("y"), "left", 1)
+
+        if action == "double_click":
+            return _click(params.get("x"), params.get("y"), "left", 2)
+
+        if action == "right_click":
+            return _click(params.get("x"), params.get("y"), "right", 1)
+
+        if action == "move":
+            return _move(int(params.get("x", 0)), int(params.get("y", 0)))
+
+        if action in ("move_rel", "move_relative"):
+            return _move_rel(int(params.get("dx", 0)), int(params.get("dy", 0)))
+
+        if action in ("mouse_position", "get_mouse_position"):
+            return _mouse_position()
+
+        if action == "hover":
+            return _do_screen_move(params.get("description", ""))
+
+        if action == "drag":
+            return _drag(
+                int(params.get("x1", 0)), int(params.get("y1", 0)),
+                int(params.get("x2", 0)), int(params.get("y2", 0)),
+            )
+
         if action == "hotkey":
             raw  = params.get("keys", "")
             keys = [k.strip() for k in raw.split("+")] if isinstance(raw, str) else raw
             return _hotkey(*keys)
 
         if action == "press":
-            return _press(params.get("key", "enter"),
-                          float(params.get("hold_ms", 0) or 0))
+            return _press(params.get("key", "enter"))
 
-        if action == "key_hold":
-            return _press(params.get("key", ""),
-                          float(params.get("hold_ms", 500) or 500))
+        if action == "scroll":
+            return _scroll(
+                direction=params.get("direction", "down"),
+                amount=int(params.get("amount", 3)),
+            )
 
-        if action == "clear_field":
-            return _clear_field()
-
-        # ── clipboard ───────────────────────────────────────────────────────
         if action == "copy":
-            text = _clipboard_get()
-            return f"Clipboard: {text[:200]}" if text else "(clipboard empty)"
-
-        if action == "clipboard_get":
-            text = _clipboard_get()
-            return text if text else "(clipboard empty)"
-
-        if action == "clipboard_set":
-            return _clipboard_set(params.get("text", ""), paste=False)
-
-        if action == "clipboard_clear":
-            try:
-                pc_input.clipboard_clear()
-                return "Clipboard cleared."
-            except Exception as e:
-                return f"clipboard_clear failed: {e}"
+            return _clipboard_get()
 
         if action == "paste":
-            return _clipboard_set(params.get("text", ""), paste=True)
-
-        # ── windows ─────────────────────────────────────────────────────────
-        if action == "window_list":
-            return _window_list(int(params.get("limit", 30)))
-
-        if action in ("window_focus", "window_minimize", "window_maximize",
-                      "window_restore", "window_close"):
-            title = params.get("title", "")
-            if not title:
-                return f"{action} needs a window `title`."
-            return _window_op(action, title)
-
-        if action == "window_move":
-            title = params.get("title", "")
-            if not title:
-                return "window_move needs a window `title`, x and y."
-            return _window_move(
-                title,
-                int(params.get("x", 0)), int(params.get("y", 0)),
-                params.get("width"), params.get("height"),
-            )
-
-        if action == "foreground_window":
-            return f"Foreground window: {_foreground_window()}"
-
-        # ── processes ───────────────────────────────────────────────────────
-        if action == "process_list":
-            return _process_list(params.get("filter", ""))
-
-        if action == "process_start":
-            return _process_start(params.get("command", ""))
-
-        if action == "process_kill":
-            target = params.get("name") or params.get("pid")
-            if target is None:
-                return "process_kill needs a process `name` or `pid`."
-            if confirm.pending_title():
-                return ("There is already a confirmation waiting on screen. "
-                        "Ask the user to answer that one first.")
-            return confirm.request(
-                key=f"kill_{target}",
-                title=f"Kill process '{target}'?",
-                detail=("This force-stops the process. Anything it has not "
-                        "saved yet will be lost."),
-                run=lambda t=target: _process_kill(t),
-            )
-
-        # ── audio / display ─────────────────────────────────────────────────
-        if action == "volume_get":
-            v = pc_input.volume_get()
-            return f"Volume is {v}%" if v is not None else "Volume level not readable here."
-
-        if action == "volume_set":
-            return _volume_set(int(params.get("value", 50) or 50))
-
-        if action in ("volume_up", "volume_down", "mute"):
-            return _volume_up_down(action)
-
-        if action == "media":
-            return _media(str(params.get("key", "")).lower().replace(" ", "_"))
-
-        if action == "brightness_set":
-            return _brightness_set(int(params.get("value", 50) or 50))
-
-        if action in ("lock_screen", "sleep_display", "show_desktop", "run_dialog"):
-            fn = {
-                "lock_screen":   pc_input.lock_screen,
-                "sleep_display": pc_input.sleep_display,
-                "show_desktop":  pc_input.show_desktop,
-                "run_dialog":    pc_input.run_dialog,
-            }[action]
-            try:
-                fn()
-            except pc_input._WinNotSupported as e:
-                if _PYAUTOGUI:
-                    try:
-                        if action == "lock_screen":
-                            pyautogui.hotkey("win", "l")
-                        elif action == "show_desktop":
-                            pyautogui.hotkey("win", "d")
-                        elif action == "run_dialog":
-                            pyautogui.hotkey("win", "r")
-                        else:
-                            return f"Not available here: {e}"
-                        return f"Done: {action}."
-                    except Exception as e2:
-                        return f"{action} failed: {e2}"
-                return f"Not available here: {e}"
-            except Exception as e:
-                return f"{action} failed: {e}"
-            return f"Done: {action}."
-
-        # ── system info ─────────────────────────────────────────────────────
-        if action == "system_info":
-            return _system_info()
-
-        if action == "screen_size":
-            return _screen_size()
-
-        if action == "monitors":
-            return _monitors()
+            return _clipboard_paste(params.get("text", ""))
 
         if action == "screenshot":
             return _screenshot(params.get("path"))
 
-        # ── vision / utilities ──────────────────────────────────────────────
         if action == "screen_find":
             coords = _screen_find(params.get("description", ""))
             return f"{coords[0]},{coords[1]}" if coords else "NOT_FOUND"
 
         if action == "screen_click":
-            desc   = params.get("description", "")
-            coords = _screen_find(desc)
-            if coords:
-                time.sleep(0.2)
-                _click(x=coords[0], y=coords[1])
-                return f"Clicked '{desc}' at {coords}"
-            return f"Element not found on screen: '{desc}'"
+            return _do_screen_click(
+                params.get("description", ""),
+                button=params.get("button", "left") or "left",
+                clicks=1,
+                verify=params.get("verify", None),
+            )
+
+        if action == "screen_double_click":
+            return _do_screen_click(
+                params.get("description", ""), button="left", clicks=2,
+                verify=False,
+            )
+
+        if action == "screen_right_click":
+            return _do_screen_click(
+                params.get("description", ""), button="right", clicks=1,
+                verify=False,
+            )
+
+        if action in ("screen_move", "screen_hover"):
+            return _do_screen_move(params.get("description", ""))
 
         if action == "wait":
             secs = float(params.get("seconds", 1.0))
@@ -894,10 +843,16 @@ def computer_control(
             time.sleep(secs)
             return f"Waited {secs}s"
 
+        if action == "clear_field":
+            return _clear_field()
+
+        if action == "focus_window":
+            return _focus_window(params.get("title", ""))
+
         if action == "random_data":
             dt     = params.get("type", "name")
             result = _random_data(dt)
-            print(f"[ComputerControl] 🎲 random {dt} → {result}")
+            _log(f"[ComputerControl] random {dt} -> {result}")
             return result
 
         if action == "user_data":
@@ -906,54 +861,50 @@ def computer_control(
             value   = profile.get(field, "")
             if not value:
                 value = _random_data(field)
-                print(f"[ComputerControl] ⚠️ No '{field}' in memory, using random: {value}")
+                _log(f"[ComputerControl] No '{field}' in memory, using random: {value}")
             return value
 
         return f"Unknown action: '{action}'"
 
     except Exception as e:
-        print(f"[ComputerControl] ❌ {action}: {e}")
+        _log(f"[ComputerControl] {action} failed: {e}")
         return f"computer_control '{action}' failed: {e}"
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "computer_control",
-    "description": "Full extreme PC control in one tool: mouse (move, click, drag, scroll, wheel, position — left/right/middle/double), keyboard (type ANY text including Hindi, hotkeys like ctrl+c or win+d, key holds), clipboard (get/set/clear), windows (list, focus, minimize, maximize, restore, move, close), processes (list, start, kill — kill asks the user to confirm on screen first), volume & brightness (set or nudge, reversible with the `undo` tool), media keys (play/pause/next/prev), lock screen, sleep display, show desktop, run dialog, system info, screen size, multi-monitor info, screenshots, and AI screen-finding. Works with zero extra packages — usable on any PC even inside the app's .exe.",
+    "description": "Direct computer control: type, click, hotkeys, scroll, move mouse, screenshots, find elements on screen.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "mouse_position | mouse_move | mouse_click | click | double_click | right_click | middle_click | drag | scroll | wheel_up | wheel_down | type | smart_type | hotkey | press | key_hold | clear_field | copy | clipboard_get | clipboard_set | clipboard_clear | paste | window_list | window_focus | window_minimize | window_maximize | window_restore | window_move | window_close | foreground_window | process_list | process_start | process_kill | volume_get | volume_set | volume_up | volume_down | mute | media | brightness_set | lock_screen | sleep_display | show_desktop | run_dialog | system_info | screen_size | monitors | screenshot | screen_find | screen_click | random_data | user_data | wait"
+                "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | move_rel | mouse_position | drag | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | screen_double_click | screen_right_click | screen_move | hover | random_data | user_data"
             },
             "text": {
                 "type": "STRING",
-                "description": "Text to type, paste, or put on the clipboard"
+                "description": "Text to type or paste"
             },
             "x": {
                 "type": "INTEGER",
-                "description": "X coordinate (or dx when relative=1)"
+                "description": "X coordinate (absolute, for click/move/drag)"
             },
             "y": {
                 "type": "INTEGER",
-                "description": "Y coordinate (or dy when relative=1)"
+                "description": "Y coordinate (absolute, for click/move/drag)"
             },
-            "x1": {"type": "INTEGER", "description": "Drag start X"},
-            "y1": {"type": "INTEGER", "description": "Drag start Y"},
-            "x2": {"type": "INTEGER", "description": "Drag end X"},
-            "y2": {"type": "INTEGER", "description": "Drag end Y"},
+            "dx": {
+                "type": "INTEGER",
+                "description": "Relative X delta for move_rel"
+            },
+            "dy": {
+                "type": "INTEGER",
+                "description": "Relative Y delta for move_rel"
+            },
             "button": {
                 "type": "STRING",
-                "description": "left | right | middle (default: left)"
-            },
-            "clicks": {
-                "type": "INTEGER",
-                "description": "Number of clicks (default: 1; 2 = double)"
-            },
-            "relative": {
-                "type": "BOOLEAN",
-                "description": "Move by delta (x,y) instead of absolute coordinates"
+                "description": "Mouse button for click/screen_click: left | right (default: left)"
             },
             "keys": {
                 "type": "STRING",
@@ -961,11 +912,7 @@ TOOL = {
             },
             "key": {
                 "type": "STRING",
-                "description": "Single key e.g. 'enter' (or media action for `media`)"
-            },
-            "hold_ms": {
-                "type": "INTEGER",
-                "description": "Hold a key for this many milliseconds"
+                "description": "Single key e.g. 'enter'"
             },
             "direction": {
                 "type": "STRING",
@@ -981,41 +928,36 @@ TOOL = {
             },
             "title": {
                 "type": "STRING",
-                "description": "Window title fragment for window actions"
+                "description": "Window title for focus_window"
             },
-            "width": {"type": "INTEGER", "description": "Window width for window_move"},
-            "height": {"type": "INTEGER", "description": "Window height for window_move"},
-            "name": {
-                "type": "STRING",
-                "description": "Process name for process_kill / process_list filter"
-            },
-            "pid": {
-                "type": "INTEGER",
-                "description": "Process PID for process_kill"
-            },
-            "command": {
-                "type": "STRING",
-                "description": "Command / app / path / URL for process_start"
-            },
-            "value": {
-                "type": "INTEGER",
-                "description": "Volume or brightness level 0-100"
-            },
-            "filter": {
-                "type": "STRING",
-                "description": "Process name filter for process_list"
-            },
-            "limit": {"type": "INTEGER", "description": "Max entries (window_list/process_list)"},
             "description": {
                 "type": "STRING",
-                "description": "Element description for screen_find/screen_click"
+                "description": "Element description for screen_find/screen_click/screen_move (e.g. 'the blue Send button')"
             },
-            "type": {"type": "STRING", "description": "Data type for random_data"},
-            "field": {"type": "STRING", "description": "Field for user_data: name|email|city"},
-            "clear_first": {"type": "BOOLEAN", "description": "Clear field before typing (default: true)"},
-            "path": {"type": "STRING", "description": "Save path for screenshot"}
+            "type": {
+                "type": "STRING",
+                "description": "Data type for random_data"
+            },
+            "field": {
+                "type": "STRING",
+                "description": "Field for user_data: name|email|city"
+            },
+            "clear_first": {
+                "type": "BOOLEAN",
+                "description": "Clear field before typing (default: true)"
+            },
+            "path": {
+                "type": "STRING",
+                "description": "Save path for screenshot"
+            },
+            "verify": {
+                "type": "BOOLEAN",
+                "description": "screen_click only: after clicking, take a fresh screenshot and check the click actually worked (default: config verify_clicks). Set false to skip verification."
+            }
         },
-        "required": ["action"]
+        "required": [
+            "action"
+        ]
     },
     "handler": computer_control,
 }
