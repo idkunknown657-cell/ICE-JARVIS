@@ -57,3 +57,12 @@ update_staging/
 apply_update.bat
 ICE_update.zip
 update.json
+# Runtime learning + usage data the app writes on every run and re-reads at
+# boot (all self-healing — a missing file is treated as an empty state). These
+# are personal runtime state, never source: they are excluded from both the exe
+# and the update bundle, and they must not churn in commits.
+config/improvements.json
+config/usage_counts.json
+config/ui_strategies.json
+# One-line notes the quick_note plugin keeps for you (JSON, capped, plain text).
+config/plugin_notes.json

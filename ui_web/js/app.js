@@ -808,25 +808,9 @@
     return upd;
   }
 
-  // Quiet update checks: once a minute after boot, then every 5 min —
-  // never blocks anything, toasts only once per new version.
-  let _lastUpdateToast = "";
-  async function silentUpdateCheck() {
-    try {
-      const r = await api.updater_check();
-      if (!r || !r.ok || !r.update_available) return;
-      if (_lastUpdateToast !== r.latest) {
-        _lastUpdateToast = r.latest;
-        toast("JARVIS update v" + (r.latest || "") + " available — ⚙ Advanced → Updates", "ok");
-      }
-      if (S.updateState.phase === "idle") {
-        S.updateState.phase = "downloadable";
-        S.updateState.version = r.latest || "";
-        if (S.settingsLoaded && S.settingsPage === "advanced") renderSettingsPage("advanced");
-      }
-    } catch (e) { /* offline — the next cycle retries */ }
-  }
-  setTimeout(() => { silentUpdateCheck(); setInterval(silentUpdateCheck, 5 * 60 * 1000); }, 60000);
+  // Updates are manual by design — they are pushed to GitHub by the developer
+  // and the user checks them from ⚙ Advanced → Updates. No silent polling, no
+  // background network calls: ICE only phones the manifest when you click it.
 
   function toggleEl(get, set) {
     const t = el("button", "toggle" + (get() ? " on" : ""));
@@ -1737,8 +1721,11 @@
       $("setupVeil").hidden = false;
     }
 
-    // Quiet update checks are scheduled in silentUpdateCheck() (60 s after
-    // boot, then every 5 min) — see the Advanced-page section above.
+    // Quiet update checks are not scheduled — updates are manual by design.
+    // The developer pushes them to GitHub; the user checks them from
+    // ⚙ Advanced → Updates (the Manual-updates card below). Nothing runs in
+    // the background and nothing is polled. The manual updater above is the
+    // only way a check or install ever happens.
   }
 
   boot();

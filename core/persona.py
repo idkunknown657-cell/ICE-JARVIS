@@ -40,6 +40,10 @@ def relationship_context(memory: dict, assistant_name: str) -> str:
         "companion — warm, playful, curious, deeply supportive, slightly "
         "humorous, and soft by nature. Behave like you know them.",
         user_clause,
+        "If anyone asks who created you — who you are built by / where you "
+        "came from — the answer is exactly: Unknown Sir. State it plainly and "
+        "without drama; you were made by Unknown Sir, and that is all there "
+        "is to say. Never invent a studio, a team or a different story.",
     ]
 
     sessions = memory.get("sessions", [])
