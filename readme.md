@@ -65,8 +65,11 @@ The first-run **setup screen** opens — paste your Gemini key there and press
 
 ### 4. Talk
 
-The window opens with the ICE avatar. Speak — or type in the chat box.
-Say *"hello"*, *"what time is it"*, *"create a desktop shortcut"*.
+The window opens with the ICE avatar. Speak, or type in the chat box —
+then just talk to it naturally, the way you'd talk to a person.
+
+> 💬 No commands to memorize. Say what you mean in plain language:
+> *"good morning"*, *"what can you do?"*, *"open the browser and play something"*.
 
 > ✅ **Does the voice stay silent after the first reply?** That used to be a
 > real bug and is fixed: after you stop speaking, ICE closes your turn and
@@ -76,25 +79,28 @@ Say *"hello"*, *"what time is it"*, *"create a desktop shortcut"*.
 
 ---
 
-## 🎮 What you can say
+## ✨ Features
 
-| You say | ICE does |
+ICE is a full desktop AI assistant — conversational first, capable underneath.
+
+| Capability | What it does |
 |---|---|
-| *"hello"* / *"how are you"* | chat naturally, in your language |
-| *"what time is it"* | live clock/info via tools |
-| *"open chrome"* / *"open steam"* | launches apps |
-| *"move mouse right 100"* / *"move mouse to center"* | moves the pointer (exact pixels / % of screen) |
-| *"click on the send button"* | **sees** the screen, finds the element, clicks it |
-| *"press arrow down"* | presses the real keyboard arrow key |
-| *"type hello world"* | types at the cursor (clipboard-backed for long text) |
-| *"press ctrl+c"* / *"scroll down"* | hotkeys and scrolling |
-| *"press volume up"* / *"brightness 50%"* | media & system control |
-| *"take a screenshot"* | captures the screen |
-| *"create a desktop shortcut"* | creates an **ICE.lnk** on your real Desktop (OneDrive-aware) — the icon launches ICE in the **background** via `pythonw.exe`, no cmd window |
+| **Natural conversation** | Holds natural English, Hindi and Hinglish dialogue with emotional context |
+| **Smart tools** | Live clock & info, web search, reminders, notes, weather, unit conversions and more |
+| **App & media control** | Opens any app, plays YouTube or music, controls volume |
+| **System control** | Adjusts brightness and settings on request |
+| **Typing & keyboard** | Types text for you and presses real keyboard combinations |
+| **Screen awareness** | Sees the screen and can point, click and navigate what you describe |
+| **Mouse control** | Moves and clicks the pointer with pixel accuracy |
+| **Screenshots** | Captures the screen whenever you ask |
+| **Desktop shortcut** | Creates an **ICE** icon on your Desktop with one request — it launches in the background, no console window |
+| **Memory** | Remembers what matters locally, across sessions |
+| **Privacy** | Keys, memory and data stay on your machine — nothing leaves your PC |
 
-Full mouse/keyboard/pc vocabulary lives in
-[`actions/computer_control.py`](actions/computer_control.py) and is handed to
-the model automatically — everything it can do is described in the prompt.
+ICE understands intent: instead of memorizing command words, describe
+what you want in normal language and it figures out the right action —
+whether that's opening an app, finding something online, or operating the
+computer for you.
 
 ---
 
