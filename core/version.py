@@ -5,5 +5,5 @@ The publisher script (tools/publish_update.py) bumps this, the updater
 wherever it pleases. Keep it simple: major.minor.patch.
 """
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_NAME    = "ICE"

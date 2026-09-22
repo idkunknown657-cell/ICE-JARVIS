@@ -4,14 +4,15 @@ bundle, and publish it to GitHub Releases so every installed copy auto-updates
 
 Usage (from the repo root):
 
-    python tools/publish_update.py --repo idkunknown657-cell/ICE-JARVIS [--version 1.0.0]
+    python tools/publish_update.py --repo idkunknown657-cell/ICE-JARVIS [--version 1.0.2]
 
 What it does:
     1. Bumps core/version.py (and the VERSION file) to the requested version
        (default: next patch above the current one).
-    2. Builds dist/ICE/ICE.exe via tools/build_exe.ps1 (unless --skip-build).
-    3. Packs the build with make_update.py — dist/ICE_update.zip + update.json
-       (version, notes, url, sha256).
+    2. Builds dist/JARVIS/JARVIS.exe via tools/build_exe.ps1 (unless --skip-build).
+    3. Packs the build with make_update.py — JARVIS_update.zip + update.json
+       (version, notes, url, sha256), then renames the zip to the friendly
+       release-asset name ICE-JARVIS-Windows-x64.zip.
     4. Creates a GitHub release v<version> and uploads BOTH files as assets,
        using the GitHub API directly (token from your Git credential manager —
        no `gh` CLI needed).
@@ -28,6 +29,7 @@ import argparse
 import base64
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -122,15 +124,20 @@ def main() -> None:
         _bump_version(version)
         _run(["powershell", "-ExecutionPolicy", "Bypass",
               "-File", str(ROOT / "tools" / "build_exe.ps1")])
-    elif not (DIST / "ICE" / "ICE.exe").exists():
-        sys.exit(f"[publish] {DIST / 'ICE' / 'ICE.exe'} not found — run without --skip-build first")
+    elif not (DIST / "JARVIS" / "JARVIS.exe").exists():
+        sys.exit(f"[publish] {DIST / 'JARVIS' / 'JARVIS.exe'} not found — run without --skip-build first")
 
-    zip_path  = DIST / "ICE_update.zip"
+    zip_path  = DIST / "ICE-JARVIS-Windows-x64.zip"
     manifest  = DIST / "update.json"
-    asset_url = f"https://github.com/{args.repo}/releases/download/v{version}/ICE_update.zip"
+    asset_url = f"https://github.com/{args.repo}/releases/download/v{version}/ICE-JARVIS-Windows-x64.zip"
     _run(["python", str(ROOT / "make_update.py"),
           "--url", asset_url, "--version", version, "--notes", args.notes])
 
+    # make_update.py writes JARVIS_update.zip next to dist/; ship it under the
+    # friendly asset name users see on the Releases page.
+    raw_zip = DIST.parent / "JARVIS_update.zip"
+    if raw_zip.exists():
+        shutil.move(str(raw_zip), zip_path)
     if not (zip_path.exists() and manifest.exists()):
         sys.exit("[publish] make_update.py did not produce the expected files")
 
@@ -155,7 +162,7 @@ def main() -> None:
     print(f"  release created: {release['html_url']}")
 
     upload_url = release["upload_url"].split("{")[0]
-    for path, name in ((zip_path, "ICE_update.zip"), (manifest, "update.json")):
+    for path, name in ((zip_path, "ICE-JARVIS-Windows-x64.zip"), (manifest, "update.json")):
         with path.open("rb") as f:
             up = requests.post(
                 f"{upload_url}?name={name}",
@@ -166,7 +173,7 @@ def main() -> None:
         print(f"  uploaded {name} ({path.stat().st_size / 1e6:.1f} MB)")
 
     print(f"\n[publish] DONE — published: {release['html_url']}")
-    print("  Every installed ICE checks this repo's latest release at startup and updates itself.")
+    print("  Every installed copy checks this repo's latest release at startup and updates itself.")
 
 
 if __name__ == "__main__":

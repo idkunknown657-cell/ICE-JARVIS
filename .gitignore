@@ -63,6 +63,7 @@ screenshots/
 
 # ── Update packaging output (make_update.py) — goes to a GitHub Release, not git
 JARVIS_update.zip
+ICE-JARVIS-Windows-x64.zip
 update.json
 apply_update.bat
 update_staging/
