@@ -12,6 +12,22 @@ def _base_path() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _launch_command() -> tuple[str, str]:
+    """Return (target, args) that launches the app with NO console window.
+
+    On Windows from source, use pythonw.exe (windowless Python) instead of
+    python.exe so double-clicking the desktop icon doesn't pop a cmd window.
+    Falls back to python.exe if pythonw.exe is missing. Frozen builds run the
+    exe directly (already windowless)."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, ""
+    if platform.system() == "Windows":
+        sibling = Path(sys.executable).with_name("pythonw.exe")
+        if sibling.exists():
+            return str(sibling), str(_base_path() / "main.py")
+    return sys.executable, str(_base_path() / "main.py")
+
+
 def _desktop_dir() -> Path:
     """Locate the real Desktop folder (handles OneDrive / redirected desktops).
 
@@ -71,7 +87,7 @@ def _desktop_shortcut(name: str, target: str, args: str = "",
                     sc.Arguments = args
                 if icon:
                     sc.IconLocation = icon
-                sc.WorkingDirectory = str(Path(target).parent)
+                sc.WorkingDirectory = str(_base_path())
                 sc.save()
             finally:
                 shell = None      # release COM refs before uninitialising
@@ -109,10 +125,7 @@ def desktop_shortcut(parameters: dict, response=None, player=None,
     params = parameters or {}
     base = _base_path()
 
-    target = sys.executable
-    args = ""
-    if not getattr(sys, "frozen", False):
-        args = str(base / "main.py")
+    target, args = _launch_command()
 
     # Optional: icon next to the executable / project.
     icon = ""

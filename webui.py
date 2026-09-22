@@ -788,12 +788,18 @@ class JarvisAPI:
 
             shortcut_path = desktop / "ICE.lnk"
             
-            # Determine target (exe or python main.py)
+            # Determine target (exe or python main.py). From source on Windows
+            # use pythonw.exe (windowless) so the icon doesn't pop a cmd window.
             if getattr(sys, "frozen", False):
                 target = sys.executable
                 args = ""
             else:
-                target = sys.executable
+                exe = Path(sys.executable)
+                pw = exe.with_name("pythonw.exe")
+                if platform.system() == "Windows" and pw.exists():
+                    target = str(pw)
+                else:
+                    target = str(exe)
                 args = str(BASE_DIR / "main.py")
             
             pythoncom.CoInitialize()

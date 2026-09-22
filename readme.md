@@ -90,7 +90,7 @@ Say *"hello"*, *"what time is it"*, *"create a desktop shortcut"*.
 | *"press ctrl+c"* / *"scroll down"* | hotkeys and scrolling |
 | *"press volume up"* / *"brightness 50%"* | media & system control |
 | *"take a screenshot"* | captures the screen |
-| *"create a desktop shortcut"* | creates an **ICE.lnk** on your real Desktop (OneDrive-aware) |
+| *"create a desktop shortcut"* | creates an **ICE.lnk** on your real Desktop (OneDrive-aware) — the icon launches ICE in the **background** via `pythonw.exe`, no cmd window |
 
 Full mouse/keyboard/pc vocabulary lives in
 [`actions/computer_control.py`](actions/computer_control.py) and is handed to
