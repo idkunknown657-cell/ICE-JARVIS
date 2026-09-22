@@ -1,0 +1,4 @@
+# Dev-only dependencies for building the distributable .exe and publishing
+# updates. Install with:  pip install -r requirements-dev.txt
+-r requirements.txt
+pyinstaller>=6.0,<7
