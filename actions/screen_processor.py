@@ -1,4 +1,4 @@
-"""
+﻿"""
 Screen & webcam capture for JARVIS vision.
 
 Provides the two capture entry points main.py uses — `_capture_screen()` and
@@ -58,7 +58,7 @@ def _save_config_key(key: str, value) -> None:
         cfg[key] = value
         _CONFIG_PATH.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
     except Exception as e:
-        print(f"[Vision] ⚠️  Could not save config key '{key}': {e}")
+        print(f"[Vision] WARNING: Could not save config key '{key}': {e}")
 
 
 def _get_os() -> str:
@@ -81,22 +81,88 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
         img.save(buf, format="JPEG", quality=_JPEG_Q, optimize=False)
         return buf.getvalue(), "image/jpeg"
     except Exception as e:
-        print(f"[Vision] ⚠️  Image compress failed: {e}")
+        print(f"[Vision] WARNING: Image compress failed: {e}")
         return img_bytes, f"image/{source_format.lower()}"
 
 
-def _capture_screen() -> tuple[bytes, str]:
+def _fg_window_center() -> tuple[int, int] | None:
+    """Centre of the foreground window's bounding box, or None when that cannot
+    be determined (non-Windows, no window, permission)."""
+    if _get_os() != "windows":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        rect = ctypes.wintypes.RECT()
+        if not hwnd or not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return ((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+    except Exception:
+        return None
 
-    if not _MSS:
-        raise RuntimeError("mss is not installed. Run: pip install mss")
 
-    with mss.mss() as sct:
-        monitors = sct.monitors          # [0] = all combined, [1..n] = real screens
-        target   = monitors[1] if len(monitors) > 1 else monitors[0]
-        shot     = sct.grab(target)
-        png      = mss.tools.to_png(shot.rgb, shot.size)
+def _active_monitor_index(monitors: list) -> int:
+    """Return the index (into `monitors[1:]`) of the monitor whose area holds
+    the foreground window — so the assistant looks at the screen you are
+    actually using, not the primary one. Falls back to monitor 1 (primary)."""
+    if len(monitors) < 2:
+        return 1
+    center = _fg_window_center()
+    if center is None:
+        return 1
+    cx, cy = center
+    for i in range(1, len(monitors)):
+        m = monitors[i]
+        inside = (m["left"] <= cx <= m["left"] + m["width"] and
+                  m["top"]  <= cy <= m["top"]  + m["height"])
+        if inside:
+            return i
+    return 1
 
-    return _compress(png, "PNG")
+
+def _capture_screen(active: bool = True) -> tuple[bytes, str]:
+    """Full-desktop capture, JPEG bytes + mime.
+
+    `active=True` frames the monitor the foreground window lives on (Windows),
+    so JARVIS sees what the user is actually looking at even on a multi-monitor
+    desk. mss first with a per-monitor fallback chain, then Pillow ImageGrab."""
+
+    if _MSS:
+        try:
+            with mss.mss() as sct:
+                monitors = sct.monitors          # [0] = all combined, [1..n] = real screens
+                indices  = list(range(1, len(monitors))) or [0]
+                if active and len(monitors) > 1:
+                    idx = _active_monitor_index(monitors)
+                    indices = [idx] + [i for i in indices if i != idx]
+                target = None
+                for idx in indices:
+                    try:
+                        shot = sct.grab(monitors[idx])
+                        target = monitors[idx]
+                        break
+                    except Exception:
+                        continue
+                if target is None:
+                    target   = monitors[0]
+                    shot     = sct.grab(target)
+                png      = mss.tools.to_png(shot.rgb, shot.size)
+            return _compress(png, "PNG")
+        except Exception as e:
+            print(f"[Vision] WARNING: mss capture failed ({e}); falling back to PIL")
+
+    if _PIL:
+        try:
+            from PIL import ImageGrab          # pillow-core, ships with the app
+            buf = io.BytesIO()
+            ImageGrab.grab(all_screens=True).convert("RGB").save(
+                buf, format="JPEG", quality=_JPEG_Q, optimize=False)
+            return buf.getvalue(), "image/jpeg"
+        except Exception as e:
+            print(f"[Vision] WARNING: PIL ImageGrab capture failed: {e}")
+
+    raise RuntimeError("no screen capture backend available (mss or Pillow)")
 
 
 def _cv2_backend() -> int:
@@ -131,15 +197,15 @@ def _probe_camera(index: int, backend: int, warmup: int = 5) -> bool:
 def _detect_camera_index() -> int:
 
     backend = _cv2_backend()
-    print("[Vision] 🔍 Auto-detecting camera...")
+    print("[Vision] Auto-detecting camera...")
     for idx in range(6):
         if _probe_camera(idx, backend):
-            print(f"[Vision] ✅ Camera found at index {idx}")
+            print(f"[Vision] Camera found at index {idx}")
             _save_config_key("camera_index", idx)
             return idx
-        print(f"[Vision] ⚠️  Camera index {idx}: no usable frame")
+        print(f"[Vision] WARNING: Camera index {idx}: no usable frame")
 
-    print("[Vision] ⚠️  No camera found — defaulting to index 0")
+    print("[Vision] WARNING: No camera found - defaulting to index 0")
     _save_config_key("camera_index", 0)
     return 0
 

@@ -1,16 +1,24 @@
-# ── MARK LIII — what never belongs in the repository ──────────────────────────
+﻿# ── ICE — what never belongs in the repository ──────────────────────────
 # Everything listed here is created by the app on first run. A fresh clone with
 # none of it present boots straight to the setup screen, which is the intended
 # first experience — so nothing here needs to be committed, and some of it must
 # never be.
 
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
-config/api_keys.json          # your Gemini API key, plus per-plugin credentials
-config/certs/                 # the dashboard's TLS private key and certificate
-config/whatsapp_web/          # a LINKED WhatsApp session — committing it hands
-                              # somebody your WhatsApp account, not just a key
-**/token*.json                # Google OAuth tokens (Gmail / Calendar plugins)
-**/client_secret*.json        # Google OAuth client secrets
+# NOTE: git does not support inline comments in .gitignore — every character
+# after a pattern is treated as part of the pattern. Keep comments on their own
+# lines or these secrets silently stop being ignored.
+
+# your Gemini API key, plus per-plugin credentials
+config/api_keys.json
+# the dashboard's TLS private key and certificate
+config/certs/
+# a LINKED WhatsApp session — committing it hands somebody your WhatsApp account
+config/whatsapp_web/
+# Google OAuth tokens (Gmail / Calendar plugins)
+**/token*.json
+# Google OAuth client secrets
+**/client_secret*.json
 *credentials*.json
 .env
 .env.*
@@ -18,6 +26,10 @@ config/whatsapp_web/          # a LINKED WhatsApp session — committing it hand
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
 memory/*.db
+# Conversation-derived suggestions and usage telemetry are local-only too.
+config/improvements.json
+config/ui_strategies.json
+config/usage_counts.json
 
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/
@@ -48,3 +60,14 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── Update packaging output (make_update.py) — goes to a GitHub Release, not git
+JARVIS_update.zip
+update.json
+apply_update.bat
+update_staging/
+
+# Local build helpers and visual scratch artifacts.
+.freebuff/
+_orig_ui.py
+preview_bundle.html

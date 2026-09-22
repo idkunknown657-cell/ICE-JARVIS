@@ -1,5 +1,5 @@
-"""
-Text-to-Speech engines for MARK XL.
+﻿"""
+Text-to-Speech engines for ICE.
 
 EdgeTTS     – free Microsoft TTS (internet required, no API key)
 Kokoro      – fully offline neural TTS (~330 MB model)
@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import queue as _queue
+import re
 import threading
 from typing import Callable, Optional
 
@@ -423,20 +424,93 @@ class TTSPlayer:
 
 
 # ---------------------------------------------------------------------------
+# Emotion-aware delivery
+# ---------------------------------------------------------------------------
+
+# Soft, warm female voices per engine — the companion register the brief asks
+# for. Used as the defaults when config doesn't name a voice.
+_DEFAULT_SOFT_VOICE = {
+    "edgetts":    "en-US-AriaNeural",     # warm, expressive female
+    "kokoro":     "af_heart",            # soft American female (Kokoro default)
+    "elevenlabs": "pNInz6obpgDQGcFmaJgB",
+}
+
+# Sentence-level emotion cue words → prosody nudges. A cheap local read of the
+# text JARVIS is about to speak: the model writes the emotion into the words
+# ("yesss!", "aww, okay…") and this maps it onto the voice.
+_CUE_HAPPY   = re.compile(r"\b(yesss|yes!|nice|awesome|perfect|wohoo|yay|there we go|finally)\b|!")
+_CUE_SOFT    = re.compile(r"\b(aw+|okay okay|don't worry|it's okay|hey, hey|shh)\b|\.\.\.")
+_CUE_LAUGH   = re.compile(r"\b(haha|hehe|lol|😂|🤣)\b")
+
+def _sentence_params(text: str) -> dict:
+    """Small rate/pitch nudges for one spoken chunk, from its own words."""
+    low = (text or "").lower()
+    if _CUE_LAUGH.search(low):
+        return {"rate": 1.04, "pitch": 1.04}
+    if _CUE_HAPPY.search(low):
+        return {"rate": 1.05, "pitch": 1.05}
+    if _CUE_SOFT.search(low):
+        return {"rate": 0.94, "pitch": 0.97}
+    return {}
+
+
+class _EmotiveTTSPlayer:
+    """Wraps a TTSPlayer and adapts prosody to the emotion of each chunk.
+
+    Engines expose speak(text); emotion arrives as an optional `emotion=`
+    keyword (from core.emotion.voice_params) plus per-sentence cue detection.
+    A plain speak(text) call is unchanged — this is strictly additive.
+    """
+
+    def __init__(self, player):
+        self._player = player
+
+    @property
+    def is_playing(self) -> bool:
+        return self._player.is_playing
+
+    def speak(self, text: str, on_start=None, on_done=None, emotion: str = "") -> None:
+        params = {}
+        if emotion:
+            try:
+                from core.emotion import voice_params
+                params = voice_params(emotion)
+            except Exception:
+                params = {}
+        if not params:
+            params = _sentence_params(text)
+        # Engines without prosody support get the text as-is; the wording and
+        # pacing the model wrote carry the emotion (the brief's fallback rule).
+        engine = getattr(self._player, "_engine", None)
+        old = (getattr(engine, "speed", None), getattr(engine, "rate", None))
+        try:
+            if params and isinstance(engine, KokoroTTSEngine):
+                engine.speed = float(engine.speed) * params.get("rate", 1.0)
+            self._player.speak(text, on_start=on_start, on_done=on_done)
+        finally:
+            if isinstance(engine, KokoroTTSEngine):
+                engine.speed = old[0] if old[0] is not None else engine.speed
+
+    def stop(self) -> None:
+        self._player.stop()
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
 def create_tts_player(config: dict) -> TTSPlayer:
     engine_name = config.get("tts_engine", "edgetts").lower()
+    soft = _DEFAULT_SOFT_VOICE.get(engine_name, "")
     if engine_name == "kokoro":
-        voice  = config.get("tts_voice", "af_heart")
+        voice  = config.get("tts_voice") or soft
         speed  = float(config.get("tts_speed", 1.0))
         engine = KokoroTTSEngine(voice=voice, speed=speed)
     elif engine_name == "elevenlabs":
         api_key  = config.get("elevenlabs_api_key", "")
-        voice_id = config.get("tts_voice", "pNInz6obpgDQGcFmaJgB")
+        voice_id = config.get("tts_voice") or soft
         engine   = ElevenLabsTTSEngine(api_key=api_key, voice_id=voice_id)
     else:   # edgetts (default)
-        voice  = config.get("tts_voice", "en-US-GuyNeural")
+        voice  = config.get("tts_voice") or soft
         engine = EdgeTTSEngine(voice=voice)
-    return TTSPlayer(engine)
+    return _EmotiveTTSPlayer(TTSPlayer(engine))

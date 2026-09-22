@@ -35,6 +35,7 @@ for _stream in ("stdout", "stderr"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import collections
 import re
 import threading
 import time
@@ -48,7 +49,7 @@ import sounddevice as sd
 import numpy as np
 from google import genai
 from google.genai import types
-from ui import JarvisUI
+from webui import JarvisUI   # new WebView2 interface (ui.py kept as legacy Qt UI)
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     save_session_summary, pop_last_session,
@@ -72,14 +73,32 @@ from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
+    get_screen_awareness, get_observe_interval, get_proactive_enabled,
+    get_memory_enabled, get_ambient_mode, get_ambient_interval_min,
+    get_track_activity, get_talk_cadence, language_hint, get_screen_glance,
+    get_narrate_actions, personality_hint, narration_hint, emotion_rules,
+    get_screen_share_quality,
 )
 from core.plugin_loader        import discover_plugins
+from core.screen_observer      import ScreenObserver
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
+from core.tone                 import mood_tag
+from core.emotion              import delivery_tag as _emotion_delivery
 from core.viseme               import VisemeStream
+from core.language             import language_directive, strip_transient_prefix
+from core.persona              import build_persona_block
+from core                      import learning as learning_mod
+from core                      import usage as usage_mod
+from core                      import reasoner as reasoner_mod
+from core.screen_share        import settings_for, frame_fingerprint
+from core.visual_memory       import (
+    VisualMemory, change_regions, significance as _screen_significance,
+    adaptive_poll as _adaptive_poll,
+)
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
@@ -527,10 +546,55 @@ def _keep_context_of(exc: BaseException) -> bool:
     return True
 
 
+def _human_narration(name: str, args: dict) -> str:
+    """A short, human phrasing of a tool call for the on-screen log.
+
+    The spoken narration lives in the system prompt (narration_hint); this is
+    only the HUD's one-line mirror so the user can see what JARVIS is doing even
+    when it ends up staying quiet. Unknown tools fall through to the plain name
+    already printed in the terminal."""
+    a = args or {}
+    act = (a.get("action") or "").lower().strip().replace("_", "").replace(" ", "")
+    _direction = (a.get("direction") or "").strip().lower()
+    _snap_phrase = {
+        "left": "snipping the active window to the left half",
+        "right": "snipping the active window to the right half",
+        "maximize": "maximising the active window",
+        "minimize": "minimising the active window",
+        "restore": "restoring the active window",
+    }.get(_direction) or "snapping the active window"
+    targets = {
+        "listwindows":       "taking a look at what windows are open",
+        "listprocesses":     "checking what is running",
+        "findprocess":       f"hunting for process '{a.get('name') or a.get('query') or ''}'",
+        "killprocess":       f"stopping process '{a.get('name') or a.get('query') or a.get('pid') or ''}'",
+        "startprocess":      f"starting '{a.get('target') or a.get('name') or ''}'",
+        "focuswindow":       f"bringing '{a.get('title') or a.get('target') or ''}' to the front",
+        "closewindow":       "closing the active window",
+        "switchwindow":      "switching to the next window",
+        "showdesktop":       "clearing the desktop",
+        "snapwindow":        _snap_phrase,
+        "systemuptime":      "checking how long the machine has been up",
+    }
+    if act in targets:
+        return targets[act]
+    named = {
+        "open_app":       f"opening {a.get('app_name', '')}" if a.get("app_name") else "opening an app",
+        "web_search":     f"looking up \"{a.get('query', '')}\"" if a.get("query") else "searching the web",
+        "file_processor": f"working on {a.get('file_path', '')}" if a.get("file_path") else "processing a file",
+        "recall_memory":  "recalling what I know",
+        "screen_process": "taking a look at the screen",
+        "computer_settings": f"running {a.get('action', 'a computer command')}",
+    }
+    if name in named and named[name]:
+        return named[name]
+    return ""
+
+
 class JarvisLive:
     def __init__(self, ui: JarvisUI):
         self.ui             = ui
-        self._asst_name     = "JARVI    S"   # updated each session from config
+        self._asst_name     = "JARVIS"       # updated each session from config
         self.session              = None
         self.audio_in_queue       = None
         self.out_queue            = None
@@ -543,6 +607,16 @@ class JarvisLive:
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
+        # Always-on glance state: the loop keeps the newest frame + caption so a
+        # check-in (or any screen question) reflects right-now, not a lazy snap.
+        self._glance_frame         = None    # (img_bytes, mime_type, caption, monotonic_ts)
+        self._glance_caption_ts    = 0.0     # when the caption was last refreshed (to throttle FAST calls)
+        self._glance_attached_ts   = 0.0     # last time a frame was auto-attached to a user turn
+        self._glance_hash          = ""      # fingerprint of the last stored frame (change detection)
+        # Short-term visual memory: a bounded RAM trail of recent screen states
+        # (fingerprint, caption, app, change regions) so conversation and
+        # proactive check-ins see a CONTINUOUS scene, not unrelated snapshots.
+        self._visual_memory        = VisualMemory(max_entries=24)
         self._interrupted          = False   # True while draining audio after user interrupt
         # Transcript-driven mouth shapes for the avatar. Fed from the receive
         # loop as words arrive, drained by the playback loop against the audio.
@@ -596,8 +670,13 @@ class JarvisLive:
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
+        self._screen_observer  = None   # core.screen_observer.ScreenObserver (started in run())
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
+        self._learned_marker       = 0              # how much of _session_log learning has consumed
+        self._last_learn_ts        = 0.0            # first monotonic time of the last actual model-learn
+        self._last_usage_flush     = time.monotonic()  # usage counter persisted on a schedule
+        self._recent_failures = collections.deque(maxlen=8)  # (tool, snippet) of last failures
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -837,13 +916,119 @@ class JarvisLive:
         if self._wake_enabled and not self._awake:
             self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
+        _reason = ""
+        try:
+            if reasoner_mod.classify(text)["hard"]:
+                _reason = ("[REASON] Work through this internally, then answer "
+                           "directly and briefly — the final reply is what matters.")
+        except Exception:
+            pass
+        _tagged = mood_tag(text)
+        # The emotion engine sets HOW to sound for this reply (register, warmth,
+        # pace) — the companion layer's per-message nudge. Empty on neutral.
+        try:
+            _edeliver = _emotion_delivery(text)
+        except Exception:
+            _edeliver = ""
+        _lang = language_directive(text)
+        _pfx = " ".join(x for x in (_reason, _tagged, _edeliver, _lang) if x)
+        _state = self._realtime_context()
+
+        async def _send_with_vision():
+            # Eyes first: if the always-on loop has a fresh frame, slip it into
+            # the session just before the command so the answer is about what the
+            # user can see *right now*, without being asked to look. Throttled.
+            await self._maybe_attach_fresh_glance()
+            body = text
+            if _pfx:
+                body = f"{_pfx}\n{body}"
+            if _state:
+                body = f"{_state}\n\n{body}"
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": body}]},
                 turn_complete=True
-            ),
-            self._loop
+            )
+
+        asyncio.run_coroutine_threadsafe(_send_with_vision(), self._loop)
+
+    def _realtime_context(self) -> str:
+        """A short, local, zero-model-call snapshot of what JARVIS can know is
+        happening *right now* — screen metadata, the last vision glance, recent
+        activity and its own recent failures — attached to the next reply so it
+        is grounded in the actual moment, not just the typed words. Gated by the
+        same privacy levers that own the observer; empty when nothing is known
+        or allowed. Never mentions itself."""
+        lines: list[str] = []
+        try:
+            if get_screen_awareness() and self._screen_observer is not None:
+                bits = self._screen_observer.humanize()
+                if bits:
+                    lines.append(f"- Machine: {bits[:140]}")
+                if get_track_activity():
+                    tl = self._screen_observer.activity_timeline() or []
+                    if tl:
+                        lines.append("- Recently: " + " → ".join(str(x) for x in tl[:4])[:160])
+        except Exception:
+            pass
+        try:
+            if (get_screen_awareness() and get_screen_glance()
+                    and self._glance_frame
+                    and self._glance_frame[2]
+                    and time.monotonic() - self._glance_frame[3] <= 25.0):
+                lines.append(f"- Screen: {(self._glance_frame[2] or '')[:120]}")
+                # Short-term visual memory: what the screen has been showing
+                # and how it got here, so replies build on the scene instead of
+                # treating each frame as unrelated.
+                vm = self._visual_memory.summarize(limit=3)
+                if vm:
+                    for ln in vm.splitlines()[:5]:
+                        lines.append(f"- {ln[:150]}")
+        except Exception:
+            pass
+        try:
+            if self._recent_failures:
+                lines.append("- JARVIS just hit: " + "; ".join(
+                    f"{n}: {str(t)[:60]}" for n, t in list(self._recent_failures)[-2:]))
+        except Exception:
+            pass
+        if not lines:
+            return ""
+        return ("[NOW — local context, seconds fresh] Treat this as extra "
+                "context and use it to answer precisely; you never mention "
+                "that this note is attached.\n" + "\n".join(lines))
+
+    async def _maybe_attach_fresh_glance(self) -> bool:
+        """Attach the newest glance frame (if fresh enough) as a silent context
+        turn. Returns True when one was attached. No turn_complete: the frame
+        is context only, never an extra spoken answer."""
+        if not self.session or not self._awake:
+            return False
+        if not (get_screen_awareness() and get_screen_glance()):
+            return False
+        if not self._glance_frame:
+            return False
+        data, mime, _cap, ts = self._glance_frame
+        if time.monotonic() - ts > 25.0:          # too stale to bother
+            return False
+        if time.monotonic() - self._glance_attached_ts < 40.0:
+            return False                           # throttle: eyes every ~40 s max
+        self._glance_attached_ts = time.monotonic()
+        import base64 as _b64
+        print(f"[Glance] hence attaching fresh frame to the turn "
+              f"({len(data):,} bytes)")
+        await self.session.send_client_content(
+            turns={"role": "user", "parts": [
+                {"inline_data": {
+                    "mime_type": mime,
+                    "data": _b64.b64encode(data).decode("ascii"),
+                }},
+                {"text": ("[IMAGE SOURCE: SCREEN CAPTURE]\nFresh look at the "
+                          "screen just before this message. Note anything that "
+                          "matters, then answer.")},
+            ]},
+            turn_complete=False,
         )
+        return True
 
     def _tail_active(self) -> bool:
         """True while the speakers may still be finishing our last sentence."""
@@ -1010,11 +1195,31 @@ class JarvisLive:
                 has_vision="screen_process" in _names,
                 has_mic=True,
             ),
+            # Ambient participation ("fill the room") — gated by config so the
+            # default session is a strict one-on-one and only an explicit switch
+            # lets JARVIS contribute to conversation it overhears, under cap.
+            "ambient_rules": self._ambient_rules(),
+            # Voice: humour/emotion level and "talk through the work" narration,
+            # both config-gated (see memory/config_manager.py) and both prompt-
+            # level so they cost no extra calls.
+            "personality_rules":  personality_hint(),
+            "action_style_rules": narration_hint(),
+            "emotion_rules":      emotion_rules(),
         })
 
         parts = [time_ctx, identity_ctx]
         if mem_str:
             parts.append(mem_str)
+        # The personal companion layer: who JARVIS is to this person, what we
+        # were last doing, standing lessons, and the conversational contract.
+        # Rendered here (like identity) so the voice always matches config.
+        try:
+            persona_block = build_persona_block(memory, self._asst_name,
+                                                _user_name)
+            if persona_block:
+                parts.append(persona_block)
+        except Exception as e:
+            print(f"[JARVIS] persona block skipped: {e}")
         parts.append(sys_prompt)
 
         cfg = dict(
@@ -1115,7 +1320,20 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[JARVIS] 🔧 {name}  {args}")
-        self.ui.set_state("THINKING")
+        # EXECUTING is its own state: the face and the header pill both show
+        # "doing something concrete" rather than the generic thinking look.
+        self.ui.set_state("EXECUTING")
+        # Persistent usage tracking — cheap in-memory tick, flushed on a
+        # schedule. Feeds the workflow-learning loop (recurring actions across
+        # days become remembered preferences).
+        try:
+            usage_mod.record("action::" + name)
+        except Exception:
+            pass
+        if get_narrate_actions():
+            line = _human_narration(name, args)
+            if line:
+                self.ui.write_log(f"JARVIS: {line}…")
 
 
         if name == "save_memory":
@@ -1123,8 +1341,12 @@ class JarvisLive:
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
-                update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                # Privacy lever: memory writes can be switched off entirely.
+                if get_memory_enabled():
+                    update_memory({category: {key: {"value": value}}})
+                    print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                else:
+                    print(f"[Memory] ⛔ save_memory skipped (memory_enabled=false)")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(
@@ -1172,9 +1394,30 @@ class JarvisLive:
                         print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
                         _stall = "camera"
                     else:
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
-                        print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
-                        _stall = "screen"
+                        # Privacy lever: screen capture is refused when the
+                        # screen_awareness flag is off. The camera is not covered
+                        # by it — that is the webcam the user can see is open.
+                        if not get_screen_awareness():
+                            self._vision_busy = False
+                            result = ("I can't look at the screen right now — "
+                                      "screen awareness is turned off in my settings. "
+                                      "Enable it and I'll be able to see the screen again.")
+                            print("[Vision] 🚫 Screen capture blocked (screen_awareness=false)")
+                        else:
+                            # Ultra-smooth path: the always-on loop is never more
+                            # than ~8 s stale, so if one is that fresh we hand it
+                            # over instead of snapping a second screenshot. The
+                            # capture backend does the active-monitor framing.
+                            if (self._glance_frame and
+                                    time.monotonic() - self._glance_frame[3] <= 6.0):
+                                img_b, mime_t = self._glance_frame[:2]
+                                print(f"[Vision] 🖥️  Screen (from live glance, "
+                                      f"{len(img_b):,} bytes)")
+                            else:
+                                img_b, mime_t = await loop.run_in_executor(
+                                    None, _capture_screen, True)
+                                print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
+                            _stall = "screen"
                     self._pending_vision = (img_b, mime_t, user_text, angle)
                     # The image is attached to this same exchange, so there is
                     # nothing to stall for and nothing to announce. Asking for an
@@ -1277,6 +1520,22 @@ class JarvisLive:
             response={"result": result},
             **_extra
         )
+
+    def _remember_failure(self, name: str, result: str) -> None:
+        """Remember recent tool failures so proactive check-ins can notice them
+        and offer a fix instead of the failure being forgotten."""
+        low = str(result or "").strip()
+        if not low or low in ("Done.", "Unknown tool"):
+            return
+        if low.lower().startswith(("verified:", "done", "ok",
+                                   "success", "downloaded")):
+            return
+        _bad = ("failed", "error", "unverified", "could not", "couldn't",
+                "not found", "no results", "cannot", "can't", "unable",
+                "timed out", "unknown tool", "does not appear",
+                "not installed")
+        if any(t in low.lower() for t in _bad):
+            self._recent_failures.append((name, low[:180]))
 
     async def _send_realtime(self):
         while True:
@@ -1532,8 +1791,9 @@ class JarvisLive:
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self._last_out_logged = ""   # new exchange
-                                self.ui.write_log(f"You: {full_in}")
-                                self._session_log.append(f"User: {full_in}")
+                                self.ui.write_log(f"You: {strip_transient_prefix(full_in)}")
+                                self._session_log.append(
+                                    f"User: {strip_transient_prefix(full_in)}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",
@@ -1576,6 +1836,7 @@ class JarvisLive:
                             print(f"[JARVIS] 📞 {fc.name}")
                             fr = await self._execute_tool(fc)
                             fn_responses.append(fr)
+                            self._remember_failure(fc.name, fr)
                         await self.session.send_tool_response(
                             function_responses=fn_responses
                         )
@@ -1757,6 +2018,9 @@ class JarvisLive:
         lang_clause = (f" Speak this greeting in {lang}, then follow the "
                        f"user's own language from their first reply onward."
                        if lang else "")
+        # Configured preference ('' when auto) — a sharper hint than the stored
+        # language when the user has pinned Hindi / English / Hinglish.
+        lang_mode_clause = language_hint()
         name_clause = f" Address the user as {name}." if name else ""
 
         # Inject last session context if available — pop removes it so it's never repeated
@@ -1774,7 +2038,7 @@ class JarvisLive:
 
         p1 = (
             f"Greet the user warmly, mention it is {time_str}, and say you are fetching today's news now.{session_clause} "
-            f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{name_clause}"
+            f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{lang_mode_clause}{name_clause}"
         )
 
         # Clear the turn-done event so we can wait for Phase 1 to finish
@@ -1793,6 +2057,7 @@ class JarvisLive:
                 lang_str = (f" Speak in {lang} unless the user has since "
                             f"spoken another language, in which case use theirs."
                             if lang else "")
+                lang_str = f"{lang_str} {lang_mode_clause}".strip()
 
                 # Wait for news fetch (already running) and Phase 1 turn-complete
                 # in parallel — whichever takes longer determines the wait time
@@ -1860,6 +2125,12 @@ class JarvisLive:
 
     async def _save_session_summary(self) -> None:
         """Summarise the current session in 1-2 sentences and save to long_term.json."""
+        # Privacy lever: no memory writes at all when disabled. The conversation
+        # log is drained either way so it can never accumulate unbounded.
+        if not get_memory_enabled():
+            print("[Memory] ⛔ Session summary skipped (memory_enabled=false)")
+            self._session_log = []
+            return
         log = self._session_log
         if len(log) < 3:          # need at least one exchange to be worth saving
             return
@@ -1885,6 +2156,78 @@ class JarvisLive:
                 save_session_summary(summary, lang)
         except Exception as e:
             print(f"[Memory] ⚠️ Session summary failed: {e}")
+
+        # Continuous learning on the same drained chunk: extract durable facts
+        # and lessons, then a quiet self-review → applied improvements. Runs in
+        # a worker thread; failures only mean nothing was learned this round.
+        try:
+            await self._learn_from_lines(log)
+        except Exception as e:
+            print(f"[Learning] ⚠️ session-end learning failed: {e}")
+        self._learned_marker = 0
+
+    # ── Continuous learning (self-improvement loop) ──────────────────────────────
+
+    async def _run_learning_loop(self) -> None:
+        """Background task: incrementally learn from the conversation in a long
+        session (facts + lessons + self-review) and flush the usage counters, so
+        JARVIS keeps learning while the user keeps talking. Near-continuous
+        observation, throttled calls: the loop polls every ~45 s but only pays
+        for a model call when real new dialogue has accumulated — bursts learn
+        promptly, slow chatter never spends quota on stale repeats.
+        """
+        await asyncio.sleep(30)            # let a session actually start
+        while True:
+            await asyncio.sleep(45)
+            try:
+                await self._learn_from_recent()
+            except Exception as e:
+                print(f"[Learning] ⚠️ loop error: {e}")
+            try:
+                usage_mod.flush()
+                if time.monotonic() - self._last_usage_flush >= 900:
+                    usage_mod.prune_older_than(days=45)
+                    self._last_usage_flush = time.monotonic()
+            except Exception:
+                pass
+
+    async def _learn_from_recent(self) -> None:
+        """Consume the unconsumed tail of the conversation log (≥4 turns) and
+        learn from it, honouring the memory_enabled privacy lever. Bursts (≥10
+        new turns) learn right away; slow chatter waits at most ~4 minutes past
+        the fourth turn, so learning stays continuous without burning quota."""
+        if not get_memory_enabled():
+            return
+        log = list(self._session_log)
+        new = len(log) - self._learned_marker
+        if new < 4:
+            return
+        slow_ok = time.monotonic() - self._last_learn_ts >= 240
+        if not slow_ok and new < 10:
+            return                       # burst throttle: recent learn already
+        chunk = log[self._learned_marker:]
+        if len(chunk) < 4:
+            return
+        await self._learn_from_lines(chunk)
+        self._learned_marker = len(self._session_log)
+        self._last_learn_ts = time.monotonic()
+
+    async def _learn_from_lines(self, chunk: list[str]) -> None:
+        """[worker-thread] Fact+lesson extraction and a self-review pass. Both
+        are model calls that never raise; a failed call learns nothing."""
+        if not get_memory_enabled() or not chunk:
+            return
+        try:
+            await asyncio.to_thread(learning_mod.learn_from_conversation, chunk)
+        except Exception as e:
+            print(f"[Learning] ⚠️ extraction failed: {e}")
+        try:
+            convo = "\n".join((str(l) for l in chunk))[-4000:]
+            notes = await asyncio.to_thread(learning_mod.evaluate, convo)
+            if notes:
+                await asyncio.to_thread(learning_mod.apply_improvements, notes)
+        except Exception as e:
+            print(f"[Learning] ⚠️ review failed: {e}")
 
     # ── System monitor ──────────────────────────────────────────────────────────
 
@@ -1941,7 +2284,155 @@ class JarvisLive:
                         print(f"[Monitor] ⚠️ Background check error: {e}")
             await asyncio.sleep(1800)     # check every 30 minutes
 
+    # ── Ambient participation ───────────────────────────────────────────────────
+
+    def _ambient_rules(self) -> str:
+        """The [AMBIENT] prompt section. Always present so the default session is
+        an explicit one-on-one; when `ambient_mode` is switched on this relaxes
+        into a capped, well-mannered right to contribute to the room."""
+        if not get_ambient_mode():
+            return (
+                "This is a one-on-one session. Speech you can hear that is not "
+                "addressed to you — a conversation in the room, a video, another "
+                "person talking — is background noise. Do NOT respond to it: stay "
+                "silent until the user speaks to you directly."
+            )
+
+        interval = max(3, get_ambient_interval_min())
+        return (
+            "[AMBIENT PARTICIPATION]\n"
+            "You are in the room, not just the headset: you can hear the user in "
+            "conversation with other people, or the room around the microphone. "
+            "You MAY contribute to that conversation even when it is not addressed "
+            "to you — the way a well-mannered expert in the room would — under "
+            "these hard rules:\n"
+            f"- At most one contribution every {interval} minutes. Silence is the "
+            "default state, and every contribution you make spends that budget.\n"
+            "- Only speak when it is genuinely useful: a missing fact, a sharper "
+            "wording, or a direct answer to a real question anyone in the room "
+            "asked. If you are not sure it is welcome, say nothing.\n"
+            "- Never answer a question that was clearly directed at someone else "
+            "unless invited. Never repeat yourself, never narrate what is "
+            "happening, never comment on the conversation itself.\n"
+            "- The moment the user says to stop -- 'stop', 'shut up', 'bas karo', "
+            "'you talk too much' -- or any language -- YOU STOP completely. Stay "
+            "silent until the user speaks to you directly again.\n"
+            "- Nothing here changes the ordinary rules: when the user speaks to "
+            "you, answer normally; the [LANGUAGE] rules and the tool rules are "
+            "still in force in every contribution."
+        )
+
     # ── Proactive mode ──────────────────────────────────────────────────────────
+
+    # ── Always-on screen glance ──────────────────────────────────────────────
+
+    def set_screen_status(self, active: bool, caption: str = "") -> None:
+        """Thread-safe hop to the UI thread for the Screen Awareness chip."""
+        try:
+            self._screen_status_sig.emit(bool(active), str(caption or ""))
+        except Exception:
+            pass
+
+    async def _run_glance_loop(self) -> None:
+        """Keep the newest screen frame + one-line caption in memory so proactive
+        check-ins (and screen questions) reflect the screen *now*, not a lazy
+        snapshot taken once a check-in fires. Designed to cost nothing when
+        nothing changes: a captured frame is fingerprinted, and while the screen
+        is essentially static — no caption call, no re-encode, no re-store; the
+        already-decoded frame is just re-timestamped so attached context stays
+        fresh for free. Cadence comes from the quality the user picked in the
+        UI (light = almost zero drain, high = near-live view)."""
+        while True:
+            base_poll, ttl = settings_for(get_screen_share_quality())
+            # Adaptive cadence: media stretches the poll, UI churn tightens it,
+            # a long-static screen relaxes it. Recomputed every cycle from the
+            # visual memory's trail — no extra sampling cost.
+            poll = _adaptive_poll(
+                base_poll,
+                category=(self._screen_observer.snapshot().get("category", "")
+                          if self._screen_observer else ""),
+                recent_change_ratio=(self._visual_memory.last or {}).get("ratio", 0.0),
+                static_secs=self._visual_memory.static_secs(),
+            )
+            await asyncio.sleep(poll)
+            if not self.session or not self._awake:
+                continue
+            if not (get_screen_awareness() and get_screen_glance()):
+                self._visual_memory.set_enabled(False)
+                self.ui.set_screen_status(False)
+                continue
+            self._visual_memory.set_enabled(True)
+            self.ui.set_screen_status(True,
+                                      (self._screen_observer.humanize()
+                                       if self._screen_observer else ""))
+            with self._speaking_lock:
+                speaking = self._is_speaking
+            if speaking:
+                continue
+            try:
+                data, mime = await asyncio.to_thread(_capture_screen, True)
+                if not data:
+                    continue
+                fprint = frame_fingerprint(data)
+                changed = bool(fprint) and fprint != self._glance_hash
+                prev_hash = self._glance_hash
+                self._glance_hash = self._glance_hash if fprint == "" else fprint
+                old = self._glance_frame
+                caption = old[2] if old else None
+                now_mono = time.monotonic()
+                if changed:
+                    # WHERE did it change? A 16-cell perceptual diff of the
+                    # previous vs current frame — cheap, local, no model.
+                    prev_data = old[0] if old else None
+                    regions = await asyncio.to_thread(
+                        change_regions, prev_data, data)
+                    # Observed state: app/category from the local observer.
+                    obs = (self._screen_observer.snapshot()
+                           if self._screen_observer else {})
+                    sig, why = _screen_significance(
+                        ratio=regions.get("ratio", 0.0),
+                        caption_new=(caption or "") if caption else "",
+                        caption_old=(old[2] or "") if old else "",
+                        category=obs.get("category", ""),
+                        static_secs=self._visual_memory.static_secs(),
+                    )
+                    # Only pay for the caption model call when the screen truly
+                    # moved AND the TTL allows. High-significance frames (errors,
+                    # dialogs, big layout changes) refresh sooner than the TTL.
+                    want_caption = (
+                        caption is None
+                        or now_mono - self._glance_caption_ts >= ttl
+                        or (sig >= 0.55 and
+                            now_mono - self._glance_caption_ts >= ttl / 3)
+                    )
+                    if want_caption:
+                        from actions.proactive import screen_glance
+                        new_caption = await asyncio.to_thread(
+                            screen_glance, data, mime)
+                        if new_caption:
+                            caption = new_caption
+                        self._glance_caption_ts = now_mono
+                    self._glance_frame = (data, mime, caption, now_mono)
+                    # Feed the short-term visual memory (real changes only).
+                    self._visual_memory.observe(
+                        fingerprint=fprint,
+                        caption=caption or "",
+                        app=obs.get("app", ""),
+                        title=obs.get("title", ""),
+                        category=obs.get("category", ""),
+                        ratio=regions.get("ratio", 0.0),
+                        where=regions.get("where", ""),
+                        sig=sig,
+                    )
+                    if caption and (want_caption or sig >= 0.4):
+                        print(f"[Glance] change ({why or 'minor'}) — caption "
+                              f"{'refreshed' if want_caption else 'kept'}.")
+                elif old:
+                    # Static screen: skip encode/caption entirely, but keep the
+                    # timestamp fresh so a check-in can still attach this frame.
+                    self._glance_frame = (old[0], old[1], old[2], now_mono)
+            except Exception as e:
+                print(f"[Glance] skipped: {e}")
 
     async def _run_proactive_mode(self) -> None:
         """
@@ -1950,9 +2441,18 @@ class JarvisLive:
         to say proactively. No hardcoded rules — Gemini makes the call.
         """
         while True:
-            await asyncio.sleep(60)   # evaluate once per minute
+            # Cadence is read live so a config edit takes effect without a
+            # restart. `live` also narrows the poll loop so near-continuous
+            # presence is not hollowed out by a 60-second tick.
+            cadence = self._proactive.apply_cadence(get_talk_cadence())
+            tick = 15 if cadence == "chatty" else (30 if cadence == "live" else 60)
+            await asyncio.sleep(tick)
 
             if not self.session or not self._awake:
+                continue
+
+            # Privacy lever: proactive check-ins can be switched off entirely.
+            if not get_proactive_enabled():
                 continue
 
             with self._speaking_lock:
@@ -1969,13 +2469,77 @@ class JarvisLive:
                 memory       = await asyncio.to_thread(load_memory)
                 monitors     = await asyncio.to_thread(list_monitors)
                 recent_turns = self._session_log[-8:] if self._session_log else []
+
+                # Screen/activity context (metadata only) from the local observer,
+                # owned by the same privacy flag that gates the observer itself.
+                screen = None
+                screen_events = None
+                timeline = None
+                if get_screen_awareness() and self._screen_observer is not None:
+                    screen = self._screen_observer.humanize() or None
+                    if screen:
+                        evs = self._screen_observer.recent_events()
+                        screen_events = [
+                            f"left {e['before']['app'] or 'a window'} → "
+                            f"{e['app'] or e['title'][:40] or 'a window'}"
+                            for e in evs[-4:]
+                            if e.get("before")
+                        ] or None
+                    if get_track_activity():
+                        timeline = self._screen_observer.activity_timeline() or None
+
+                # Fresh-eye context: the always-on glance loop already keeps the
+                # newest frame + one-line caption, so an attached check-in talks
+                # about the screen as it is *right now* — and we attach the real
+                # image, not just its description. Gated by the same privacy
+                # levers that own the loop (awareness + glance).
+                screen_description = None
+                frame_part = None
+                visual_trail = None
+                if get_screen_awareness() and get_screen_glance() and self._glance_frame:
+                    data, mime, caption, ts = self._glance_frame
+                    if time.monotonic() - ts <= 30.0:
+                        screen_description = caption
+                        frame_part = (data, mime)
+                    # The trail that led here: recent significant screen changes
+                    # from the short-term visual memory, so a check-in can say
+                    # "you've been fighting that dialog a while" accurately.
+                    if self._visual_memory.recent_changes():
+                        visual_trail = self._visual_memory.recent_changes(3)
+
                 prompt = self._proactive.build_prompt(
-                    memory       = memory,
+                    memory        = memory,
                     monitors     = monitors or None,
-                    recent_turns = recent_turns or None,
+                    recent_turns  = recent_turns or None,
+                    screen        = screen,
+                    screen_events = screen_events,
+                    timeline      = timeline,
+                    # Companion cadences keep the thread alive rather than
+                    # waiting for something "worth interrupting for".
+                    keep_flow     = cadence in ("live", "chatty"),
+                    screen_description = screen_description,
+                    visual_trail  = visual_trail,
+                    issues        = list(self._recent_failures) or None,
+                    # Locally-counted recurring actions (never content) — the
+                    # "notices routines without being told" half of proactivity.
+                    routines      = await asyncio.to_thread(
+                        usage_mod.workflow_candidates) or None,
                 )
+                parts = [{"text": prompt}]
+                if frame_part:
+                    import base64 as _b64
+                    data, mime = frame_part
+                    print(f"[Proactive] attaching live screen frame to check-in "
+                          f"({len(data):,} bytes)")
+                    parts = [
+                        {"inline_data": {
+                            "mime_type": mime,
+                            "data": _b64.b64encode(data).decode("ascii"),
+                        }},
+                        *parts,
+                    ]
                 await self.session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": prompt}]},
+                    turns={"role": "user", "parts": parts},
                     turn_complete=True,
                 )
                 print("[JARVIS] Proactive check-in.")
@@ -2027,8 +2591,16 @@ class JarvisLive:
                     # has no desktop WAKE button — so it wakes JARVIS if asleep.
                     if self._wake_enabled and not self._awake:
                         self.wake(reason="remote command")
+                    _dtag = mood_tag(text)
+                    try:
+                        _dtag = " ".join(x for x in (_dtag, _emotion_delivery(text))
+                                         if x)
+                    except Exception:
+                        pass
                     await self.session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": text}]},
+                        turns={"role": "user", "parts": [
+                            {"text": f"{_dtag}\n{text}" if _dtag else text}
+                        ]},
                         turn_complete=True,
                     )
                     self.ui.write_log(f"[Web]: {text}")
@@ -2077,6 +2649,25 @@ class JarvisLive:
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
+
+        # Screen observer — lightweight foreground-window/activity sampler (no
+        # pixels, no API calls) that gives the proactive engine live context.
+        # Runs as a daemon thread for the whole process lifetime; disabled when
+        # the screen_awareness privacy lever is off.
+        if get_screen_awareness():
+            try:
+                self._screen_observer = ScreenObserver(
+                    interval=get_observe_interval(),
+                    max_events=6,
+                )
+                self._screen_observer.start()
+                print("[JARVIS] Screen observer active "
+                      f"({get_observe_interval()}s interval).")
+            except Exception as e:
+                print(f"[ScreenObserver] disabled: {e}")
+                self._screen_observer = None
+        else:
+            print("[JARVIS] Screen observer off (screen_awareness=false).")
 
         while True:
             try:
@@ -2141,6 +2732,8 @@ class JarvisLive:
                     tg.create_task(self._run_system_monitor())
                     tg.create_task(self._run_background_monitor())
                     tg.create_task(self._run_proactive_mode())
+                    tg.create_task(self._run_glance_loop())
+                    tg.create_task(self._run_learning_loop())
                     tg.create_task(self._run_sleep_watch())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())

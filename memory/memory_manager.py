@@ -52,6 +52,7 @@ def _empty_memory() -> dict:
         "relationships": {},
         "wishes":        {},
         "notes":         {},
+        "lessons":       {},
     }
 
 def load_memory() -> dict:
@@ -185,6 +186,7 @@ _CATEGORY_LABELS = {
     "relationships": "People in their life",
     "wishes":        "Wishes / plans",
     "notes":         "Notes",
+    "lessons":       "Lessons learned (self-improvement)",
 }
 
 _IDENTITY_FIELDS = ["name", "age", "birthday", "city", "job",
@@ -402,7 +404,8 @@ def all_entries_for_ui() -> list[dict]:
     return rows
 
 def remember(key: str, value: str, category: str = "notes") -> str:
-    valid = {"identity", "preferences", "projects", "relationships", "wishes", "notes"}
+    valid = {"identity", "preferences", "projects", "relationships",
+             "wishes", "notes", "lessons"}
     if category not in valid:
         category = "notes"
     update_memory({category: {key: {"value": value}}})
