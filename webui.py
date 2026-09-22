@@ -755,6 +755,65 @@ class JarvisAPI:
         self.open_path(str(p))
         return {"ok": True}
 
+    def create_shortcut(self) -> dict:
+        """Create a desktop shortcut for JARVIS (named ICE)."""
+        try:
+            if platform.system() != "Windows":
+                return {"ok": False, "err": "Desktop shortcuts only supported on Windows"}
+            
+            import win32com.client
+            import win32con
+            import pythoncom
+
+            # The real Desktop: %USERPROFILE%\Desktop can be a shadow *file* on
+            # OneDrive-linked accounts. Ask the shell for the actual folder.
+            desktop = None
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(260)
+                r = ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf)
+                p = Path(buf.value)
+                if r == 0 and p.exists() and p.is_dir():
+                    desktop = p
+            except Exception:
+                desktop = None
+            if desktop is None:
+                try:
+                    import win32api
+                    desktop = Path(win32api.SHGetSpecialFolderPath(0, win32con.CSIDL_DESKTOPDIRECTORY))
+                except Exception:
+                    desktop = None
+            if desktop is None:
+                desktop = Path(os.environ.get("USERPROFILE", "")) / "Desktop"
+
+            shortcut_path = desktop / "ICE.lnk"
+            
+            # Determine target (exe or python main.py)
+            if getattr(sys, "frozen", False):
+                target = sys.executable
+                args = ""
+            else:
+                target = sys.executable
+                args = str(BASE_DIR / "main.py")
+            
+            pythoncom.CoInitialize()
+            try:
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shortcut = shell.CreateShortCut(str(shortcut_path))
+                shortcut.Targetpath = target
+                if args:
+                    shortcut.Arguments = args
+                shortcut.WorkingDirectory = str(BASE_DIR)
+                shortcut.IconLocation = str(BASE_DIR / "assets" / "jarvis.ico")
+                shortcut.Description = "ICE JARVIS - Voice AI Assistant"
+                shortcut.save()
+            finally:
+                pythoncom.CoUninitialize()
+            
+            return {"ok": True, "path": str(shortcut_path)}
+        except Exception as e:
+            return {"ok": False, "err": str(e)[:120]}
+
     def open_path(self, path: str) -> dict:
         try:
             if platform.system() == "Windows":

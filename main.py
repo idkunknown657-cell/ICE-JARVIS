@@ -112,6 +112,55 @@ def get_base_dir():
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
 
+
+def _enable_file_log():
+    """Mirror all output to JARVIS_debug.log next to the exe (frozen only).
+
+    The shipped exe is windowed (console=False), so without this every print
+    and traceback vanishes — a connection failure or crash leaves zero
+    evidence. Source runs keep console output and skip this. Rotates at ~2 MB.
+    Never raises.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        from datetime import datetime as _dt
+        log_path = get_base_dir() / "JARVIS_debug.log"
+        try:
+            if log_path.exists() and log_path.stat().st_size > 2_000_000:
+                bak = log_path.with_name("JARVIS_debug.bak.log")
+                try:
+                    if bak.exists():
+                        bak.unlink()
+                except Exception:
+                    pass
+                log_path.rename(bak)
+        except Exception:
+            pass
+        f = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
+        f.write(f"\n===== JARVIS start {_dt.now():%Y-%m-%d %H:%M:%S} =====\n")
+        f.flush()
+        sys.stdout = f
+        sys.stderr = f
+
+        def _hook(exc_type, exc_val, exc_tb):
+            import traceback as _tb
+            try:
+                f.write("".join(_tb.format_exception(exc_type, exc_val, exc_tb)))
+                f.flush()
+            except Exception:
+                pass
+
+        sys.excepthook = _hook
+        try:
+            import threading as _th
+            _th.excepthook = lambda args: _hook(
+                args.exc_type, args.exc_value, args.exc_traceback)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
@@ -298,6 +347,68 @@ def _render_prompt(template: str, values: dict) -> str:
     out = template or ""
     for key, val in values.items():
         out = out.replace("{" + key + "}", str(val))
+    return out
+
+
+def _fix_schema_node(node, tool_name: str, path: str) -> None:
+    """Repair one JSON-schema node in place. Never raises.
+
+    The Live API closes the whole connection with a 1007 when a single tool
+    declaration is malformed — one bad plugin then silences the entire
+    assistant with no voice and no visible error. So every declaration is
+    repaired here before it is sent: an ARRAY without `items` gets a STRING
+    item type (the overwhelmingly common case), and anything unrepairable is
+    reported so the caller can drop that property.
+    """
+    if not isinstance(node, dict):
+        return
+    try:
+        if str(node.get("type", "")).strip().upper() == "ARRAY" and "items" not in node:
+            node["items"] = {"type": "STRING"}
+            print(f"[Tools] fixed {tool_name}: ARRAY '{path}' had no items "
+                  f"-> assumed STRING items")
+        sub = node.get("properties")
+        if isinstance(sub, dict):
+            for key, child in sub.items():
+                _fix_schema_node(child, tool_name, f"{path}.{key}" if path else str(key))
+        items = node.get("items")
+        if isinstance(items, dict):
+            _fix_schema_node(items, tool_name, path + "[]")
+    except Exception:
+        pass
+
+
+def _sanitize_tool_declarations(declarations) -> list:
+    """Return only the declarations safe to send to the Live API. Never raises.
+
+    A declaration is dropped (with a console + UI log) only when its shape is
+    broken beyond a local repair — a missing name, or parameters that are not
+    an OBJECT. Everything else is repaired in place by _fix_schema_node.
+    Without this, one malformed plugin schema fails the entire session setup
+    and the app sits at a fake LISTENING state that can never speak.
+    """
+    out = []
+    for d in declarations or ():
+        try:
+            name = d.get("name") if isinstance(d, dict) else getattr(d, "name", None)
+            if not name:
+                print("[Tools] dropped a declaration with no name")
+                continue
+            params = d.get("parameters") if isinstance(d, dict) else getattr(d, "parameters", None)
+            if not isinstance(params, dict) or params.get("type") != "OBJECT":
+                print(f"[Tools] dropped '{name}': parameters must be "
+                      f"an OBJECT schema")
+                continue
+            if not isinstance(params.get("properties"), dict):
+                params["properties"] = {}
+            _fix_schema_node(params, str(name), "")
+            out.append(d)
+        except Exception as e:
+            try:
+                print(f"[Tools] dropped a declaration (sanitizer error: {e})")
+            except Exception:
+                pass
+            continue
     return out
 
 
@@ -601,6 +712,14 @@ class JarvisLive:
         self._loop                     = None
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
+        # Local end-of-speech detection for the live session. gemini-3.1-flash
+        # keeps an open mic segment until it sees audio_stream_end — without it
+        # Gemini transcribes the user and then waits forever, so the assistant
+        # looks 'listening' but never replies. These counters turn the mic
+        # stream into discrete turns: after ~0.45s of silence following speech,
+        # the turn is closed and the model starts answering.
+        self._user_spoke          = False
+        self._user_silent_blocks  = 0
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
@@ -681,7 +800,11 @@ class JarvisLive:
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
 
-        _base_dir = Path(__file__).resolve().parent
+        # get_base_dir() (not __file__) so the frozen exe scans the actions/
+        # and plugins/ folders staged NEXT TO the exe. __file__ inside a
+        # PyInstaller bundle resolves under _internal/, where those folders do
+        # not exist — discovery would find zero tools and mkdir junk there.
+        _base_dir = get_base_dir()
         _inline_names = {t["name"] for t in TOOL_DECLARATIONS}
 
         # File-backed tools: every actions/*.py with a TOOL dict, discovered the
@@ -1182,9 +1305,10 @@ class JarvisLive:
         # the host, the capability list from the registries that were just
         # discovered. Rename the assistant, add a plugin or move to another OS
         # and this follows without anyone editing a prompt.
-        _all_decls = (TOOL_DECLARATIONS
-                      + self._action_registry.get_tool_declarations()
-                      + self._plugin_registry.get_tool_declarations())
+        _all_decls = _sanitize_tool_declarations(
+            TOOL_DECLARATIONS
+            + self._action_registry.get_tool_declarations()
+            + self._plugin_registry.get_tool_declarations())
         _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
@@ -1540,6 +1664,16 @@ class JarvisLive:
     async def _send_realtime(self):
         while True:
             msg = await self.out_queue.get()
+            if msg.get("audio_stream_end"):
+                # End the user's turn explicitly. gemini-3.1-flash-live-preview
+                # hears streamed voice but almost never closes the turn on its
+                # own (measured: it transcribes the user, then waits forever).
+                # Closing the segment is what makes the server start answering.
+                try:
+                    await self.session.send_realtime_input(audio_stream_end=True)
+                except Exception as _e:
+                    print(f"[JARVIS] turn-end failed: {_e}")
+                continue
             # Gemini 3.x Live rejects the old realtime_input.media_chunks field
             # (what `media=...` maps to) and closes the socket with a 1007. Send
             # mic / phone PCM through the new `audio` field instead. Queue items
@@ -1617,6 +1751,32 @@ class JarvisLive:
                 return
 
             if not self.ui.muted and not self._phone_active:
+                level = _pcm_level(indata)
+                # ── End-of-speech → close the user's turn ────────────────────
+                # gemini-3.1-flash-live-preview does not close a spoken turn on
+                # its own: it transcribes the user and then waits (forever) for
+                # audio_stream_end before answering. So the turn is closed here,
+                # locally, after a short silence following speech. ~0.45s of
+                # quiet: halfway between a pause mid-sentence (~0.2s) and a
+                # natural reply gap after finishing (~0.8s), so answers start
+                # fast while a thinking user is not cut off mid-thought.
+                if level > 0.0:
+                    self._user_spoke = True
+                    self._user_silent_blocks = 0
+                elif self._user_spoke:
+                    self._user_silent_blocks += 1
+                    # 1024 samples @16 kHz ≈ 64 ms per block → 7 blocks ≈ 0.45 s
+                    if self._user_silent_blocks >= 7:
+                        self._user_spoke = False
+                        self._user_silent_blocks = 0
+                        try:
+                            loop.call_soon_threadsafe(
+                                self.out_queue.put_nowait,
+                                {"audio_stream_end": True}
+                            )
+                        except Exception:
+                            pass  # full queue — the next silence window will close it
+
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
@@ -1626,7 +1786,7 @@ class JarvisLive:
                 # the user's actual voice while listening. Purely cosmetic — any
                 # failure here must never disturb the mic.
                 try:
-                    self.ui.set_audio_level(_pcm_level(indata))
+                    self.ui.set_audio_level(level)
                 except Exception:
                     pass
 
@@ -2555,7 +2715,15 @@ class JarvisLive:
             try:
                 chunk = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                # No audio for 1 s → phone mic inactive, give PC mic back
+                # No audio for 1 s → phone mic inactive, give PC mic back.
+                # Close the phone user's turn the same way the PC mic closes
+                # its own: without audio_stream_end the model transcribes and
+                # then waits forever, so the phone never gets an answer.
+                if self._phone_active:
+                    try:
+                        self.out_queue.put_nowait({"audio_stream_end": True})
+                    except asyncio.QueueFull:
+                        pass
                 self._phone_active = False
                 continue
             self._phone_active = True   # phone is streaming — silence PC mic
@@ -2860,6 +3028,7 @@ class JarvisLive:
             await asyncio.sleep(delay)
 
 def main():
+    _enable_file_log()
     ui = JarvisUI("face.png")
 
     def runner():

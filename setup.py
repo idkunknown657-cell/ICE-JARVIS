@@ -17,6 +17,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows consoles often run cp1252, which cannot encode the glyphs used in
+# this script's output. Force UTF-8 (modern terminals render the real glyph);
+# if a console still refuses it, 'replace' downgrades to '?' instead of
+# crashing the whole setup with a UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 HERE = Path(__file__).resolve().parent
 

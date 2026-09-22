@@ -1,79 +1,100 @@
 # ICE JARVIS
 
 <p align="center">
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/idkunknown657-cell/ICE-JARVIS?style=flat-square&color=38bdf8"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20x64-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-403%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-430%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
 
-A Windows voice companion with a warm, expressive personality. ICE JARVIS holds
-natural **English, Hindi and Hinglish** conversations, understands emotional
-context, remembers what matters locally, watches the screen when allowed, and
-helps with everyday computer tasks — by voice or by chat.
+ICE — a voice companion that runs on your own machine. It talks to you
+naturally (**English / Hindi / Hinglish**), understands emotional context,
+remembers things locally, watches the screen when you allow it, and controls
+your PC by voice — mouse, keyboard, windows, typing, everything.
 
-Everything personal stays on your machine: your keys, your memory, your
-conversations. The app self-updates, but your data never leaves your PC.
-
----
-
-## 📥 Download for Windows (recommended)
-
-1. Go to **[Releases → Latest](https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest)**.
-2. Download **`ICE-JARVIS-Windows-x64.zip`**.
-3. Extract the ZIP to a normal folder (keep all extracted files together).
-4. Run **`JARVIS.exe`**.
-5. On first launch, paste your **own free Gemini API key**
-   ([get one at aistudio.google.com](https://aistudio.google.com/apikey)).
-6. Start talking or typing. Done.
-
-> **SmartScreen warning?** The app is not code-signed. Click
-> *More info → Run anyway* — but only for builds downloaded from this
-> repository's official Releases page.
-
-**Updates are one click:** the app checks this repo at startup, shows an
-animated update card under **⚙ Settings → Advanced → Updates**, and swaps
-itself in after a restart. Your keys and memory survive every update.
+Everything personal stays on **your** PC: your API keys, your memory, your
+conversations. No telemetry, no accounts, no cloud.
 
 ---
 
-## 🛠 Run from source (for developers)
+## 🚀 Quick start (run from source)
+
+> The code **is** the app. Run it with Python — no build, no exe, no installers.
+
+### 0. Prerequisites
+
+| Requirement | How to check |
+|---|---|
+| **Python 3.11–3.13** (64-bit) | `python --version` — install from [python.org](https://www.python.org/downloads/) and tick **☑ Add to PATH** |
+| **A microphone** | built-in or USB — used for voice input |
+| **Speakers / headset** | voice output |
+| **A free Gemini API key** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free tier) |
+
+Windows 10/11 is the primary target. Linux/macOS work but are tested less.
+
+### 1. Get the code
 
 ```powershell
-# 1. Get the code
 git clone https://github.com/idkunknown657-cell/ICE-JARVIS.git
 cd ICE-JARVIS
+```
 
-# 2. Install dependencies (Python 3.11–3.13, OS-specific extras auto-filtered)
+### 2. Install dependencies
+
+```powershell
 python setup.py
+```
 
-# 3. Launch
+That installs everything you need for **your** OS automatically
+(requirements.txt carries per-platform markers, then Playwright browsers are
+fetched). It takes a few minutes the first time.
+
+### 3. Add your Gemini API key
+
+Start the app once:
+
+```powershell
 python main.py
 ```
 
-First launch shows the same setup screen — paste your Gemini key and go.
+The first-run **setup screen** opens — paste your Gemini key there and press
+**Save**. (Or open `config/api_keys.json` and put it under `"gemini_api_key"`.)
 
-### Build your own exe
+> 🔒 Your key is stored only in `config/api_keys.json`, which is git-ignored
+> and never included in this repository or any release.
 
-```powershell
-python build_exe.py          # → dist\JARVIS\JARVIS.exe (whole folder is portable)
-```
+### 4. Talk
 
-### Publish an update for other users
+The window opens with the ICE avatar. Speak — or type in the chat box.
+Say *"hello"*, *"what time is it"*, *"create a desktop shortcut"*.
 
-```powershell
-python tools\publish_update.py --repo idkunknown657-cell/ICE-JARVIS
-```
+> ✅ **Does the voice stay silent after the first reply?** That used to be a
+> real bug and is fixed: after you stop speaking, ICE closes your turn and
+> the reply comes back. If you still hear nothing, check the **mic tile** on
+> the Home screen (click to unmute) and **Settings → Voice & Language** for
+> input/output devices.
 
-That bumps the version, builds, packs `update.json` + zip, creates the GitHub
-release and uploads the assets — every installed copy updates itself from it.
+---
 
-### Run the tests
+## 🎮 What you can say
 
-```powershell
-python -m unittest discover -s tests    # 400+ unit tests
-```
+| You say | ICE does |
+|---|---|
+| *"hello"* / *"how are you"* | chat naturally, in your language |
+| *"what time is it"* | live clock/info via tools |
+| *"open chrome"* / *"open steam"* | launches apps |
+| *"move mouse right 100"* / *"move mouse to center"* | moves the pointer (exact pixels / % of screen) |
+| *"click on the send button"* | **sees** the screen, finds the element, clicks it |
+| *"press arrow down"* | presses the real keyboard arrow key |
+| *"type hello world"* | types at the cursor (clipboard-backed for long text) |
+| *"press ctrl+c"* / *"scroll down"* | hotkeys and scrolling |
+| *"press volume up"* / *"brightness 50%"* | media & system control |
+| *"take a screenshot"* | captures the screen |
+| *"create a desktop shortcut"* | creates an **ICE.lnk** on your real Desktop (OneDrive-aware) |
+
+Full mouse/keyboard/pc vocabulary lives in
+[`actions/computer_control.py`](actions/computer_control.py) and is handed to
+the model automatically — everything it can do is described in the prompt.
 
 ---
 
@@ -85,31 +106,29 @@ python -m unittest discover -s tests    # 400+ unit tests
 | **GROQ** (fallback) | Free tier | [console.groq.com](https://console.groq.com/keys) | ⚙ Settings → API Keys |
 | **Cerebras** (fallback) | Free tier | [cloud.cerebras.ai](https://cloud.cerebras.ai) | ⚙ Settings → API Keys |
 | **OpenRouter** (fallback) | Free tier | [openrouter.ai](https://openrouter.ai/keys) | ⚙ Settings → API Keys |
-| **Hugging Face** (fallback) | Free tier | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (fine-grained, *"Make calls to Inference Providers"*) | ⚙ Settings → API Keys |
+| **Hugging Face** (fallback) | Free tier | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) | ⚙ Settings → API Keys |
 
 Gemini carries everything. If its quota runs out, the free fallbacks answer
-automatically — add any subset you like. Keys are stored locally in
-`config/api_keys.json` next to the app and are **never** included in releases.
+automatically — add any subset you like.
 
 ---
 
-## ✨ Highlights
+## 🧪 Running the tests
 
-- **Natural conversation** — English, Hindi, Hinglish; detects your language
-  and replies in the same style. Jokes, teasing, sarcasm, support — not a
-  command shell.
-- **Emotional delivery** — emotion shapes words, tone, voice prosody and the
-  avatar's expression. Subtle by design; silence when nothing needs saying.
-- **Real memory** — sessions, projects, preferences and learned lessons live
-  in local JSON; review or delete anything in the memory panel.
-- **Screen awareness** — watches the screen when enabled and occasionally
-  reacts to something actually worth reacting to.
-- **PC control** — mouse, keyboard (incl. Unicode/Hindi), windows, volume,
-  media, screenshots; destructive actions sit behind an on-screen confirm.
-- **Self-updating** — sha256-verified updates from this repo's Releases,
-  one click, staged safely and applied on restart.
-- **Beautiful UI** — dark, glassy, animated; live theming; the holographic
-  face is her real face, rendered locally.
+```powershell
+python -m unittest discover -s tests
+```
+
+Heads-up: on Windows the full suite in one process can trip a Qt/COM access
+violation (pre-existing, also happens on untouched upstream code). If it
+crashes partway, run it in halves:
+
+```powershell
+python -m unittest discover -s tests -p "test_[a-u]*.py"
+python -m unittest discover -s tests -p "test_[v-z]*.py"
+```
+
+Both halves pass — 430 tests total.
 
 ---
 
@@ -117,18 +136,19 @@ automatically — add any subset you like. Keys are stored locally in
 
 ```
 ICE-JARVIS/
-├── main.py            # entry point — boots the WebView2 interface
+├── main.py            # entry point — boots the interface + live-voice session
 ├── webui.py           # Python ⇄ UI bridge: API surface, event pump, updater wiring
+├── setup.py           # one-command dependency installer (OS-aware)
 ├── ui_web/            # the interface itself (HTML/CSS/JS, three.js avatar)
 ├── core/              # brain: gemini, emotion, persona, language, free_providers,
 │                      # updater, screen observer, pc_input, tts/stt, memory glue
-├── actions/           # tool plugins JARVIS can call (PC control, steam, files…)
+├── actions/           # tool plugins ICE can call (PC control, steam, files, …)
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
-├── tests/             # 400+ unit tests (python -m unittest discover -s tests)
-├── tools/             # build_exe.ps1, publish_update.py (release automation)
-├── JARVIS.spec        # PyInstaller recipe → dist/JARVIS/JARVIS.exe
-└── build_exe.py       # one-command Windows build
+├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
+├── tests/             # 430 unit tests
+├── tools/             # release automation (publish_update.py, …)
+└── JARVIS.spec        # PyInstaller recipe (optional exe builds)
 ```
 
 ---
@@ -137,23 +157,23 @@ ICE-JARVIS/
 
 | Problem | Fix |
 |---|---|
-| **"Python not found" (source run)** | Install Python 3.11–3.13 from [python.org](https://www.python.org/downloads/) and tick *Add to PATH*. |
-| **Voice doesn't respond** | Check the mic tile on the Home screen (click to unmute); Settings → Voice & Language → pick the right input device. |
-| **No speech output** | Settings → Voice & Language → choose another output voice; some voices need the app restarted once. |
-| **Update check fails** | Settings → Advanced → Updates → *Save source* with a blank field restores the default GitHub channel. Corporate proxies can block github.com — try again on a normal network. |
-| **SmartScreen blocks the exe** | *More info → Run anyway* (unsigned build). Verify you downloaded it from this repo's Releases. |
-| **Antivirus flags the exe** | PyInstaller builds trip heuristics. The build scripts never touch your key stores; add an exclusion if you're comfortable. |
-| **Want a clean slate** | Delete `config/api_keys.json` and `memory/long_term.json` next to the exe — the app re-runs first-time setup. |
+| **`python` not found** | Install Python 3.11–3.13 from [python.org](https://www.python.org/downloads/) and tick *Add to PATH*. Reopen your terminal. |
+| **`python setup.py` crashes with a Unicode error** | Fixed — setup now forces UTF-8 output. Just up-to-date: `git pull`. |
+| **Voice doesn't respond / silent after one reply** | Mic tile on Home → unmute; Settings → Voice & Language → right input device. Voice replies depend on a working mic + speakers. |
+| **No speech output** | Settings → Voice & Language → choose another output voice; some voices need a restart. |
+| **Mouse click/arrow lands off-target** | Say *"move mouse to center"* then *"mouse position"* to recalibrate; scaled displays (125%/150%) are handled automatically. |
+| **Desktop shortcut not created** | OneDrive accounts redirect the Desktop — ICE now asks Windows for the real Desktop path, so `ICE.lnk` may appear under `OneDrive\Desktop`. |
+| **Want a clean slate** | Delete `config/api_keys.json` and `memory/long_term.json` — the app re-runs first-time setup. |
 
 ---
 
 ## 🔒 Privacy
 
 - API keys, memory, and conversation history stay in the app folder on your PC.
-- Screen awareness, proactive comments and memory are each one toggle away
-  from off (⚙ Settings).
+- Screen awareness, proactive comments and memory are each one toggle away from
+  off (⚙ Settings).
 - The only network calls are the AI providers you configure and the update
-  manifest on GitHub — no telemetry, no analytics, nothing else.
+  manifest on GitHub — no telemetry, no analytics.
 
 ## 📄 License
 

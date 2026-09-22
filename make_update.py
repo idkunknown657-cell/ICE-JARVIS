@@ -66,10 +66,10 @@ def main() -> None:
     args = ap.parse_args()
 
     if not args.url.startswith("https://"):
-        sys.exit("✗ --url must be https:// (the app refuses insecure updates)")
+        sys.exit("Error: --url must be https:// (the app refuses insecure updates)")
 
     if not (DIST_APP / "JARVIS.exe").exists():
-        sys.exit("✗ dist/JARVIS/JARVIS.exe not found — run build_exe.py first")
+        sys.exit("Error: dist/JARVIS/JARVIS.exe not found -- run build_exe.py first")
 
     version = (args.version
                or (HERE / "VERSION").read_text(encoding="utf-8").strip()
@@ -79,7 +79,7 @@ def main() -> None:
     zip_path = out_dir / "JARVIS_update.zip"
     json_path = out_dir / "update.json"
 
-    print(f"Packing {DIST_APP}  →  {zip_path.name}   (v{version})")
+    print(f"Packing {DIST_APP}  ->  {zip_path.name}   (v{version})")
     if zip_path.exists():
         zip_path.unlink()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
@@ -93,7 +93,7 @@ def main() -> None:
                 continue
             z.write(path, rel)
         if skipped:
-            print("  ✓ stripped personal/secret files from the zip:")
+            print("  [OK] stripped personal/secret files from the zip:")
             for s in skipped:
                 print(f"     - {s}")
 
@@ -107,16 +107,16 @@ def main() -> None:
     json_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     size_mb = zip_path.stat().st_size / (1024 * 1024)
-    print(f"\n✅ Update ready")
-    print(f"   {zip_path.name}   {size_mb:.0f} MB   sha256={digest[:16]}…")
+    print(f"\n[SUCCESS] Update ready")
+    print(f"   {zip_path.name}   {size_mb:.0f} MB   sha256={digest[:16]}...")
     print(f"   {json_path.name}")
-    print("\nNEXT STEPS — push it:")
+    print("\nNEXT STEPS -- push it:")
     print(f"   1. Upload {zip_path.name} so it is downloadable at:")
     print(f"        {args.url}")
     print(f"   2. Upload {json_path.name} NEXT TO it (or wherever your")
     print("      installed apps point their update source at).")
-    print("   3. Done — running apps pick it up within a minute of boot,")
-    print("      or instantly via ⚙ → Advanced → Updates.")
+    print("   3. Done -- running apps pick it up within a minute of boot,")
+    print("      or instantly via Settings -> Advanced -> Updates.")
 
 
 if __name__ == "__main__":

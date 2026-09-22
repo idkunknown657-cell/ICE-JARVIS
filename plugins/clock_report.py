@@ -14,7 +14,7 @@ PLUGIN = {
         "is it?', 'time kya hai'. If the user is asking for a stopwatch or "
         "timer, use 'reminder' instead — NOT this plugin."
     ),
-    "parameters": {},
+    "parameters": {"type": "OBJECT", "properties": {}},
 }
 
 def run(parameters: dict, player=None, session_memory=None) -> str:

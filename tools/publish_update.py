@@ -133,11 +133,15 @@ def main() -> None:
     _run(["python", str(ROOT / "make_update.py"),
           "--url", asset_url, "--version", version, "--notes", args.notes])
 
-    # make_update.py writes JARVIS_update.zip next to dist/; ship it under the
-    # friendly asset name users see on the Releases page.
+    # make_update.py writes JARVIS_update.zip + update.json next to dist/
+    # (repo root); ship them under the friendly asset names users see on the
+    # Releases page.
     raw_zip = DIST.parent / "JARVIS_update.zip"
+    raw_manifest = DIST.parent / "update.json"
     if raw_zip.exists():
         shutil.move(str(raw_zip), zip_path)
+    if raw_manifest.exists():
+        shutil.move(str(raw_manifest), manifest)
     if not (zip_path.exists() and manifest.exists()):
         sys.exit("[publish] make_update.py did not produce the expected files")
 

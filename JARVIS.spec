@@ -56,7 +56,12 @@ a = Analysis(
     binaries=[],
     # avatar_mesh.py reads face_model.obj from its own directory — inside the
     # frozen bundle that is _internal/core/.
-    datas=[("core/face_model.obj", "core")],
+    # prompt.txt is loaded by main.py at runtime.
+    datas=[
+        ("core/face_model.obj", "core"),
+        ("core/prompt.txt", "core"),
+        ("assets/jarvis.ico", "assets"),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

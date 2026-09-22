@@ -381,10 +381,48 @@ def _move(x: int, y: int, duration: float = 0.3) -> str:
 
 def _move_rel(dx: int, dy: int, duration: float = 0.2) -> str:
     _require_pyautogui()
-    _rescue_pag(pyautogui.moveRel, int(dx), int(dy), duration=duration)
+    # Get current position and calculate target with clamping
+    cx, cy = pyautogui.position()
+    w, h = _screen_size()
+    tx = max(1, min(w - 2, cx + int(dx)))
+    ty = max(1, min(h - 2, cy + int(dy)))
+    _rescue_pag(pyautogui.moveTo, tx, ty, duration=duration)
     time.sleep(0.05)
     ax, ay = pyautogui.position()
-    return f"Mouse moved by ({int(dx)}, {int(dy)}) -> now at ({int(ax)}, {int(ay)})"
+    ax, ay = int(round(ax)), int(round(ay))
+    if abs(ax - tx) <= 2 and abs(ay - ty) <= 2:
+        return f"Mouse -> ({tx}, {ty}) by ({int(dx)}, {int(dy)})"
+    return (f"Mouse -> requested ({tx}, {ty}) but pointer at ({ax}, {ay}) "
+            f"- display scaling/DPI mismatch. Use 'mouse_position' to recalibrate.")
+
+
+def _move_percent(x_pct: float, y_pct: float, duration: float = 0.25) -> str:
+    """Move the pointer to a fraction of the screen: 50,50 = exact centre,
+    0,0 = top-left, 100,100 = bottom-right. Clamps to a safe interior."""
+    _require_pyautogui()
+    w, h = _screen_size()
+    tx = max(1, min(w - 2, int(round(w * (float(x_pct) / 100.0)))))
+    ty = max(1, min(h - 2, int(round(h * (float(y_pct) / 100.0)))))
+    _rescue_pag(pyautogui.moveTo, tx, ty, duration=duration)
+    time.sleep(0.05)
+    return f"Mouse -> {tx},{ty} ({x_pct}%, {y_pct}% of {w}x{h})"
+
+
+def _press_arrow(key: str, repeat: int = 1) -> str:
+    """Press a keyboard arrow key (up/down/left/right), optionally repeatedly.
+    This is the PHYSICAL key — for selecting items in a list/menu — and is
+    separate from moving the mouse pointer (move_dir / arrow)."""
+    _require_pyautogui()
+    key = key.lower().strip()
+    if key not in ("up", "down", "left", "right", "arrowup", "arrowdown",
+                   "arrowleft", "arrowright"):
+        return f"arrow_key needs up | down | left | right (got '{key}')"
+    name = {"arrowup": "up", "arrowdown": "down",
+            "arrowleft": "left", "arrowright": "right"}.get(key, key)
+    repeat = max(1, min(int(repeat), 20))
+    for _ in range(repeat):
+        pyautogui.press(name)
+    return f"Pressed {name} x{repeat}"
 
 
 def _drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.5) -> str:
@@ -763,17 +801,50 @@ def computer_control(
         if action in ("click", "left_click"):
             return _click(params.get("x"), params.get("y"), "left", 1)
 
+        if action in ("middle_click", "mid_click"):
+            return _click(params.get("x"), params.get("y"), "middle", 1)
+
         if action == "double_click":
             return _click(params.get("x"), params.get("y"), "left", 2)
 
         if action == "right_click":
             return _click(params.get("x"), params.get("y"), "right", 1)
 
-        if action == "move":
+        if action in ("move", "mouse_move"):
+            if params.get("x_pct") is not None or params.get("y_pct") is not None:
+                return _move_percent(
+                    float(params.get("x_pct", 50)),
+                    float(params.get("y_pct", 50)),
+                )
             return _move(int(params.get("x", 0)), int(params.get("y", 0)))
+
+        if action in ("move_percent", "move_pct"):
+            return _move_percent(
+                float(params.get("x_pct", 50)),
+                float(params.get("y_pct", 50)),
+            )
+
+        if action in ("move_center", "go_center", "centre"):
+            return _move_percent(50, 50)
 
         if action in ("move_rel", "move_relative"):
             return _move_rel(int(params.get("dx", 0)), int(params.get("dy", 0)))
+
+        if action in ("arrow_key", "press_arrow", "key_arrow"):
+            return _press_arrow(
+                params.get("key", params.get("direction", "down")),
+                int(params.get("repeat", params.get("amount", 1))),
+            )
+
+        if action in ("move_dir", "move_direction", "arrow"):
+            """Move mouse in a direction: up/down/left/right with optional steps."""
+            direction = params.get("direction", "").lower().strip()
+            steps = int(params.get("steps", 50))  # pixels per step
+            if direction not in ("up", "down", "left", "right"):
+                return "move_dir needs direction: up | down | left | right"
+            dx = {"left": -steps, "right": steps}.get(direction, 0)
+            dy = {"up": -steps, "down": steps}.get(direction, 0)
+            return _move_rel(dx, dy, duration=0.15)
 
         if action in ("mouse_position", "get_mouse_position"):
             return _mouse_position()
@@ -880,7 +951,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | move_rel | mouse_position | drag | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | screen_double_click | screen_right_click | screen_move | hover | random_data | user_data"
+                "description": "type | smart_type | click | middle_click | double_click | right_click | hotkey | press | scroll | move | move_percent | move_center | move_rel | move_dir | arrow_key | mouse_position | drag | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | screen_double_click | screen_right_click | screen_move | hover | random_data | user_data"
             },
             "text": {
                 "type": "STRING",
@@ -893,6 +964,18 @@ TOOL = {
             "y": {
                 "type": "INTEGER",
                 "description": "Y coordinate (absolute, for click/move/drag)"
+            },
+            "x_pct": {
+                "type": "NUMBER",
+                "description": "X position as % of screen width (0-100) for move_percent; 50 = centre"
+            },
+            "y_pct": {
+                "type": "NUMBER",
+                "description": "Y position as % of screen height (0-100) for move_percent; 50 = centre"
+            },
+            "repeat": {
+                "type": "INTEGER",
+                "description": "arrow_key only: how many times to press the key (default 1)"
             },
             "dx": {
                 "type": "INTEGER",
@@ -953,6 +1036,14 @@ TOOL = {
             "verify": {
                 "type": "BOOLEAN",
                 "description": "screen_click only: after clicking, take a fresh screenshot and check the click actually worked (default: config verify_clicks). Set false to skip verification."
+            },
+            "direction": {
+                "type": "STRING",
+                "description": "move_dir only: up | down | left | right"
+            },
+            "steps": {
+                "type": "INTEGER",
+                "description": "move_dir only: pixels to move (default: 50)"
             }
         },
         "required": [

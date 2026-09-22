@@ -21,7 +21,8 @@ PLUGIN = {
         "properties": {
             "kind":  {"type": "STRING", "description": "'coin' | 'dice' | 'pick'. Defaults to 'coin'."},
             "sides": {"type": "NUMBER", "description": "Sides on the die (dice only, default 6)."},
-            "list":  {"type": "ARRAY", "description": "Items to choose from (pick only)."},
+            "list":  {"type": "ARRAY", "items": {"type": "STRING"},
+                       "description": "Items to choose from (pick only)."},
         },
         "required": [],
     },

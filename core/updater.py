@@ -57,6 +57,9 @@ APPLY_BAT      = BASE_DIR / "apply_update.bat"
 # GitHub Releases serves the manifest with the right content-type and no
 # redirects, and it survives release edits (unlike /releases/download/… links
 # that break when assets are replaced). Update by publishing a new release.
+#
+# The "latest" release asset URL pattern: /releases/latest/download/<asset>
+# This works because GitHub redirects /releases/latest to the actual tag.
 DEFAULT_MANIFEST_URL = (
     "https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest"
     "/download/update.json"
