@@ -645,6 +645,29 @@ def get_file_info(path: str, name: str = "") -> str:
     except Exception as e:
         return f"Could not get file info: {e}"
 
+def open_path(path: str = "desktop", name: str = "") -> str:
+    """Open a file with its associated app, or a folder in the file manager
+    ('Open my Downloads.' — §9). Verifies existence first; never guesses."""
+    target = _resolve_path(path)
+    if name:
+        target = target / name
+    if not target.exists():
+        return f"Not found: {target}"
+    try:
+        if _OS == "Windows":
+            os.startfile(str(target))            # noqa: S606 — user-requested
+        elif _OS == "Darwin":
+            import subprocess
+            subprocess.run(["open", str(target)], check=False)
+        else:
+            import subprocess
+            subprocess.run(["xdg-open", str(target)], check=False)
+        kind = "folder" if target.is_dir() else "file"
+        return f"Opened {kind}: {target}"
+    except Exception as e:
+        return f"Could not open {target}: {e}"
+
+
 def file_controller(
     parameters: dict = None,
     response=None,
@@ -662,6 +685,9 @@ def file_controller(
     try:
         if action == "list":
             return list_files(path)
+
+        elif action == "open":
+            return open_path(path, name=name)
 
         elif action == "create_file":
             return create_file(path, name=name, content=params.get("content", ""))
@@ -724,13 +750,13 @@ def file_controller(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "file_controller",
-    "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
+    "description": "Manages files and folders: open (file or folder, e.g. 'open my downloads'), list, create, delete, move, copy, rename, read, write, find, disk usage.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"
+                "description": "open | list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"
             },
             "path": {
                 "type": "STRING",

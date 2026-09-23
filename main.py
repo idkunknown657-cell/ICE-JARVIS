@@ -1263,8 +1263,18 @@ class JarvisLive:
             pass
 
     def interrupt(self) -> None:
-        """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
+        """Stop JARVIS mid-speech: drain queued audio and open mic immediately.
+
+        Also raises the PC-control stop token, so a voice/UI interrupt halts
+        any multi-step automation (goal loop) instead of only muting speech.
+        A no-op when nothing cancellable is running — begin() clears it.
+        """
         self._interrupted = True
+        try:
+            from core import cancel as _cancel
+            _cancel.request()
+        except Exception:
+            pass
         q = self.audio_in_queue
         if q:
             drained = 0

@@ -430,7 +430,15 @@ def save_file():
 
 def press_enter():   pyautogui.press("enter")
 def press_escape():  pyautogui.press("escape")
-def press_key(key: str): pyautogui.press(key)
+def press_key(key: str):
+    """One key, or a combination like 'win+shift+s' (combo used to crash)."""
+    text = str(key).strip()
+    if "+" in text:
+        parts = [p.strip() for p in text.split("+") if p.strip()]
+        if len(parts) >= 2:
+            pyautogui.hotkey(*parts)
+            return
+    pyautogui.press(text)
 
 def type_text(text: str, press_enter_after: bool = False):
     if not text:
@@ -592,6 +600,258 @@ def shutdown_computer():
     else:
         subprocess.run(["systemctl", "poweroff"], capture_output=True)
 
+
+# ── §8: state-aware radios, real sleep, sign-out ──────────────────────────────
+#
+# Every function here VERIFIES the resulting state and says so honestly —
+# "Done." without evidence is forbidden (#18/#37).
+
+def _ps(script: str, timeout: int = 12) -> str:
+    """Run a PowerShell snippet hidden; return stripped stdout ('' on failure)."""
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                           capture_output=True, text=True, timeout=timeout,
+                           **_WIN_HIDE)
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _win_wifi_status() -> str:
+    """'up' | 'down' | '' (adapter query; '' = could not tell)."""
+    if _OS != "Windows":
+        return ""
+    return _ps("$a = Get-NetAdapter -ErrorAction SilentlyContinue | "
+               "Where-Object {$_.PhysicalMediaType -eq 'Native 802.11'} | "
+               "Select-Object -First 1; if ($a) { $a.Status }").lower()
+
+
+# The Radio API is what Airplane mode uses; unlike Disable-NetAdapter it does
+# not need an administrator session. __KIND__ / __STATE__ are substituted.
+_PS_RADIO_SET = r"""
+try {
+  [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+  $all = [System.WindowsRuntimeSystemExtensions].GetMethods() |
+    Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 }
+  $mOp = $all | Where-Object { $_.GetParameters()[0].ParameterType.Name -like 'IAsyncOperation`1' } |
+    Select-Object -First 1
+  $mAct = $all | Where-Object { $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' } |
+    Select-Object -First 1
+  $op = [Windows.Devices.Radios.Radio]::GetRadiosAsync()
+  $task = $mOp.MakeGenericMethod([Windows.Devices.Radios.Radio]).Invoke($null, @($op))
+  $task.Wait(8000) | Out-Null
+  $radio = $task.Result |
+    Where-Object { $_.Name -like ('*' + '__KIND__' + '*') } | Select-Object -First 1
+  if (-not $radio) { Write-Output 'NO_RADIO'; exit }
+  $radio.SetStateAsync([Windows.Devices.Radios.RadioState]::__STATE__) | Out-Null
+  Start-Sleep -Milliseconds 1500
+  Write-Output ('STATE_' + $radio.State)
+} catch { Write-Output ('ERR_' + $_.Exception.Message) }
+"""
+
+_PS_RADIO_GET = r"""
+try {
+  [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+  $mOp = [System.WindowsRuntimeSystemExtensions].GetMethods() |
+    Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 } |
+    Where-Object { $_.GetParameters()[0].ParameterType.Name -like 'IAsyncOperation`1' } |
+    Select-Object -First 1
+  $op = [Windows.Devices.Radios.Radio]::GetRadiosAsync()
+  $task = $mOp.MakeGenericMethod([Windows.Devices.Radios.Radio]).Invoke($null, @($op))
+  $task.Wait(8000) | Out-Null
+  $radio = $task.Result |
+    Where-Object { $_.Name -like ('*' + '__KIND__' + '*') } | Select-Object -First 1
+  if (-not $radio) { Write-Output 'NO_RADIO' } else { Write-Output ('STATE_' + $radio.State) }
+} catch { Write-Output 'ERR' }
+"""
+
+
+def _radio_state(kind: str) -> str:
+    """'on' | 'off' | '' (Windows Radio API; '' = unknown)."""
+    out = _ps(_PS_RADIO_GET.replace("__KIND__", kind), timeout=15)
+    if out.endswith("On"):
+        return "on"
+    if out.endswith("Off"):
+        return "off"
+    return ""
+
+
+def _radio_set(kind: str, want: str) -> str:
+    """Switch a radio and verify by reading it back. Honest on every path."""
+    state = "On" if want == "on" else "Off"
+    _ps(_PS_RADIO_SET.replace("__KIND__", kind).replace("__STATE__", state),
+        timeout=15)
+    now = _radio_state(kind)
+    if now == want:
+        return f"{kind} is now {want.upper()}."
+    if now:
+        return (f"Could not switch {kind} {want} — Windows refused (an "
+                f"administrator session may be required). It is currently "
+                f"{now.upper()}.")
+    return (f"Tried to switch {kind} {want}, but could not confirm the result "
+            f"— treat it as unchanged.")
+
+
+def set_wifi(state: str) -> str:
+    """Explicit 'wifi on' / 'wifi off': state-aware and verified, never a
+    blind toggle (#8: 'Turn Wi-Fi off' must not turn an already-off radio on)."""
+    want = "on" if str(state).lower() in ("on", "1", "true", "enable",
+                                          "enabled") else "off"
+    if _OS == "Darwin":
+        iface = _get_macos_wifi_interface()
+        try:
+            cur = subprocess.run(["networksetup", "-getairportpower", iface],
+                                 capture_output=True, text=True, timeout=5).stdout
+            if ("On" in cur) == (want == "on"):
+                return f"Wi-Fi is already {want}."
+            subprocess.run(["networksetup", "-setairportpower", iface, want],
+                           capture_output=True, timeout=5)
+            now = subprocess.run(["networksetup", "-getairportpower", iface],
+                                 capture_output=True, text=True, timeout=5).stdout
+            now_on = "On" in now
+            if now_on == (want == "on"):
+                return f"Wi-Fi is now {want.upper()}."
+        except Exception:
+            pass
+        return f"Could not switch Wi-Fi {want} on this system."
+    if _OS == "Windows":
+        cur = _win_wifi_status()
+        if want == "on" and cur == "up":
+            return "Wi-Fi is already on."
+        if want == "off" and cur == "down":
+            return "Wi-Fi is already off."
+        verb = "Enable" if want == "on" else "Disable"
+        _ps("$a = Get-NetAdapter -ErrorAction SilentlyContinue | "
+            "Where-Object {$_.PhysicalMediaType -eq 'Native 802.11'} | "
+            "Select-Object -First 1; if ($a) { "
+            + verb + "-NetAdapter -Name $a.Name -Confirm:$false -ErrorAction Stop }")
+        now = _win_wifi_status()
+        if now and ((want == "on" and now == "up") or (want == "off" and now == "down")):
+            return f"Wi-Fi is now {want.upper()}."
+        # Adapter route refused (it needs administrator) — radio API needs none.
+        _radio_set("Wi-Fi", want)
+        now = _win_wifi_status()
+        if now and ((want == "on" and now == "up") or (want == "off" and now == "down")):
+            return f"Wi-Fi is now {want.upper()}."
+        state_txt = ("on" if now == "up" else "off" if now == "down"
+                     else "in an unknown state")
+        return (f"Could not switch Wi-Fi {want} — Windows refused (an "
+                f"administrator session may be required). Wi-Fi is currently "
+                f"{state_txt}.")
+    # Linux
+    try:
+        subprocess.run(["nmcli", "radio", "wifi",
+                        "on" if want == "on" else "off"],
+                       capture_output=True, timeout=8)
+        now = subprocess.run(["nmcli", "radio", "wifi"],
+                             capture_output=True, text=True, timeout=5).stdout
+        now_on = "enabled" in now
+        if now_on == (want == "on"):
+            return f"Wi-Fi is now {want.upper()}."
+        return f"Wi-Fi radio did not change; it reports: {now.strip() or 'unknown'}."
+    except Exception as e:
+        return f"Could not change the Wi-Fi radio: {e}"
+
+
+def wifi_on() -> str:
+    return set_wifi("on")
+
+
+def wifi_off() -> str:
+    return set_wifi("off")
+
+
+def toggle_bluetooth() -> str:
+    """Bluetooth power, state-aware where the OS allows it (#8)."""
+    if _OS == "Windows":
+        cur = _radio_state("Bluetooth")
+        want = "off" if cur == "on" else "on"
+        return _radio_set("Bluetooth", want)
+    if _OS == "Darwin":
+        # macOS exposes no supported CLI for radio power without third-party
+        # tools — say so instead of pretending.
+        return ("Cannot switch Bluetooth off/on from here on macOS — open "
+                "System Settings > Bluetooth and use the toggle there.")
+    # Linux
+    try:
+        cur = subprocess.run(["bluetoothctl", "show"],
+                             capture_output=True, text=True, timeout=5).stdout
+        want = "off" if "Powered: yes" in cur else "on"
+        subprocess.run(["bluetoothctl", "power", want],
+                       capture_output=True, timeout=8)
+        now = subprocess.run(["bluetoothctl", "show"],
+                             capture_output=True, text=True, timeout=5).stdout
+        if ("Powered: yes" in now) == (want == "on"):
+            return f"Bluetooth is now {want.upper()}."
+        return f"Bluetooth did not change; it reports: {now.strip() or 'unknown'}."
+    except Exception as e:
+        return f"Could not change Bluetooth power: {e}"
+
+
+def bluetooth_on() -> str:
+    if _OS == "Windows" and _radio_state("Bluetooth") == "on":
+        return "Bluetooth is already on."
+    return _radio_set("Bluetooth", "on") if _OS == "Windows" else _bt_set("on")
+
+
+def bluetooth_off() -> str:
+    if _OS == "Windows" and _radio_state("Bluetooth") == "off":
+        return "Bluetooth is already off."
+    return _radio_set("Bluetooth", "off") if _OS == "Windows" else _bt_set("off")
+
+
+def _bt_set(want: str) -> str:
+    """macOS/Linux bluetooth_on/off helper (shared by the two wrappers)."""
+    if _OS == "Darwin":
+        return toggle_bluetooth()
+    try:
+        subprocess.run(["bluetoothctl", "power", want],
+                       capture_output=True, timeout=8)
+        now = subprocess.run(["bluetoothctl", "show"],
+                             capture_output=True, text=True, timeout=5).stdout
+        if ("Powered: yes" in now) == (want == "on"):
+            return f"Bluetooth is now {want.upper()}."
+        return f"Bluetooth did not change; it reports: {now.strip() or 'unknown'}."
+    except Exception as e:
+        return f"Could not change Bluetooth power: {e}"
+
+
+def sleep_pc() -> str:
+    """Suspend the machine (session preserved) — unlike sleep_display (#8)."""
+    if _OS == "Windows":
+        try:
+            subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState",
+                            "0,1,0"], capture_output=True, timeout=10,
+                           **_WIN_HIDE)
+            # If this returned, the suspend did not happen.
+            return ("Windows did not go to sleep — it may be configured to "
+                    "hibernate instead, or something blocked the request.")
+        except subprocess.TimeoutExpired:
+            return "Going to sleep now."       # suspended mid-call = it worked
+        except Exception as e:
+            return f"Could not sleep this PC: {e}"
+    if _OS == "Darwin":
+        subprocess.run(["pmset", "sleepnow"], capture_output=True, timeout=10)
+        return "Going to sleep now."
+    subprocess.run(["systemctl", "suspend"], capture_output=True, timeout=10)
+    return "Going to sleep now."
+
+
+def sign_out() -> str:
+    """Sign out of the account (gated: unsaved work is lost) (#8/#26)."""
+    if _OS == "Windows":
+        subprocess.run(["shutdown", "/l"], capture_output=True, **_WIN_HIDE)
+        return "Signing out now."
+    if _OS == "Darwin":
+        subprocess.run(["osascript", "-e",
+                        'tell application "System Events" to log out'],
+                       capture_output=True)
+        return "Signing out now."
+    import getpass
+    subprocess.run(["loginctl", "terminate-user", getpass.getuser()],
+                   capture_output=True)
+    return "Signing out now."
+
 ACTION_MAP: dict[str, callable] = {
     "volume_up":           volume_up,
     "volume_down":         volume_down,
@@ -650,6 +910,13 @@ ACTION_MAP: dict[str, callable] = {
     "open_run":            open_run,
     "dark_mode":           dark_mode,
     "toggle_wifi":         toggle_wifi,
+    "wifi_on":             wifi_on,
+    "wifi_off":            wifi_off,
+    "toggle_bluetooth":    toggle_bluetooth,
+    "bluetooth_on":        bluetooth_on,
+    "bluetooth_off":       bluetooth_off,
+    "sleep_pc":            sleep_pc,
+    "sign_out":            sign_out,
     "restart":             restart_computer,
     "shutdown":            shutdown_computer,
 }
@@ -678,6 +945,15 @@ _IRREVERSIBLE = {
     # the WiFi off cuts the assistant's own connection to the Live API, so it
     # cannot be asked to turn it back on.
     "toggle_wifi": ("Switch WiFi off or on",
+                    "If this switches WiFi off, JARVIS loses its connection and "
+                    "cannot switch it back on by voice."),
+    # Immediate — Windows cannot delay `shutdown /l` — so the button comes first.
+    "sign_out":    ("Sign out of this account",
+                    "All open apps close immediately and anything unsaved "
+                    "is lost."),
+    # Same reasoning as toggle_wifi: killing the network kills the assistant's
+    # own voice link, and it cannot be asked to turn the radio back on.
+    "wifi_off":    ("Switch WiFi off",
                     "If this switches WiFi off, JARVIS loses its connection and "
                     "cannot switch it back on by voice."),
 }
@@ -718,6 +994,14 @@ _ALIASES = {
     "new_tab":         ("open a tab", "open new tab"),
     "shutdown":        ("power off", "turn off the computer", "switch off the pc"),
     "restart":         ("reboot", "restart the pc"),
+    "toggle_bluetooth": ("bluetooth",),
+    "bluetooth_on":    ("bluetooth on", "turn bluetooth on", "enable bluetooth"),
+    "bluetooth_off":   ("bluetooth off", "turn bluetooth off", "disable bluetooth"),
+    "wifi_on":         ("wifi on", "wi-fi on", "turn wifi on", "enable wifi"),
+    "wifi_off":        ("wifi off", "wi-fi off", "turn wifi off", "disable wifi"),
+    "sleep_pc":        ("sleep", "suspend", "go to sleep", "put pc to sleep",
+                        "put the pc to sleep", "put my pc to sleep"),
+    "sign_out":        ("log out", "sign out", "log me out"),
 }
 
 _VALUE_ACTIONS = {"volume_set", "type_text", "press_key", "reload_n",
@@ -747,23 +1031,44 @@ def _detect_action(description: str) -> dict:
 
     low = raw.lower()
 
-    # 2. "set volume to 30", "sesi 30 yap" — a number next to a volume word.
+    # 2. Explicit radio state beats the bare alias: "wifi off" must mean OFF,
+    #    never a blind toggle that might switch an already-off radio ON (#8).
+    radio = re.search(r"\b(wi-?fi|bluetooth|bt)\b", low)
+    if radio:
+        if re.search(r"\b(off|disable|disabled)\b", low):
+            act = "wifi_off" if radio.group(1).lower().startswith("wi") else "bluetooth_off"
+            return {"action": act, "value": None}
+        if re.search(r"\b(on|enable|enabled)\b", low):
+            act = "wifi_on" if radio.group(1).lower().startswith("wi") else "bluetooth_on"
+            return {"action": act, "value": None}
+
+    # 3. "set volume to 30" vs "decrease volume by 20%": a number next to a
+    #    volume word. Direction words ('by …', down/up) make it a DELTA, not a
+    #    target — "decrease volume by 20" must not set the volume TO 20.
     num = re.search(r"(\d{1,3})\s*%?", low)
     if num and any(w in low for w in ("volume", "ses", "sound", "lautstark", "громкость")):
-        return {"action": "volume_set", "value": max(0, min(100, int(num.group(1))))}
+        n = max(0, min(100, int(num.group(1))))
+        wants_set = re.search(r"\b(to|set|yap)\b", low) and not re.search(r"\bby\b", low)
+        if not wants_set:
+            if any(w in low for w in ("decrease", "lower", "quieter",
+                                      "reduce", "down")):
+                return {"action": "volume_down", "value": n}
+            if any(w in low for w in ("increase", "raise", "louder", "up")):
+                return {"action": "volume_up", "value": n}
+        return {"action": "volume_set", "value": n}
 
-    # 3. Alias phrases.
+    # 4. Alias phrases.
     for action, phrases in _ALIASES.items():
         if any(_normalise(p) == norm or p in low for p in phrases):
             return {"action": action, "value": None}
 
-    # 4. Fuzzy match on the action names — catches "fullscren", "volumeup".
+    # 5. Fuzzy match on the action names — catches "fullscren", "volumeup".
     import difflib
     close = difflib.get_close_matches(norm, sorted(known), n=1, cutoff=0.72)
     if close:
         return {"action": close[0], "value": None}
 
-    # 5. Substring: "increase_the_brightness" contains "brightness".
+    # 6. Substring: "increase_the_brightness" contains "brightness".
     for action in sorted(known, key=len, reverse=True):
         if len(action) > 4 and (action in norm or norm in action):
             return {"action": action, "value": None}
@@ -825,7 +1130,7 @@ def computer_settings(
                     "Ask the user to answer that one first.")
         return confirm.request(
             key=action, title=title, detail=detail,
-            run=lambda f=func, a=action: (f(), f"{a} done.")[1],
+            run=lambda f=func, a=action: _done_msg(a, f()),
         )
 
     if action == "volume_set":
@@ -839,6 +1144,29 @@ def computer_settings(
             return f"Volume set to {target}%."
         except Exception as e:
             return f"Could not set volume: {e}"
+
+    # "Decrease volume by 20%" = current − 20, NOT "set volume to 20" (#19).
+    if action in ("volume_up", "volume_down") and value is not None:
+        try:
+            delta = int(float(value))
+        except (TypeError, ValueError):
+            delta = None
+        if delta is not None:
+            try:
+                before = volume_get()
+                if before is None:
+                    return ("This system will not report its volume, so I "
+                            "cannot change it by a percentage — use "
+                            "volume_up/volume_down steps instead.")
+                target = max(0, min(100, before + (delta if action == "volume_up"
+                                                   else -delta)))
+                volume_set(target)
+                push_undo(f"volume {before}% → {target}%",
+                          lambda b=before: (volume_set(b), f"Back to {b}%.")[1])
+                verb = "Raised" if action == "volume_up" else "Lowered"
+                return f"{verb} volume by {delta}% — now at {target}%."
+            except Exception as e:
+                return f"Could not change volume by {delta}%: {e}"
 
     if action in ("type_text", "write_on_screen", "type", "write"):
         text = str(value or params.get("text", "")).strip()
@@ -886,7 +1214,7 @@ def computer_settings(
         _before = ("brightness", brightness_get())
 
     try:
-        func()
+        out = func()
     except Exception as e:
         print(f"[Settings] Action failed ({action}): {e}")
         return f"Action failed ({action}): {e}"
@@ -905,13 +1233,22 @@ def computer_settings(
         push_undo("dark mode toggled",
                   lambda: (dark_mode(), "Theme switched back.")[1])
 
-    return f"Done: {action}."
+    # Functions that verified their own effect (wifi/bluetooth/sleep…) speak
+    # for themselves; never replace an honest result with a blanket "Done."
+    return _done_msg(action, out)
+
+
+def _done_msg(action_name: str, out) -> str:
+    """Honor a function's own verified result; only fall back to 'Done.'."""
+    if isinstance(out, str) and out.strip():
+        return out.strip()
+    return f"Done: {action_name}."
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "computer_settings",
-    "description": "Controls the computer: volume, brightness, window management, keyboard shortcuts, typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. Use for ANY single computer control command. restart, shutdown and toggle_wifi put a confirmation on the user's screen and do NOT happen until they press it — never claim they are done. Volume, brightness and dark mode can be reversed with the `undo` tool.",
+    "description": "Controls the computer: volume (set, or change BY a percentage with volume_up/down + value), brightness, window management, keyboard shortcuts, typing text on screen, closing apps, fullscreen, dark mode, WiFi (wifi_on/wifi_off verify the real state), Bluetooth, sleep_pc, sign out, restart, shutdown, scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. Use for ANY single computer control command. restart, shutdown, sign_out and the wifi-off actions put a confirmation on the user's screen and do NOT happen until they press it — never claim they are done. Every action returns the *verified* result — report it exactly, and never claim success the result does not support. Volume, brightness and dark mode can be reversed with the `undo` tool.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -941,6 +1278,8 @@ TOOL = {
                     "undo | redo | select_all | save | enter | escape | press_key | "
                     "type_text | screenshot | lock_screen | open_settings | "
                     "file_explorer | open_run | dark_mode | toggle_wifi | "
+                    "wifi_on | wifi_off | toggle_bluetooth | bluetooth_on | "
+                    "bluetooth_off | sleep_pc | sign_out | "
                     "restart | shutdown"
                 )
             },
@@ -953,7 +1292,7 @@ TOOL = {
             },
             "value": {
                 "type": "STRING",
-                "description": "Optional value: volume level 0-100, text to type, key name, etc."
+                "description": "Optional value: volume level 0-100 (for volume_set), a number to change volume BY (for volume_up/volume_down, e.g. '20' for 'decrease by 20%'), text to type, key name (e.g. 'win+shift+s'), etc."
             }
         },
         "required": []

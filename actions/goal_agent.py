@@ -26,6 +26,8 @@ import re
 import time
 from pathlib import Path
 
+from core import cancel
+
 try:
     from core import gemini
     _GEMINI = True
@@ -435,6 +437,10 @@ def goal_agent(
     except Exception:
         pass
 
+    # Arm the stop token: a stale "stop" from an idle moment can never kill
+    # this run, and any stop from now on halts it at the next step (#34).
+    cancel.begin()
+
     _log(player, f"[goal] Understanding: {goal}")
     phases = _plan_phases(goal)
     _log(player, f"[goal] Plan: {len(phases)} phases — "
@@ -445,6 +451,10 @@ def goal_agent(
     budget = _max_steps()
 
     for step in range(budget):
+        if cancel.stopped():
+            _log(player, "[goal] Stopped by user request.")
+            return ("Stopped — you asked me to halt, so I did. Progress so far: "
+                    + ("; ".join(observations[-_LOG_LIMIT:]) or "nothing yet"))
         try:
             picked = _next_step(goal, observations)
         except Exception as e:

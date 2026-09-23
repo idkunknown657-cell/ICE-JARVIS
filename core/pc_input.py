@@ -159,6 +159,7 @@ _MF_XUP           = 0x0100
 _MF_WHEEL         = 0x0800
 _MF_HWHEEL        = 0x1000
 _MF_ABSOLUTE      = 0x8000
+_MF_VIRTUALDESK   = 0x4000   # normalise over the whole virtual desktop (all monitors)
 
 # KEYBDINPUT flags
 _KF_EXTENDEDKEY   = 0x0001
@@ -285,15 +286,40 @@ def mouse_position() -> tuple[int, int]:
 
 
 def mouse_move(x: int, y: int, *, relative: bool = False) -> None:
-    """Move the cursor to (x, y), or by (dx, dy) when relative=True."""
+    """Move the cursor to (x, y), or by (dx, dy) when relative=True.
+
+    Absolute moves are normalised over the VIRTUAL desktop (every monitor,
+    MOUSEEVENTF_VIRTUALDESK) so coordinates on a second monitor — including
+    negatives to the left of the primary — land where they belong instead of
+    being clamped onto monitor 1 (#23).
+    """
     _need_windows("mouse_move")
     if relative:
         _send(_mouse_event(int(x), int(y), _MF_MOVE))
     else:
-        w, h = _screen_size_inner()
-        norm_x = int(max(0, min(w - 1, x)) * 65535 / max(1, w - 1))
-        norm_y = int(max(0, min(h - 1, y)) * 65535 / max(1, h - 1))
-        _send(_mouse_event(norm_x, norm_y, _MF_MOVE | _MF_ABSOLUTE))
+        _send(_mouse_event(*_abs_norm(x, y), _MF_MOVE | _MF_ABSOLUTE | _MF_VIRTUALDESK))
+
+
+def _virtual_rect() -> tuple[int, int, int, int]:
+    """(left, top, width, height) of the whole virtual screen."""
+    u = ctypes.windll.user32
+    left, top = int(u.GetSystemMetrics(76)), int(u.GetSystemMetrics(77))
+    wide, high = int(u.GetSystemMetrics(78)), int(u.GetSystemMetrics(79))
+    if wide > 1 and high > 1:
+        return left, top, wide, high
+    w, h = _screen_size_inner()
+    return 0, 0, w, h
+
+
+def _abs_norm(x: int, y: int) -> tuple[int, int]:
+    """Clamp (x, y) to the virtual screen and normalise to 0..65535 for
+    MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK. Pure math — unit-testable."""
+    vl, vt, vw, vh = _virtual_rect()
+    cx = max(vl, min(int(x), vl + vw - 1))
+    cy = max(vt, min(int(y), vt + vh - 1))
+    norm_x = int((cx - vl) * 65535 / max(1, vw - 1))
+    norm_y = int((cy - vt) * 65535 / max(1, vh - 1))
+    return max(0, min(65535, norm_x)), max(0, min(65535, norm_y))
 
 
 def mouse_click(x: int | None = None, y: int | None = None,
@@ -328,13 +354,11 @@ def mouse_drag(x1: int, y1: int, x2: int, y2: int, *,
     time.sleep(0.05)
     _send(_mouse_event(0, 0, down))
     time.sleep(0.05)
-    w, h = _screen_size_inner()
     for i in range(1, steps + 1):
         t = i / steps
         _send(_mouse_event(
-            int(max(0, min(w - 1, x1 + (x2 - x1) * t)) * 65535 / max(1, w - 1)),
-            int(max(0, min(h - 1, y1 + (y2 - y1) * t)) * 65535 / max(1, h - 1)),
-            _MF_MOVE | _MF_ABSOLUTE,
+            *_abs_norm(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t),
+            _MF_MOVE | _MF_ABSOLUTE | _MF_VIRTUALDESK,
         ))
         time.sleep(0.015)
     _send(_mouse_event(0, 0, up))

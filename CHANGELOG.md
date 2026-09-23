@@ -2,6 +2,59 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — PC Control engine hardening
+
+### Automation stop (voice/UI interrupt now halts work, not just speech)
+- `core/cancel.py` stop token: a stale stop pressed while idle can never kill
+  the next run (`begin()` always re-arms)
+- New `stop_task` tool — "stop / cancel / wait / don't do that" halts a running
+  multi-step goal between steps instead of letting it continue
+- `goal_agent` checks the token before every step and reports exactly what it
+  got done; `JARVIS.interrupt()` raises it, so the mic/interrupt button works
+  as an emergency stop for queued automation
+
+### Precise, verified pointer control
+- Multi-monitor mouse: `pc_input` absolute moves/drags now normalise over the
+  **virtual desktop** (`MOUSEEVENTF_VIRTUALDESK`) — coordinates on a second
+  monitor (including negatives left of the primary) land correctly instead of
+  being clamped onto monitor 1; `computer_control._clamp_to_screen` clamps to
+  the whole virtual screen and still avoids pyautogui failsafe corners
+- `screen_move` now verifies the pointer actually reached the target and warns
+  on a mismatch instead of assuming success
+- New `screen_drag` — OBSERVE source → OBSERVE destination → drag → report
+  honestly ("verify the drop")
+- `click` accepts `modifier` ("hold Shift and click") — the key is always
+  released, even if the click fails
+
+### System control (§8), with real state verification
+- `wifi_on` / `wifi_off` — explicit state, adapter route first, non-admin Radio
+  API fallback, verified read-back; refusal reports the *actual* current state
+  instead of a fake "Done."
+- `toggle_bluetooth` / `bluetooth_on` / `bluetooth_off` — Windows Radio API,
+  `bluetoothctl` on Linux, honest "do it in System Settings" on macOS
+- `sleep_pc` (real suspend, unlike `sleep_display`) and `sign_out`
+  (confirmation-gated — apps close immediately)
+- `press_key` now accepts combinations (`win+shift+s` used to crash)
+- "decrease volume by 20%" is a **delta** (now −20%), no longer misread as
+  "set volume to 20"; delta results report the resulting level
+- Dispatcher returns each action's own verified result — the blanket
+  "Done: {action}" only appears when the action says nothing itself
+
+### Files
+- `file_controller` gains `open` — open any file with its app or a folder in
+  the file manager ("Open my Downloads.")
+
+### Diagnostics (§30)
+- `core/pc_log.py` → `logs/pc_control.log`: one structured line per control
+  decision (app, target, method UIA/vision, bounding box, action, verification,
+  result); typed text is logged as a length only — never contents; rotates at
+  512 KB and can never raise into a control action
+
+### Dependencies
+- `pywinauto` added to `requirements.txt` (Windows) — the UI Automation layer
+  of `screen_ai` now installs for fresh setups instead of silently degrading
+  to vision-only
+
 ## v1.0.1 — 2026-09-22
 
 First release shipped as a downloadable Windows build

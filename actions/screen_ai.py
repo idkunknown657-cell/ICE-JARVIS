@@ -44,6 +44,12 @@ try:
 except Exception:
     _PAG = None
 
+# Structured PC-control debug log (never raises; see core/pc_log.py).
+try:
+    from core import pc_log
+except Exception:                                   # pragma: no cover
+    pc_log = None
+
 _TARGET_WINDOW: str | None = None   # module state set by the "window" action
 
 _INTERESTING = {
@@ -471,6 +477,9 @@ def _find_action(parameters: dict) -> str:
     mode, payload = _resolve(parameters, item)
     if mode == "hit":
         cx, cy = _center(payload)
+        if pc_log:
+            pc_log.event("screen_ai.find", app=_current_app(), item=item,
+                         method="uia", box=f"{cx},{cy}", result="found")
         under = _element_at_point(cx, cy)
         suffix = f" | under pointer: '{under}'" if under else ""
         return (f"'{item}' — [{payload['type']}] '{payload.get('name') or ''}' "
@@ -481,10 +490,20 @@ def _find_action(parameters: dict) -> str:
             lines.append(_summary_line(e, i))
         return "\n".join(lines)
     if mode == "none":
+        if pc_log:
+            pc_log.event("screen_ai.find", app=_current_app(), item=item,
+                         method="uia", result="not-found")
         return f"'{item}' was not found in the window's accessibility tree. {payload}"
     coords = _vision_find(item)
     if coords:
+        if pc_log:
+            pc_log.event("screen_ai.find", app=_current_app(), item=item,
+                         method="vision", box=f"{coords[0]},{coords[1]}",
+                         result="found")
         return f"'{item}' found at {coords[0]},{coords[1]} (screen)"
+    if pc_log:
+        pc_log.event("screen_ai.find", app=_current_app(), item=item,
+                     method="vision", result="not-found")
     return f"'{item}' was not found on the screen."
 
 
@@ -512,6 +531,12 @@ def _click_action(parameters: dict, button: str = "left", clicks: int = 1) -> st
         verb = ("Double-clicked" if clicks == 2
                 else ("Right-clicked" if button == "right" else "Clicked"))
         app = _current_app()
+        if pc_log:
+            pc_log.event("screen_ai.click", app=app, item=item, method="uia",
+                         box=f"{cx},{cy}", button=button, clicks=clicks,
+                         action="click-center",
+                         verify=("ok" if under else "unverified"),
+                         result=under or "no-element-reported")
         if under and under.strip().lower() == (payload.get("name") or "").lower():
             if clicks == 1 and button == "left":
                 _remember(app, item, "uia", True,
@@ -548,6 +573,11 @@ def _hover_action(parameters: dict) -> str:
         _safe_pag(_PAG.moveTo, cx, cy, duration=0.3)
         under = _element_at_point(cx, cy)
         ok = under and under.strip().lower() == (payload.get("name") or "").lower()
+        if pc_log:
+            pc_log.event("screen_ai.hover", app=_current_app(), item=item,
+                         method="uia", box=f"{cx},{cy}", action="move-to-centre",
+                         verify=("ok" if ok else (under or "unverified")),
+                         result=under or "no-element-reported")
         state = "verified" if ok else (f"but UIA reports '{under}'" if under else "unverified")
         return (f"Pointer on '{item}' at ({cx},{cy}) — {state}.")
     coords = _vision_find(item)

@@ -30,6 +30,11 @@ try:
 except ImportError:
     _PYPERCLIP = False
 
+try:
+    from core import pc_log
+except Exception:                                   # pragma: no cover
+    pc_log = None
+
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -182,32 +187,60 @@ def _screen_size() -> tuple[int, int]:
     return int(size[0]), int(size[1])
 
 
+def _virtual_bounds() -> tuple[int, int, int, int]:
+    """(left, top, width, height) of the WHOLE virtual screen — every monitor.
+
+    Clamping to the primary monitor only would make "click the button on my
+    second monitor" silently land on monitor 1 (#23). Falls back to the
+    primary size when the query fails (non-Windows, mocked tests).
+    """
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        left, top = int(u.GetSystemMetrics(76)), int(u.GetSystemMetrics(77))
+        wide, high = int(u.GetSystemMetrics(78)), int(u.GetSystemMetrics(79))
+        if wide > 1 and high > 1:
+            return left, top, wide, high
+    except Exception:
+        pass
+    w, h = _screen_size()
+    return 0, 0, w, h
+
+
 def _clamp_to_screen(x, y) -> tuple[int, int]:
-    """Keep a coordinate inside the screen. A hallucinated or off-by-scale
-    coordinate is a wrong click; a clamped one is merely an edge click.
+    """Keep a coordinate inside the VIRTUAL screen (all monitors). A hallucinated
+    or off-by-scale coordinate is a wrong click; a clamped one is merely an edge
+    click. Points on monitor 2+ stay put instead of being yanked to monitor 1.
 
     Also steers away from the screen's four corners: pyautogui treats every
     corner as a failsafe-abort point, so parking the pointer on one makes the
     *next* control call raise FailSafeException. A clamped coordinate must not
     be able to wedge the controller like that.
     """
-    w, h = _screen_size()
+    vl, vt, vw, vh = _virtual_bounds()
     try:
         cx = int(round(float(x)))
         cy = int(round(float(y)))
     except (TypeError, ValueError):
-        cx, cy = 0, 0
-    cx = max(0, min(cx, w - 1))
-    cy = max(0, min(cy, h - 1))
-    if w >= 3 and h >= 3:
-        if cx == 0:
-            cx = 1
-        elif cx == w - 1:
-            cx = w - 2
-        if cy == 0:
-            cy = 1
-        elif cy == h - 1:
-            cy = h - 2
+        cx, cy = vl, vt
+    cx = max(vl, min(cx, vl + vw - 1))
+    cy = max(vt, min(cy, vt + vh - 1))
+    # Failsafe corners belong to the primary screen (0,0)-(w-1,h-1).
+    pw, ph = _screen_size()
+    if pw >= 3 and ph >= 3:
+        if 0 <= cx < pw:
+            if cx == 0:
+                cx = 1
+            elif cx == pw - 1:
+                cx = pw - 2
+        if 0 <= cy < ph:
+            if cy == 0:
+                cy = 1
+            elif cy == ph - 1:
+                cy = ph - 2
+        if (cx, cy) in ((0, 0), (pw - 1, 0), (0, ph - 1), (pw - 1, ph - 1)):
+            cx = max(1, min(cx, pw - 2))
+            cy = max(1, min(cy, ph - 2))
     return cx, cy
 
 
@@ -582,6 +615,10 @@ def _screen_find(description: str, retries: int = 2) -> tuple[int, int] | None:
             img, sx, sy = _capture_with_mapping()
             iw, ih = img.size
             sw, sh = _screen_size()
+            if pc_log:
+                pc_log.event("computer.screen_find", description=description,
+                             attempt=attempt + 1, screen=f"{sw}x{sh}",
+                             image=f"{iw}x{ih}")
             buf = io.BytesIO()
             _grid_overlay(img).save(buf, format="PNG")
 
@@ -668,6 +705,9 @@ def _do_screen_click(description: str, button: str = "left",
         return "screen_click needs a 'description' of the element to click."
     coords = _screen_find(desc)
     if not coords:
+        if pc_log:
+            pc_log.event("computer.screen_click", description=desc,
+                         button=button, method="vision", result="not-found")
         return f"Element not found on screen: '{desc}'"
     time.sleep(0.2)
     _click(x=coords[0], y=coords[1], button=button, clicks=clicks)
@@ -684,6 +724,11 @@ def _do_screen_click(description: str, button: str = "left",
     # distinct gesture, so neither is judged by the click verifier.
     if verify and clicks == 1 and button == "left":
         verdict = _verify_after_click(desc, coords)
+        if pc_log:
+            pc_log.event("computer.screen_click", description=desc,
+                         button=button, method="vision", box=str(coords),
+                         action="click-center", verify=verdict.lower(),
+                         result=verdict)
         if verdict == "DONE":
             try:
                 from core import strategy_memory
@@ -705,18 +750,92 @@ def _do_screen_click(description: str, button: str = "left",
                     f"screen. Do not report success; diagnose and retry if sensible.")
         return (f"{verb} '{desc}' at {coords}; verification could not confirm "
                 f"whether it took effect. Say so if it matters.")
+    if pc_log:
+        pc_log.event("computer.screen_click", description=desc, button=button,
+                     clicks=clicks, method="vision", box=str(coords),
+                     action="click-center", verify="skipped",
+                     result=f"{verb} at {coords}")
     return f"{verb} '{desc}' at {coords}"
 
 
 def _do_screen_move(description: str) -> str:
-    """Locate an element and move the pointer onto it without clicking."""
+    """Locate an element and move the pointer onto it, then VERIFY the pointer
+    actually landed there (#2: never assume the move worked)."""
     desc = str(description or "").strip()
     if not desc:
         return "screen_move needs a 'description' of the element to move to."
     coords = _screen_find(desc)
     if not coords:
+        if pc_log:
+            pc_log.event("computer.screen_move", description=desc,
+                         method="vision", result="not-found")
         return f"Element not found on screen: '{desc}'"
-    return _move(coords[0], coords[1]) + f"  [element: '{desc}']"
+    moved = _move(coords[0], coords[1])
+    # Pointer landing check: where is the cursor really?
+    landed = ""
+    verify = "unverified"
+    try:
+        pos = pyautogui.position()
+        if abs(pos[0] - coords[0]) <= 3 and abs(pos[1] - coords[1]) <= 3:
+            landed = f"  [pointer verified at {pos[0]},{pos[1]}]"
+            verify = "ok"
+        else:
+            landed = f"  [WARNING: pointer at {pos[0]},{pos[1]}, expected {coords[0]},{coords[1]}]"
+            verify = "mismatch"
+    except Exception as e:
+        landed = f"  [pointer position unreadable: {e}]"
+    if pc_log:
+        pc_log.event("computer.screen_move", description=desc, method="vision",
+                     box=str(coords), action="move-to-centre", verify=verify,
+                     result=verify)
+    return moved + landed + f"  [element: '{desc}']"
+
+
+def _do_screen_drag(source: str, target: str) -> str:
+    """OBSERVE source → OBSERVE destination → drag → VERIFY the release point."""
+    src_desc = str(source or "").strip()
+    dst_desc = str(target or "").strip()
+    if not src_desc or not dst_desc:
+        return "screen_drag needs both a source and a target description."
+    src = _screen_find(src_desc)
+    if not src:
+        if pc_log:
+            pc_log.event("computer.screen_drag", source=src_desc,
+                         target=dst_desc, result="source-not-found")
+        return f"Drag source not found on screen: '{src_desc}'"
+    dst = _screen_find(dst_desc)
+    if not dst:
+        if pc_log:
+            pc_log.event("computer.screen_drag", source=src_desc,
+                         target=dst_desc, box=str(src),
+                         result="target-not-found")
+        return f"Drag target not found on screen: '{dst_desc}'"
+    _drag(src[0], src[1], dst[0], dst[1])
+    if pc_log:
+        pc_log.event("computer.screen_drag", source=src_desc, target=dst_desc,
+                     box=f"{src}->{dst}", action="drag", verify="released",
+                     result="drag completed")
+    return (f"Dragged '{src_desc}' at {src} onto '{dst_desc}' at {dst}. "
+            f"Verify the drop actually happened before claiming success.")
+
+
+def _click_with_modifier(params: dict, button: str, clicks: int) -> str:
+    """click, optionally holding a modifier key first ("hold Shift and click")."""
+    mod = str(params.get("modifier") or "").strip().lower()
+    if not mod:
+        return _click(params.get("x"), params.get("y"), button, clicks)
+    _require_pyautogui()
+    key = {"shift": "shift", "ctrl": "ctrl", "control": "ctrl",
+           "alt": "alt", "win": "win", "winkey": "win", "super": "win"}.get(mod, mod)
+    pyautogui.keyDown(key)
+    try:
+        res = _click(params.get("x"), params.get("y"), button, clicks)
+    finally:
+        try:
+            pyautogui.keyUp(key)
+        except Exception:
+            pass
+    return res + f"  [held {key} while clicking]"
 
 
 def computer_control(
@@ -799,16 +918,16 @@ def computer_control(
             )
 
         if action in ("click", "left_click"):
-            return _click(params.get("x"), params.get("y"), "left", 1)
+            return _click_with_modifier(params, "left", 1)
 
         if action in ("middle_click", "mid_click"):
-            return _click(params.get("x"), params.get("y"), "middle", 1)
+            return _click_with_modifier(params, "middle", 1)
 
         if action == "double_click":
-            return _click(params.get("x"), params.get("y"), "left", 2)
+            return _click_with_modifier(params, "left", 2)
 
         if action == "right_click":
-            return _click(params.get("x"), params.get("y"), "right", 1)
+            return _click_with_modifier(params, "right", 1)
 
         if action in ("move", "mouse_move"):
             if params.get("x_pct") is not None or params.get("y_pct") is not None:
@@ -908,6 +1027,14 @@ def computer_control(
         if action in ("screen_move", "screen_hover"):
             return _do_screen_move(params.get("description", ""))
 
+        if action == "screen_drag":
+            return _do_screen_drag(
+                params.get("source") or params.get("description")
+                or params.get("item") or "",
+                params.get("target") or params.get("destination")
+                or params.get("target_description") or "",
+            )
+
         if action == "wait":
             secs = float(params.get("seconds", 1.0))
             secs = min(secs, 30.0)
@@ -951,7 +1078,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "type | smart_type | click | middle_click | double_click | right_click | hotkey | press | scroll | move | move_percent | move_center | move_rel | move_dir | arrow_key | mouse_position | drag | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | screen_double_click | screen_right_click | screen_move | hover | random_data | user_data"
+                "description": "type | smart_type | click | middle_click | double_click | right_click | hotkey | press | scroll | move | move_percent | move_center | move_rel | move_dir | arrow_key | mouse_position | drag | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | screen_double_click | screen_right_click | screen_move | screen_drag | hover | random_data | user_data"
             },
             "text": {
                 "type": "STRING",
@@ -989,6 +1116,14 @@ TOOL = {
                 "type": "STRING",
                 "description": "Mouse button for click/screen_click: left | right (default: left)"
             },
+            "modifier": {
+                "type": "STRING",
+                "description": "click only: hold this key while clicking, e.g. shift ('hold Shift and click'). One of shift | ctrl | alt | win."
+            },
+            "target": {
+                "type": "STRING",
+                "description": "screen_drag only: the destination element to drag onto (with `description` as the source)"
+            },
             "keys": {
                 "type": "STRING",
                 "description": "Key combination e.g. 'ctrl+c'"
@@ -1015,7 +1150,7 @@ TOOL = {
             },
             "description": {
                 "type": "STRING",
-                "description": "Element description for screen_find/screen_click/screen_move (e.g. 'the blue Send button')"
+                "description": "Element description for screen_find/screen_click/screen_move/screen_drag (e.g. 'the blue Send button'); for screen_drag it is the SOURCE"
             },
             "type": {
                 "type": "STRING",

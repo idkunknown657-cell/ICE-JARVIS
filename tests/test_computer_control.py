@@ -45,24 +45,32 @@ class FakeGui:
 class ClampTest(unittest.TestCase):
 
     def test_clamp_inside_passthrough(self):
-        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))):
+        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))), \
+                mock.patch.object(cc, "_virtual_bounds",
+                                  return_value=(0, 0, 1600, 900)):
             self.assertEqual(cc._clamp_to_screen(100, 200), (100, 200))
 
     def test_clamp_over_and_negative(self):
-        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))):
+        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))), \
+                mock.patch.object(cc, "_virtual_bounds",
+                                  return_value=(0, 0, 1600, 900)):
             # Out-of-range clamps inside, then is nudged off the corner.
             self.assertEqual(cc._clamp_to_screen(5000, 5000), (1598, 898))
             self.assertEqual(cc._clamp_to_screen(-50, -50), (1, 1))
 
     def test_clamp_never_returns_a_failsafe_corner(self):
         corners = {(0, 0), (0, 899), (1599, 0), (1599, 899)}
-        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))):
+        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))), \
+                mock.patch.object(cc, "_virtual_bounds",
+                                  return_value=(0, 0, 1600, 900)):
             for raw in [(0, 0), (1599, 899), (0, 899), (1599, 0),
                         (-5, -5), (99999, 99999)]:
                 self.assertNotIn(cc._clamp_to_screen(*raw), corners)
 
     def test_clamp_floats_and_garbage(self):
-        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))):
+        with mock.patch.object(cc, "pyautogui", FakeGui(size=(1600, 900))), \
+                mock.patch.object(cc, "_virtual_bounds",
+                                  return_value=(0, 0, 1600, 900)):
             self.assertEqual(cc._clamp_to_screen(10.6, 20.2), (11, 20))
             self.assertEqual(cc._clamp_to_screen("bad", None), (1, 1))
 
@@ -131,7 +139,9 @@ class MoveTest(unittest.TestCase):
 
     def test_move_clamps_out_of_range(self):
         gui = FakeGui(size=(1600, 900))
-        with mock.patch.object(cc, "pyautogui", gui):
+        with mock.patch.object(cc, "pyautogui", gui), \
+             mock.patch.object(cc, "_virtual_bounds",
+                               return_value=(0, 0, 1600, 900)):
             cc._move(99999, 99999)
         self.assertEqual(gui.moves[-1], (1598, 898))
 
@@ -236,6 +246,144 @@ class RescueTest(unittest.TestCase):
             msg = cc._move(400, 300)
         self.assertIn("(400, 300)", msg)
         self.assertIn((400, 300), gui.moves)
+
+
+class MultiMonitorClampTest(unittest.TestCase):
+    """§23/§24: coordinates on monitor 2 (or left of the primary) must never
+    be yanked back onto monitor 1, and far-outside points clamp to the whole
+    virtual desktop — not to the primary screen."""
+
+    def test_second_monitor_coordinates_are_kept(self):
+        gui = FakeGui(size=(1600, 900))
+        with mock.patch.object(cc, "pyautogui", gui), \
+             mock.patch.object(cc, "_virtual_bounds",
+                               return_value=(0, 0, 3200, 900)):
+            self.assertEqual(cc._clamp_to_screen(2500, 400), (2500, 400))
+
+    def test_left_of_the_primary_monitor_is_kept(self):
+        gui = FakeGui(size=(1600, 900))
+        with mock.patch.object(cc, "pyautogui", gui), \
+             mock.patch.object(cc, "_virtual_bounds",
+                               return_value=(-1600, 0, 3200, 900)):
+            self.assertEqual(cc._clamp_to_screen(-800, 400), (-800, 400))
+
+    def test_far_outside_clamps_to_the_virtual_edge(self):
+        gui = FakeGui(size=(1600, 900))
+        with mock.patch.object(cc, "pyautogui", gui), \
+             mock.patch.object(cc, "_virtual_bounds",
+                               return_value=(0, 0, 3200, 900)):
+            cx, cy = cc._clamp_to_screen(9999, 9999)
+        self.assertEqual(cx, 3199)          # virtual right edge
+        self.assertEqual(cy, 898)           # nudged off the failsafe corner row
+        self.assertNotIn((cx, cy),
+                         {(0, 0), (1599, 0), (0, 899), (1599, 899)})
+
+
+class ScreenMoveVerifyTest(unittest.TestCase):
+    """§2 step 5/6: after a move, check the pointer really reached the target."""
+
+    def test_pointer_landing_is_verified(self):
+        gui = FakeGui(pos=(640, 360))
+        with mock.patch.object(cc, "_screen_find", return_value=(640, 360)), \
+             mock.patch.object(cc, "_move", return_value="Mouse -> (640, 360)"), \
+             mock.patch.object(cc, "pyautogui", gui):
+            out = cc.computer_control({"action": "screen_move",
+                                       "description": "the Play button"})
+        self.assertIn("pointer verified at 640,360", out)
+
+    def test_pointer_mismatch_is_reported_not_hidden(self):
+        gui = FakeGui(pos=(1, 1))
+        with mock.patch.object(cc, "_screen_find", return_value=(640, 360)), \
+             mock.patch.object(cc, "_move", return_value="Mouse -> (640, 360)"), \
+             mock.patch.object(cc, "pyautogui", gui):
+            out = cc.computer_control({"action": "screen_move",
+                                       "description": "the Play button"})
+        self.assertIn("WARNING: pointer at 1,1", out)
+
+
+class ScreenDragTest(unittest.TestCase):
+    """§4: OBSERVE source -> OBSERVE destination -> drag -> report honestly."""
+
+    def test_drag_needs_both_ends(self):
+        out = cc.computer_control({"action": "screen_drag",
+                                   "description": "the file"})
+        self.assertIn("source and a target", out)
+
+    def test_missing_source_stops_before_dragging(self):
+        with mock.patch.object(cc, "_screen_find", return_value=None), \
+             mock.patch.object(cc, "_drag") as drag:
+            out = cc.computer_control({"action": "screen_drag",
+                                       "description": "file",
+                                       "target": "folder"})
+        drag.assert_not_called()
+        self.assertIn("Drag source not found", out)
+
+    def test_missing_target_stops_before_dragging(self):
+        with mock.patch.object(cc, "_screen_find",
+                               side_effect=[(100, 100), None]), \
+             mock.patch.object(cc, "_drag") as drag:
+            out = cc.computer_control({"action": "screen_drag",
+                                       "description": "file",
+                                       "target": "folder"})
+        drag.assert_not_called()
+        self.assertIn("Drag target not found", out)
+
+    def test_drag_uses_both_located_points(self):
+        with mock.patch.object(cc, "_screen_find",
+                               side_effect=[(100, 100), (500, 500)]), \
+             mock.patch.object(cc, "_drag") as drag:
+            out = cc.computer_control({"action": "screen_drag",
+                                       "description": "file",
+                                       "target": "Downloads folder"})
+        drag.assert_called_once_with(100, 100, 500, 500)
+        self.assertIn("Dragged", out)
+        self.assertIn("Downloads folder", out)
+        self.assertIn("Verify the drop", out)
+
+
+class ModifierClickTest(unittest.TestCase):
+    """§5: 'hold Shift and click' — the modifier is always released."""
+
+    class KeyGui(FakeGui):
+        def __init__(self):
+            super().__init__()
+            self.held = []
+            self.released = []
+
+        def keyDown(self, k):
+            self.held.append(k)
+
+        def keyUp(self, k):
+            self.released.append(k)
+
+    def test_modifier_is_held_around_the_click(self):
+        gui = self.KeyGui()
+        with mock.patch.object(cc, "pyautogui", gui), \
+             mock.patch.object(cc, "_require_pyautogui"), \
+             mock.patch.object(cc, "_click", return_value="Clicked") as click:
+            out = cc.computer_control({"action": "click", "x": 10, "y": 20,
+                                       "modifier": "shift"})
+        click.assert_called_once_with(10, 20, "left", 1)
+        self.assertEqual(gui.held, ["shift"])
+        self.assertEqual(gui.released, ["shift"])
+        self.assertIn("held shift", out)
+
+    def test_click_without_modifier_is_unchanged(self):
+        with mock.patch.object(cc, "_click", return_value="Clicked") as click:
+            out = cc.computer_control({"action": "click", "x": 10, "y": 20})
+        click.assert_called_once_with(10, 20, "left", 1)
+        self.assertEqual(out, "Clicked")
+
+    def test_modifier_released_even_when_the_click_fails(self):
+        gui = self.KeyGui()
+        with mock.patch.object(cc, "pyautogui", gui), \
+             mock.patch.object(cc, "_require_pyautogui"), \
+             mock.patch.object(cc, "_click",
+                               side_effect=RuntimeError("driver died")):
+            out = cc.computer_control({"action": "click", "x": 10, "y": 20,
+                                       "modifier": "ctrl"})
+        self.assertEqual(gui.released, ["ctrl"])
+        self.assertIn("failed", out)
 
 
 class GridTest(unittest.TestCase):

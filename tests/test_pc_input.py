@@ -9,11 +9,51 @@ the confirm-gate behaviour of destructive actions only.
 import platform
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import core.pc_input as pc
 from actions.computer_control import computer_control
 
 _WIN = platform.system() == "Windows"
+
+
+class AbsNormTest(unittest.TestCase):
+    """§23: absolute moves normalise over the VIRTUAL desktop (all monitors),
+    not the primary screen. Pure math — no SendInput is ever issued here."""
+
+    def test_centre_of_a_single_monitor(self):
+        with mock.patch.object(pc, "_virtual_rect",
+                               return_value=(0, 0, 1600, 900)):
+            nx, ny = pc._abs_norm(800, 450)
+        # normalised: (x - left) * 65535 / (width - 1)
+        self.assertEqual(nx, (800 * 65535) // 1599)
+        self.assertEqual(ny, (450 * 65535) // 899)
+
+    def test_coordinates_left_of_the_primary_monitor_survive(self):
+        # Second monitor left of the primary: x is NEGATIVE, lands at 25% of
+        # the virtual desktop (-800 of -1600..1600) instead of clamping to 0.
+        with mock.patch.object(pc, "_virtual_rect",
+                               return_value=(-1600, 0, 3200, 900)):
+            nx, ny = pc._abs_norm(-800, 450)
+        self.assertEqual(nx, (800 * 65535) // 3199)
+        self.assertGreater(nx, 16000)       # well clear of the left edge
+        self.assertLess(nx, 17000)
+
+    def test_far_outside_clamps_to_the_desktop_edge(self):
+        with mock.patch.object(pc, "_virtual_rect",
+                               return_value=(-1600, 0, 3200, 900)):
+            nx, ny = pc._abs_norm(99999, -99999)
+        self.assertEqual(nx, 65535)
+        self.assertEqual(ny, 0)
+
+    def test_output_always_fits_the_protocol_range(self):
+        with mock.patch.object(pc, "_virtual_rect",
+                               return_value=(0, 0, 1600, 900)):
+            for raw in ((-10 ** 6, -10 ** 6), (10 ** 6, 10 ** 6),
+                        (0, 0), (1599, 899)):
+                nx, ny = pc._abs_norm(*raw)
+                self.assertTrue(0 <= nx <= 65535)
+                self.assertTrue(0 <= ny <= 65535)
 
 
 class KeyMapping(unittest.TestCase):
