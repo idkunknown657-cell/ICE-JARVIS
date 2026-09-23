@@ -62,8 +62,8 @@
   };
 
   const providers = [
-    { name: "groq", base_url: "https://api.groq.com/openai/v1", api_key: "gsk_demo", model: "llama-3.3-70b-versatile", free: true },
-    { name: "cerebras", base_url: "https://api.cerebras.ai/v1", api_key: "", model: "llama-3.3-70b", free: true },
+    { name: "groq", base_url: "https://api.groq.com/openai/v1", api_key: "gsk_demo", model: "llama-3.3-70b-versatile", free: true, enabled: true },
+    { name: "cerebras", base_url: "https://api.cerebras.ai/v1", api_key: "", model: "llama-3.3-70b", free: true, enabled: true },
   ];
 
   let perf = { cpu: 18, mem: 46, gpu: 31, tmp: 52, net: 0.4, uptime: "3h 12m", procs: 214 };
@@ -115,7 +115,7 @@
     async clear_attach() { return {}; },
     async remote_pair() { return null; },
     async api_keys_get() {
-      return { gemini: { key: "AIzaSy…demo", valid: null, msg: "" }, providers };
+      return { gemini: { key: "AIzaSy…demo", valid: null, msg: "" }, providers, primary: "gemini" };
     },
     async api_keys_test(data) {
       await new Promise(r => setTimeout(r, 900));

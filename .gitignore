@@ -61,7 +61,7 @@ logs/
 downloads/
 screenshots/
 
-# ── Update packaging output (make_update.py) — goes to a GitHub Release, not git
+# ── Update packaging/staging output — goes to a GitHub Release, not git
 JARVIS_update.zip
 ICE-JARVIS-Windows-x64.zip
 update.json

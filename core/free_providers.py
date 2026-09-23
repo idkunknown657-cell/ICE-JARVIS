@@ -64,6 +64,8 @@ def _load() -> list[dict]:
         base = str(p.get("base_url") or "").strip().rstrip("/")
         key  = str(p.get("api_key") or "").strip()
         model = str(p.get("model") or "").strip() or _DEFAULT_MODEL
+        if p.get("enabled") is False:
+            continue                      # disabled in Settings — key kept, not used
         if name and base and key and base.startswith("http"):
             out.append({"name": name, "base_url": base,
                         "api_key": key, "model": model})

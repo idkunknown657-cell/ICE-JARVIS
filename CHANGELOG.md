@@ -67,6 +67,6 @@ Initial public release of **ICE JARVIS**.
 - Wake word, push-to-talk, echo guard, plugins, morning brief, weather, reminders, web search, YouTube, messaging and more
 
 ### Updates & packaging
-- Single-file `ICE.exe` build (PyInstaller spec + `tools/build_exe.ps1`)
-- Self-updating from GitHub Releases (`core/updater.py` + `tools/publish_update.py`)
+- ~~Single-file `ICE.exe` build~~ — removed; run from source (no exe, no build)
+- Self-updating from GitHub Releases (`core/updater.py`)
 - sha256-verified `update.json` manifests; staged swap + relaunch via detached batch

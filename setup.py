@@ -30,8 +30,8 @@ for _stream in (sys.stdout, sys.stderr):
 OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 HERE = Path(__file__).resolve().parent
 
-MIN_PY = (3, 11)        # hard floor: below this the syntax used here won't parse
-MAX_PY = (3, 13)        # highest version this is actually tested on
+MIN_PY = (3, 13)        # supported floor: 3.13 and newer
+MAX_PY = (3, 14)        # highest version this is actually tested on
 
 
 def _run(label: str, args: list[str]) -> None:
@@ -136,4 +136,26 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Never die silently: any failure is written to logs/setup.log with the full
+    # traceback, and an interactive window stays open so the message is readable.
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+        log_dir = HERE / "logs"
+        try:
+            log_dir.mkdir(exist_ok=True)
+            (log_dir / "setup.log").open("a", encoding="utf-8").write(
+                traceback.format_exc() + "\n")
+        except Exception:
+            pass
+        traceback.print_exc()
+        print(f"\n❌ Setup failed — full traceback saved to {log_dir / 'setup.log'}")
+        try:
+            if sys.stdin and sys.stdin.isatty():
+                input("Press Enter to close…")
+        except Exception:
+            pass
+        sys.exit(1)

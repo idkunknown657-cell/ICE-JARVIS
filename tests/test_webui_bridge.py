@@ -220,21 +220,60 @@ class TestJarvisAPI(unittest.TestCase):
             data = self.api.api_keys_get()
             self.assertEqual(data["gemini"]["key"], "test-key-xyz")
 
-    def test_api_keys_disable_provider(self):
+    def test_api_keys_always_lists_sample_providers(self):
+        with _ConfigGuard():
+            rows = self.api.api_keys_get()["providers"]
+            names = {p["name"] for p in rows}
+            self.assertTrue({"groq", "cerebras", "openrouter", "huggingface"} <= names)
+
+    def test_api_keys_disable_keeps_row_delete_removes(self):
         with _ConfigGuard():
             self.api.api_keys_save({
                 "provider": {"name": "testprov", "base_url": "https://x.example",
                              "api_key": "k123", "model": "m"}})
-            rows = self.api.api_keys_get()["providers"]
-            self.assertTrue(any(p["name"] == "testprov" for p in rows))
             r = self.api.api_keys_save({"disable": "testprov"})
+            self.assertTrue(r["ok"])
+            rows = self.api.api_keys_get()["providers"]
+            kept = [p for p in rows if p["name"] == "testprov"]
+            self.assertEqual(len(kept), 1)          # row survives a disable
+            self.assertFalse(kept[0]["enabled"])
+            self.assertEqual(kept[0]["api_key"], "k123")   # key survives too
+            r = self.api.api_keys_save({"enable": "testprov"})
+            self.assertTrue(r["ok"])
+            rows = self.api.api_keys_get()["providers"]
+            self.assertTrue([p for p in rows if p["name"] == "testprov"][0]["enabled"])
+            r = self.api.api_keys_save({"delete": "testprov"})
             self.assertTrue(r["ok"])
             rows = self.api.api_keys_get()["providers"]
             self.assertFalse(any(p["name"] == "testprov" for p in rows))
 
-    def test_setup_save_requires_key(self):
-        r = self.api.setup_save({"gemini_key": ""})
-        self.assertFalse(r["ok"])
+    def test_api_keys_primary_selection(self):
+        with _ConfigGuard():
+            r = self.api.api_keys_save({"primary": "groq"})
+            self.assertTrue(r["ok"])
+            data = self.api.api_keys_get()
+            self.assertEqual(data["primary"], "groq")
+            self.assertEqual(data["providers"][0]["name"], "groq")  # primary first
+
+    def test_api_keys_clear_gemini_and_add_provider_keep_key(self):
+        with _ConfigGuard():
+            self.api.api_keys_save({"gemini_key": "keep-me"})
+            self.api.api_keys_save({"provider": {"name": "p1", "base_url": "https://x.example/v1",
+                                                 "api_key": "k", "model": "m"}})
+            # saving a provider must NOT wipe the stored Gemini key
+            self.assertEqual(webui._read_full_config().get("gemini_api_key"), "keep-me")
+            # clearing with an explicit empty string must actually clear
+            r = self.api.api_keys_save({"gemini_key": ""})
+            self.assertTrue(r["ok"])
+            self.assertEqual(webui._read_full_config().get("gemini_api_key"), "")
+
+    def test_setup_save_allows_empty_key(self):
+        with _ConfigGuard():
+            r = self.api.setup_save({"gemini_key": "", "assistant_name": "ICE"})
+            self.assertTrue(r["ok"])       # first run must work with no keys
+            cfg = webui._read_full_config()
+            self.assertEqual(cfg.get("gemini_api_key"), "")
+            self.assertTrue(cfg.get("os_system"))
 
     def test_setup_save_writes_config(self):
         with _ConfigGuard():

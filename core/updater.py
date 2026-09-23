@@ -2,10 +2,9 @@
 updater.py — self-update for the JARVIS distribution ("push updates from home").
 
 THE FLOW
-    You (the developer) run:  python make_update.py --url <public zip URL>
-        → packs dist/JARVIS into JARVIS_update.zip + writes update.json
-          (version, notes, sha256) for you to upload anywhere static — a GitHub
-          Release, a raw file, a bucket, your own server.
+    You (the developer) publish update.json (version, notes, sha256) plus the
+    app zip anywhere static — a GitHub Release, a raw file, a bucket, your own
+    server — and point the manifest URL at it.
 
     The app (recipient side) then:
         check()                — fetch the manifest, compare versions

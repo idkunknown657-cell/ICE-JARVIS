@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-430%20passing-31d9ae?style=flat-square"></a>
-  <img alt="Python" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-8b6df5?style=flat-square">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
 
@@ -25,7 +25,7 @@ conversations. No telemetry, no accounts, no cloud.
 
 | Requirement | How to check |
 |---|---|
-| **Python 3.11–3.13** (64-bit) | `python --version` — install from [python.org](https://www.python.org/downloads/) and tick **☑ Add to PATH** |
+| **Python 3.13 or 3.14** (64-bit) | `python --version` — install from [python.org](https://www.python.org/downloads/) and tick **☑ Add to PATH** |
 | **A microphone** | built-in or USB — used for voice input |
 | **Speakers / headset** | voice output |
 | **A free Gemini API key** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free tier) |
@@ -39,31 +39,38 @@ git clone https://github.com/idkunknown657-cell/ICE-JARVIS.git
 cd ICE-JARVIS
 ```
 
-### 2. Install dependencies
+### 2. Install dependencies — then start
 
-```powershell
-python setup.py
-```
+**Windows — double-click `setup.bat`.** It finds Python 3.13+, installs
+everything (requirements.txt carries per-platform markers, then Playwright
+browsers), checks the config and launches JARVIS. If something fails the error
+stays on screen and is written to `logs\setup.log` — it never vanishes.
 
-That installs everything you need for **your** OS automatically
-(requirements.txt carries per-platform markers, then Playwright browsers are
-fetched). It takes a few minutes the first time.
+Prefer a terminal? `python setup.py` does the same install step only.
 
-### 3. Add your Gemini API key
+### 3. Start JARVIS
 
-Start the app once:
+| Launcher | Console? | Use it when |
+|---|---|---|
+| **`start.bat`** (or the `ICE` desktop shortcut) | hidden | normal daily use — errors go to `logs\jarvis.log` |
+| **`start_debug.bat`** | visible | something isn't working — shows every print/traceback live *and* in `logs\jarvis.log` |
 
-```powershell
-python main.py
-```
+### 4. Add your API key(s)
 
-The first-run **setup screen** opens — paste your Gemini key there and press
-**Save**. (Or open `config/api_keys.json` and put it under `"gemini_api_key"`.)
+The first-run **setup screen** opens on the first start. You can:
+
+- paste a **Gemini** key, **or**
+- paste one or more **free provider** keys (GROQ, Cerebras, OpenRouter, Hugging Face), **or**
+- press **Initialise systems** with *nothing* — JARVIS starts anyway and shows
+  *"API key required. Open Settings → API Keys."* until you add one later.
+
+Keys can be added, edited, tested, disabled or deleted at any time in
+**⚙ Settings → API Keys** — no reinstall and no source edits needed.
 
 > 🔒 Your key is stored only in `config/api_keys.json`, which is git-ignored
 > and never included in this repository or any release.
 
-### 4. Talk
+### 5. Talk
 
 The window opens with the ICE avatar. Speak, or type in the chat box —
 then just talk to it naturally, the way you'd talk to a person.
@@ -114,8 +121,14 @@ computer for you.
 | **OpenRouter** (fallback) | Free tier | [openrouter.ai](https://openrouter.ai/keys) | ⚙ Settings → API Keys |
 | **Hugging Face** (fallback) | Free tier | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) | ⚙ Settings → API Keys |
 
-Gemini carries everything. If its quota runs out, the free fallbacks answer
-automatically — add any subset you like.
+Gemini is the primary — but it is **optional**: if it is missing or its quota
+runs out, the free fallbacks answer automatically (add any subset you like).
+Everything is managed in **⚙ Settings → API Keys**, where you can add/edit/
+delete providers, enable/disable them, test each connection, and pick the
+primary + fallback order. Nothing is hard-coded — a missing, invalid or
+expired key never crashes JARVIS; the status line tells you what is happening
+(e.g. *"Gemini API: Connected"* or *"API key required. Open Settings → API
+Keys."*).
 
 ---
 
@@ -134,7 +147,7 @@ python -m unittest discover -s tests -p "test_[a-u]*.py"
 python -m unittest discover -s tests -p "test_[v-z]*.py"
 ```
 
-Both halves pass — 430 tests total.
+Both halves pass — 433 tests total.
 
 ---
 
@@ -145,6 +158,9 @@ ICE-JARVIS/
 ├── main.py            # entry point — boots the interface + live-voice session
 ├── webui.py           # Python ⇄ UI bridge: API surface, event pump, updater wiring
 ├── setup.py           # one-command dependency installer (OS-aware)
+├── setup.bat          # Windows first-time setup: Python check → deps → config → start
+├── start.bat          # Windows normal start (no console; logs → logs\jarvis.log)
+├── start_debug.bat    # Windows debug start (visible console + logs)
 ├── ui_web/            # the interface itself (HTML/CSS/JS, three.js avatar)
 ├── core/              # brain: gemini, emotion, persona, language, free_providers,
 │                      # updater, screen observer, pc_input, tts/stt, memory glue
@@ -152,9 +168,7 @@ ICE-JARVIS/
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
 ├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
-├── tests/             # 430 unit tests
-├── tools/             # release automation (publish_update.py, …)
-└── JARVIS.spec        # PyInstaller recipe (optional exe builds)
+└── tests/             # 433 unit tests
 ```
 
 ---
@@ -163,7 +177,8 @@ ICE-JARVIS/
 
 | Problem | Fix |
 |---|---|
-| **`python` not found** | Install Python 3.11–3.13 from [python.org](https://www.python.org/downloads/) and tick *Add to PATH*. Reopen your terminal. |
+| **`python` not found** | Install Python 3.13 or 3.14 from [python.org](https://www.python.org/downloads/) and tick *Add to PATH*. Reopen your terminal. |
+| **Something failed at startup** | Normal mode hides the console on purpose — the full traceback is in `logs\jarvis.log` (setup errors: `logs\setup.log`). Run `start_debug.bat` to watch it live. |
 | **`python setup.py` crashes with a Unicode error** | Fixed — setup now forces UTF-8 output. Just up-to-date: `git pull`. |
 | **Voice doesn't respond / silent after one reply** | Mic tile on Home → unmute; Settings → Voice & Language → right input device. Voice replies depend on a working mic + speakers. |
 | **No speech output** | Settings → Voice & Language → choose another output voice; some voices need a restart. |

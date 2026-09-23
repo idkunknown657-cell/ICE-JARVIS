@@ -114,21 +114,24 @@ def get_base_dir():
 
 
 def _enable_file_log():
-    """Mirror all output to JARVIS_debug.log next to the exe (frozen only).
+    """Mirror all output to logs/jarvis.log — ALWAYS on, source or frozen.
 
-    The shipped exe is windowed (console=False), so without this every print
-    and traceback vanishes — a connection failure or crash leaves zero
-    evidence. Source runs keep console output and skip this. Rotates at ~2 MB.
-    Never raises.
+    Normal mode runs windowless (pythonw), so without this every print and
+    traceback vanishes — a connection failure or crash leaves zero evidence.
+    Debug mode (start_debug.bat) still shows the console AND gets the file.
+    Rotates at ~2 MB. Never raises.
     """
-    if not getattr(sys, "frozen", False):
-        return
     try:
         from datetime import datetime as _dt
-        log_path = get_base_dir() / "JARVIS_debug.log"
+        log_dir = get_base_dir() / "logs"
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        log_path = log_dir / "jarvis.log"
         try:
             if log_path.exists() and log_path.stat().st_size > 2_000_000:
-                bak = log_path.with_name("JARVIS_debug.bak.log")
+                bak = log_path.with_name("jarvis.bak.log")
                 try:
                     if bak.exists():
                         bak.unlink()
@@ -140,8 +143,43 @@ def _enable_file_log():
         f = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
         f.write(f"\n===== JARVIS start {_dt.now():%Y-%m-%d %H:%M:%S} =====\n")
         f.flush()
-        sys.stdout = f
-        sys.stderr = f
+
+        class _Tee:
+            """Writes to the console AND the log file. pythonw has no console
+            (original stdout is None) — then it is a plain pass-to-file."""
+
+            def __init__(self, orig, logf):
+                self._orig, self._f = orig, logf
+
+            def write(self, s):
+                try:
+                    self._f.write(s)
+                except Exception:
+                    pass
+                if self._orig is not None:
+                    try:
+                        return self._orig.write(s)
+                    except Exception:
+                        return len(s)
+                return len(s)
+
+            def flush(self):
+                try:
+                    self._f.flush()
+                except Exception:
+                    pass
+                if self._orig is not None:
+                    try:
+                        self._orig.flush()
+                    except Exception:
+                        pass
+
+            def __getattr__(self, name):      # isatty, fileno, encoding, …
+                return getattr(self._orig, name) if self._orig is not None \
+                    else (_ for _ in ()).throw(AttributeError(name))
+
+        sys.stdout = _Tee(sys.stdout, f)
+        sys.stderr = _Tee(sys.stderr, f)
 
         def _hook(exc_type, exc_val, exc_tb):
             import traceback as _tb
@@ -413,8 +451,13 @@ def _sanitize_tool_declarations(declarations) -> list:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    """Never raises — a missing file/key returns "" so startup shows a useful
+    status instead of crashing the session loop."""
+    try:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return str(json.load(f).get("gemini_api_key") or "").strip()
+    except Exception:
+        return ""
 
 
 def _load_system_prompt() -> str:
@@ -2839,6 +2882,22 @@ class JarvisLive:
 
         while True:
             try:
+                # No Gemini key yet → say so ONCE per wait and idle politely.
+                # Never spam tracebacks or hammer the API (the Live session
+                # itself requires Gemini; free providers only cover text).
+                _key = _get_api_key()
+                if not _key:
+                    self.ui.set_state("SLEEPING")
+                    if not getattr(self, "_missing_key_logged", False):
+                        self._missing_key_logged = True
+                        self.ui.write_log(
+                            "SYS: API key required. Open Settings → API Keys."
+                        )
+                        print("[JARVIS] No API key configured — waiting for one.")
+                    await asyncio.sleep(5)
+                    continue
+                self._missing_key_logged = False
+
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
                 _resumed_with = self._resume_handle is not None
@@ -2848,7 +2907,7 @@ class JarvisLive:
                 # v1alpha carries proactive audio; if it gets rejected we fall
                 # back to v1beta.
                 client = genai.Client(
-                    api_key=_get_api_key(),
+                    api_key=_key,
                     http_options={"api_version": "v1alpha" if self._enhanced_live else "v1beta"}
                 )
 
@@ -2991,7 +3050,10 @@ class JarvisLive:
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
                     self.ui.set_state("SLEEPING")
                     self.ui.prompt_reconfig()
-                    while not self.ui._win._ready:
+                    # Wait for setup_save to flip _ready back (it does now).
+                    # If the user dismisses setup without saving we keep
+                    # waiting — no reconnect hammering with the same bad key.
+                    while not self.ui._win._ready and not self.ui._closed:
                         await asyncio.sleep(1)
                     print("[JARVIS] New API key saved — reconnecting...")
                     _conn_backoff = 3
@@ -3038,6 +3100,15 @@ def main():
             asyncio.run(jarvis.run())
         except KeyboardInterrupt:
             print("\n🔴 Shutting down...")
+        except BaseException:
+            # Never die silently: full traceback goes to logs/jarvis.log
+            # (stdout/stderr are redirected there by _enable_file_log).
+            traceback.print_exc()
+            try:
+                ui.write_log("ERR: JARVIS stopped unexpectedly — see logs/jarvis.log")
+                ui.set_state("SLEEPING")
+            except Exception:
+                pass
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()

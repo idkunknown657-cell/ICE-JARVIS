@@ -67,6 +67,7 @@ from memory.config_manager import (
     get_goal_agent_enabled, save_goal_agent_enabled,
     get_goal_agent_auto, save_goal_agent_auto,
     get_memory_enabled, save_memory_enabled,
+    _FREE_PROVIDER_SAMPLE,
     get_track_activity, save_track_activity,
     get_screen_awareness, save_screen_awareness,
     get_screen_glance, save_screen_glance,
@@ -133,23 +134,37 @@ def _sanitize_provider_rows(rows) -> list[dict]:
                     "base_url": str(r.get("base_url") or "").strip().rstrip("/"),
                     "api_key": _coerce_key(r.get("api_key")),
                     "model": str(r.get("model") or "").strip(),
+                    "enabled": bool(r.get("enabled", True)),
                 })
             except Exception:
                 continue
     return out
 
 
-def _write_api_keys_impl(gemini_key: str, rows: list[dict]) -> int:
-    """Atomic merge-write of api_keys.json. Safe from any thread."""
+def _write_api_keys_impl(gemini_key, rows: list[dict], primary=None) -> int:
+    """Atomic merge-write of api_keys.json. Safe from any thread.
+
+    `gemini_key=None` leaves the stored key untouched; a string (including "")
+    writes it — so clearing the key from Settings actually works."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     data = _read_full_config()
-    if gemini_key:
-        data["gemini_api_key"] = gemini_key
+    if gemini_key is not None:
+        data["gemini_api_key"] = str(gemini_key)
     rows = _sanitize_provider_rows(rows)
     data["free_providers"] = rows
+    if primary is not None:
+        data["primary"] = str(primary).strip() or "gemini"
     tmp = API_FILE.with_name(API_FILE.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, API_FILE)
+    if gemini_key is not None:
+        # Drop the cached key so gemini.py picks up a new/cleared key at once
+        # instead of keep-calling with the old one until the next restart.
+        try:
+            from core import gemini as _gem
+            _gem.api_key(refresh=True)
+        except Exception:
+            pass
     return sum(1 for p in rows if (p.get("api_key") or "").strip())
 
 
@@ -158,7 +173,9 @@ def _check_config() -> bool:
         return False
     try:
         d = json.loads(API_FILE.read_text(encoding="utf-8"))
-        return bool(d.get("gemini_api_key")) and bool(d.get("os_system"))
+        # Configured = setup was completed at least once (OS chosen). A Gemini
+        # key is no longer required — Settings → API Keys can fill it later.
+        return bool(d.get("os_system")) or bool(d.get("gemini_api_key"))
     except Exception:
         return False
 
@@ -551,11 +568,25 @@ class JarvisAPI:
 
     # ── API keys (all network I/O off-thread — never blocks the UI) ────────
     def api_keys_get(self) -> dict:
+        """Saved rows PLUS the placeholder samples, so every known provider
+        always shows a card even before anything was ever written to disk."""
         cfg = _read_full_config()
+        rows = _sanitize_provider_rows(cfg.get("free_providers"))
+        have = {r["name"].lower() for r in rows}
+        for s in _FREE_PROVIDER_SAMPLE:
+            if str(s.get("name", "")).lower() not in have:
+                rows.append({
+                    "name": str(s.get("name") or ""),
+                    "base_url": str(s.get("base_url") or ""),
+                    "api_key": "",
+                    "model": str(s.get("model") or ""),
+                    "enabled": True,
+                })
         return {
             "gemini": {"key": _coerce_key(cfg.get("gemini_api_key")),
                        "valid": None, "msg": ""},
-            "providers": _sanitize_provider_rows(cfg.get("free_providers")),
+            "providers": rows,
+            "primary": str(cfg.get("primary") or "gemini").strip() or "gemini",
         }
 
     def api_keys_test(self, data: dict) -> list:
@@ -566,12 +597,53 @@ class JarvisAPI:
                 api_verify.verify_all(gemini_key, rows, timeout=8.0)]
 
     def api_keys_save(self, data: dict) -> dict:
+        """One endpoint, explicit actions:
+        {provider:{...}} add/edit · {enable|disable:name} toggle (key kept) ·
+        {delete:name} remove · {primary:name} primary + fallback order ·
+        {gemini_key:str} set/clear the Gemini key."""
         try:
             d = data or {}
-            if d.get("disable"):
-                rows = [p for p in _sanitize_provider_rows(_read_full_config().get("free_providers"))
-                        if p["name"] != d["disable"]]
-                _write_api_keys_impl("", rows)
+            rows = _sanitize_provider_rows(_read_full_config().get("free_providers"))
+            if d.get("delete"):
+                name = str(d["delete"])
+                rows = [p for p in rows if p["name"] != name]
+                _write_api_keys_impl(None, rows)
+                free_providers.reset_cooldowns()
+                return {"ok": True}
+            if d.get("disable") or d.get("enable"):
+                name = str(d.get("disable") or d.get("enable"))
+                want = bool(d.get("enable"))
+                hit = False
+                for p in rows:
+                    if p["name"] == name:
+                        p["enabled"] = want
+                        hit = True
+                if not hit and not want:
+                    # Disabling a sample that was never saved: persist it as an
+                    # explicit off row so the choice survives a restart.
+                    s = next((x for x in _FREE_PROVIDER_SAMPLE
+                              if str(x.get("name", "")).lower() == name.lower()), None)
+                    rows.append({"name": name,
+                                 "base_url": str((s or {}).get("base_url") or ""),
+                                 "api_key": "",
+                                 "model": str((s or {}).get("model") or ""),
+                                 "enabled": False})
+                _write_api_keys_impl(None, rows)
+                free_providers.reset_cooldowns()
+                return {"ok": True}
+            if "primary" in d:
+                primary = str(d.get("primary") or "gemini").strip() or "gemini"
+                # Persist the placeholder samples too, so the primary can be a
+                # never-edited provider — then order the list: primary first.
+                have = {p["name"].lower() for p in rows}
+                for s in _FREE_PROVIDER_SAMPLE:
+                    if str(s.get("name", "")).lower() not in have:
+                        rows.append({"name": str(s.get("name") or ""),
+                                     "base_url": str(s.get("base_url") or ""),
+                                     "api_key": "", "model": str(s.get("model") or ""),
+                                     "enabled": True})
+                rows.sort(key=lambda p: 0 if p["name"].lower() == primary.lower() else 1)
+                _write_api_keys_impl(None, rows, primary=primary)
                 free_providers.reset_cooldowns()
                 return {"ok": True}
             if d.get("provider"):
@@ -584,6 +656,7 @@ class JarvisAPI:
                             p["base_url"] = str(pr["base_url"]).strip().rstrip("/")
                         if pr.get("model"):
                             p["model"] = str(pr["model"]).strip()
+                        p["enabled"] = bool(pr.get("enabled", p.get("enabled", True)))
                         break
                 else:
                     rows.append({
@@ -591,13 +664,19 @@ class JarvisAPI:
                         "base_url": str(pr.get("base_url") or "").strip().rstrip("/"),
                         "api_key": _coerce_key(pr.get("api_key")),
                         "model": str(pr.get("model") or "").strip(),
+                        "enabled": bool(pr.get("enabled", True)),
                     })
-                _write_api_keys_impl("", rows)
+                # None = leave the stored Gemini key alone ("" used to wipe it)
+                _write_api_keys_impl(None, rows)
                 free_providers.reset_cooldowns()
                 return {"ok": True}
             if d.get("gemini_key") is not None:
                 _write_api_keys_impl(_coerce_key(d.get("gemini_key")),
                                      _sanitize_provider_rows(_read_full_config().get("free_providers")))
+                # Saving a (new) key from Settings also satisfies a pending
+                # invalid-key re-config wait in main.py.
+                if _coerce_key(d.get("gemini_key")) and self.ui and self.ui._win:
+                    self.ui._win._ready = True
                 return {"ok": True}
             return {"ok": False, "err": "nothing to save"}
         except Exception as e:
@@ -611,8 +690,6 @@ class JarvisAPI:
         try:
             d = data or {}
             key = _coerce_key(d.get("gemini_key"))
-            if not key:
-                return {"ok": False, "msg": "A Gemini key is required."}
             rows = _sanitize_provider_rows(d.get("providers"))
             _write_api_keys_impl(key, rows)
             cfg = _read_full_config()
@@ -625,6 +702,10 @@ class JarvisAPI:
             free_providers.reset_cooldowns()
             if self.ui:
                 self.ui._assistant_name = cfg["assistant_name"]
+                # Unblock main.py's `while not _ready` re-config wait — this
+                # used to never fire, so an invalid key re-prompt did nothing.
+                if getattr(self.ui, "_win", None):
+                    self.ui._win._ready = True
             _PUMP.push("config", {"assistant_name": cfg["assistant_name"]})
             return {"ok": True}
         except Exception as e:
@@ -1100,6 +1181,12 @@ class JarvisUI:
 
     def write_log(self, text: str):
         _PUMP.push("log", {"line": text})
+        # Also mirror to stdout/stderr → logs/jarvis.log (via main.py's tee),
+        # so status lines like "API key required" are diagnosable after the fact.
+        try:
+            print(text)
+        except Exception:
+            pass
 
     def set_audio_level(self, level: float):
         try:
@@ -1170,6 +1257,11 @@ class JarvisUI:
         _PUMP.push("confirm_hide", {})
 
     def prompt_reconfig(self):
+        # Clear the ready flag first so main.py's `while not _ready` wait
+        # actually blocks until the user saves a new key (it used to pass
+        # instantly and reconnect with the same bad key).
+        if self._win:
+            self._win._ready = False
         _PUMP.push("setup", {})
 
     def notify_phone_connected(self):

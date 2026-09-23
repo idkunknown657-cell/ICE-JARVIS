@@ -1384,53 +1384,63 @@
     try { data = await api.api_keys_get(); }
     catch (e) { wrap.textContent = ""; wrap.appendChild(el("div", "dim", "Could not load API settings.")); return; }
     wrap.textContent = "";
+    const primary = data.primary || "gemini";
 
-    // Gemini
+    // ── Gemini ──
     const gCard = el("div", "provider-card");
     const gHead = el("div", "provider-head");
     gHead.appendChild(el("div", "provider-name", "Gemini"));
-    gHead.appendChild(el("span", "provider-tag", "PRIMARY"));
-    const gStatus = el("span", "provider-status", data.gemini.valid === true ? "✓ valid" : data.gemini.valid === false ? "✕ " + (data.gemini.msg || "invalid") : "");
-    if (data.gemini.valid === true) gStatus.classList.add("ok");
-    if (data.gemini.valid === false) gStatus.classList.add("bad");
+    const gTag = el("span", "provider-tag" + (primary === "gemini" ? "" : " off"),
+                    primary === "gemini" ? "PRIMARY" : "FALLBACK");
+    gHead.appendChild(gTag);
+    const gStatus = el("span", "provider-status",
+      data.gemini.key ? "" : "API key required. Open Settings → API Keys.");
     gHead.appendChild(gStatus);
     gCard.appendChild(gHead);
 
     const gRow = el("div", "key-row");
-    const gIn = el("input", "text-input"); gIn.type = "password"; gIn.value = data.gemini.key || ""; gIn.placeholder = "AIza…";
+    const gIn = el("input", "text-input"); gIn.type = "password"; gIn.value = data.gemini.key || ""; gIn.placeholder = "AIza… (optional — a free provider below also works)";
     gRow.appendChild(gIn);
     gRow.appendChild(btnSm("👁", () => { gIn.type = gIn.type === "password" ? "text" : "password"; }));
     gRow.appendChild(btnSm("Test", async () => {
       gStatus.textContent = "testing…"; gStatus.className = "provider-status busy";
       const r = await api.setup_test_key(gIn.value.trim()).catch(e => ({ ok: false, msg: String(e) }));
-      gStatus.textContent = r.ok ? "✓ valid" : "✕ " + (r.msg || "invalid");
+      gStatus.textContent = r.ok ? "Gemini API: Connected" : "✕ " + (r.msg || "invalid");
       gStatus.className = "provider-status " + (r.ok ? "ok" : "bad");
     }));
     gRow.appendChild(btnSm("Save", async () => {
-      await api.api_keys_save({ gemini_key: gIn.value.trim() });
-      toast("Gemini key saved", "ok");
+      const r = await api.api_keys_save({ gemini_key: gIn.value.trim() }).catch(e => ({ ok: false, err: String(e) }));
+      toast(r && r.ok ? (gIn.value.trim() ? "Gemini key saved" : "Gemini key cleared") : "Save failed", r && r.ok ? "ok" : "err");
     }));
+    if (primary !== "gemini") {
+      gRow.appendChild(btnSm("Make primary", async () => {
+        await api.api_keys_save({ primary: "gemini" }).catch(() => null);
+        loadApiKeys(wrap);
+      }));
+    }
     gCard.appendChild(gRow);
     wrap.appendChild(gCard);
 
-    // Providers
-    const head = el("div", "field-label", "Free fallback providers");
+    // ── Providers ──
+    const head = el("div", "field-label", "Fallback providers (used when Gemini is unavailable)");
     head.style.marginTop = "18px";
     wrap.appendChild(head);
 
     (data.providers || []).forEach(pr => {
+      const isPrimary = primary === pr.name;
+      const on = pr.enabled !== false && !!pr.api_key;
       const cardEl = el("div", "provider-card");
       const head2 = el("div", "provider-head");
       head2.appendChild(el("div", "provider-name", pr.name));
-      const tag = el("span", "provider-tag" + (pr.api_key ? "" : " off"), "FREE");
-      head2.appendChild(tag);
-      const st = el("span", "provider-status", "");
+      head2.appendChild(el("span", "provider-tag" + (isPrimary ? "" : " off"),
+                           isPrimary ? "PRIMARY" : "FALLBACK"));
+      const st = el("span", "provider-status", pr.enabled === false ? "disabled" : (pr.api_key ? "" : "no key"));
       head2.appendChild(st);
       cardEl.appendChild(head2);
 
       const row = el("div", "key-row");
       const inp = el("input", "text-input");
-      inp.type = "password"; inp.value = pr.api_key || ""; inp.placeholder = "api key (free)";
+      inp.type = "password"; inp.value = pr.api_key || ""; inp.placeholder = "api key";
       row.appendChild(inp);
       row.appendChild(btnSm("👁", () => { inp.type = inp.type === "password" ? "text" : "password"; }));
       row.appendChild(btnSm("Test", async () => {
@@ -1438,33 +1448,62 @@
         const rows = [{ name: pr.name, base_url: pr.base_url, api_key: inp.value.trim(), model: pr.model }];
         const res = await api.api_keys_test({ gemini_key: "", providers: rows }).catch(() => null);
         const entry = res && res.find(r => r[0] === pr.name);
-        st.textContent = entry ? (entry[1] ? "✓ valid" : "✕ " + entry[2]) : "✕ test failed";
+        st.textContent = entry ? (entry[1] ? pr.name + ": Connected" : "✕ " + entry[2]) : "✕ test failed";
         st.className = "provider-status " + (entry && entry[1] ? "ok" : "bad");
       }));
-      const enBtn = btnSm(pr.api_key ? "Disable" : "Enable", async () => {
-        if (pr.api_key) {
-          await api.api_keys_save({ disable: pr.name });
-          pr.api_key = ""; enBtn.textContent = "Enable"; tag.classList.add("off");
-          toast(pr.name + " disabled", "ok");
-        } else {
-          toast("Paste a key first", "err");
-        }
-      });
-      row.appendChild(enBtn);
       row.appendChild(btnSm("Save", async () => {
-        await api.api_keys_save({
+        const r = await api.api_keys_save({
           provider: { name: pr.name, base_url: pr.base_url, api_key: inp.value.trim(), model: pr.model },
-        });
-        pr.api_key = inp.value.trim();
-        tag.classList.remove("off");
-        toast(pr.name + " saved", "ok");
+        }).catch(e => ({ ok: false, err: String(e) }));
+        toast(r && r.ok ? pr.name + " saved" : "Save failed", r && r.ok ? "ok" : "err");
+        if (r && r.ok) loadApiKeys(wrap);
+      }));
+      row.appendChild(btnSm(pr.enabled === false ? "Enable" : "Disable", async () => {
+        const r = await api.api_keys_save(
+          pr.enabled === false ? { enable: pr.name } : { disable: pr.name }
+        ).catch(() => null);
+        if (r && r.ok) loadApiKeys(wrap);
+      }));
+      if (!isPrimary) {
+        row.appendChild(btnSm("Make primary", async () => {
+          await api.api_keys_save({ primary: pr.name }).catch(() => null);
+          loadApiKeys(wrap);
+        }));
+      }
+      row.appendChild(btnSm("✕", async () => {
+        if (!confirm("Delete " + pr.name + " and its key from disk?")) return;
+        const r = await api.api_keys_save({ delete: pr.name }).catch(() => null);
+        if (r && r.ok) { toast(pr.name + " deleted", "ok"); loadApiKeys(wrap); }
       }));
       cardEl.appendChild(row);
       wrap.appendChild(cardEl);
     });
 
+    // ── Add a new provider (no reinstall, no source edit) ──
+    const addHead = el("div", "field-label", "Add a provider");
+    addHead.style.marginTop = "18px";
+    wrap.appendChild(addHead);
+    const addCard = el("div", "provider-card");
+    const addRow = el("div", "key-row"); addRow.style.flexWrap = "wrap";
+    const nIn = el("input", "text-input"); nIn.placeholder = "name (e.g. openai)"; nIn.style.flex = "1 1 120px";
+    const uIn = el("input", "text-input"); uIn.placeholder = "base URL (https://…/v1)"; uIn.style.flex = "2 1 220px";
+    const mIn = el("input", "text-input"); mIn.placeholder = "model"; mIn.style.flex = "1 1 140px";
+    const kIn = el("input", "text-input"); kIn.type = "password"; kIn.placeholder = "api key"; kIn.style.flex = "1 1 140px";
+    [nIn, uIn, mIn, kIn].forEach(x => addRow.appendChild(x));
+    addRow.appendChild(btnSm("Add", async () => {
+      const name = nIn.value.trim();
+      if (!name || !uIn.value.trim()) { toast("Name and base URL required", "err"); return; }
+      const r = await api.api_keys_save({
+        provider: { name, base_url: uIn.value.trim(), model: mIn.value.trim(), api_key: kIn.value.trim() },
+      }).catch(e => ({ ok: false, err: String(e) }));
+      if (r && r.ok) { toast(name + " added", "ok"); loadApiKeys(wrap); }
+      else toast((r && r.err) || "Add failed", "err");
+    }));
+    addCard.appendChild(addRow);
+    wrap.appendChild(addCard);
+
     const n = el("div", "note");
-    n.textContent = "Get free keys: console.groq.com · cloud.cerebras.ai · openrouter.ai · huggingface.co/settings/tokens (create a fine-grained token with \"Make calls to Inference Providers\" permission). Disabled providers keep nothing on disk — disabling removes the key.";
+    n.textContent = "Free keys: console.groq.com · cloud.cerebras.ai · openrouter.ai · huggingface.co/settings/tokens (fine-grained token with \"Make calls to Inference Providers\"). Disable keeps the key but stops use; ✕ deletes it. Changes apply after Save — no restart needed.";
     n.style.marginTop = "12px";
     wrap.appendChild(n);
   }
@@ -1540,11 +1579,12 @@
   $("setupGo").addEventListener("click", async () => {
     const msg = $("setupMsg");
     const key = $("setupGemini").value.trim();
-    if (!key) { msg.className = "setup-msg bad"; msg.textContent = "A Gemini key is required."; return; }
     const providers = PROVIDERS_SETUP.map(([name, label, base, model], i) => ({
       name, base_url: base, model,
       api_key: document.querySelector("[data-pv='" + name + "']").value.trim(),
     })).filter(p => p.api_key);
+    // No key at all is allowed: JARVIS starts and shows
+    // "API key required. Open Settings → API Keys." until one is added.
     msg.className = "setup-msg"; msg.textContent = "Initialising…";
     const r = await api.setup_save({
       gemini_key: key,
@@ -1553,7 +1593,12 @@
       user_name: $("setupUser").value.trim(),
     }).catch(e => ({ ok: false, msg: String(e) }));
     if (r && r.ok) {
-      msg.className = "setup-msg good"; msg.textContent = "Ready. Starting JARVIS…";
+      if (!key && !providers.length) {
+        msg.className = "setup-msg good";
+        msg.textContent = "Ready. You can add API keys later in Settings → API Keys.";
+      } else {
+        msg.className = "setup-msg good"; msg.textContent = "Ready. Starting JARVIS…";
+      }
       setTimeout(() => { $("setupVeil").hidden = true; }, 700);
     } else {
       msg.className = "setup-msg bad"; msg.textContent = (r && r.msg) || "Could not save.";
