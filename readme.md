@@ -52,7 +52,7 @@ Prefer a terminal? `python setup.py` does the same install step only.
 
 | Launcher | Console? | Use it when |
 |---|---|---|
-| **`start.bat`** (or the `ICE` desktop shortcut) | hidden | normal daily use — errors go to `logs\jarvis.log` |
+| **`main.pyw`** (or the `ICE` desktop shortcut) | hidden | normal daily use — double-click it; errors go to `logs\jarvis.log` |
 | **`start_debug.bat`** | visible | something isn't working — shows every print/traceback live *and* in `logs\jarvis.log` |
 
 ### 4. Add your API key(s)
@@ -159,7 +159,7 @@ ICE-JARVIS/
 ├── webui.py           # Python ⇄ UI bridge: API surface, event pump, updater wiring
 ├── setup.py           # one-command dependency installer (OS-aware)
 ├── setup.bat          # Windows first-time setup: Python check → deps → config → start
-├── start.bat          # Windows normal start (no console; logs → logs\jarvis.log)
+├── main.pyw           # Windows normal start (double-click, no console; logs → logs\jarvis.log)
 ├── start_debug.bat    # Windows debug start (visible console + logs)
 ├── ui_web/            # the interface itself (HTML/CSS/JS, three.js avatar)
 ├── core/              # brain: gemini, emotion, persona, language, free_providers,

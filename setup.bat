@@ -100,5 +100,9 @@ echo.
 
 rem ── 5. Start JARVIS ───────────────────────────────────────────────
 echo Starting JARVIS...
-start "ICE" "%~dp0start.bat"
+if exist "%~dp0venv\Scripts\pythonw.exe" (
+    start "ICE" "%~dp0venv\Scripts\pythonw.exe" "%~dp0main.pyw"
+) else (
+    start "ICE" "%~dp0main.pyw"
+)
 exit /b 0
