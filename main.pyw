@@ -2497,6 +2497,42 @@ class JarvisLive:
                         print(f"[Monitor] ⚠️ Background check error: {e}")
             await asyncio.sleep(1800)     # check every 30 minutes
 
+    # ── Trading alerts (§9/§10) ──────────────────────────────────────────────────
+
+    async def _run_trade_alerts(self) -> None:
+        """Drain fired price/indicator/news trade alerts onto the session —
+        same send path as the news monitor, but a 12-second cadence: a price
+        alert that waits 30 minutes is worthless. Nothing is dropped while
+        JARVIS is busy, speaking or asleep — the queue simply holds."""
+        from core.trading import alerts as trade_alerts
+        while True:
+            await asyncio.sleep(12)
+            try:
+                if not (self.session and self._awake):
+                    continue                      # keep alerts queued
+                with self._speaking_lock:
+                    if self._is_speaking:
+                        continue                  # don't talk over the user
+                msgs = trade_alerts.drain()
+                if not msgs:
+                    continue
+                memory = load_memory()
+                lang_e = memory.get("identity", {}).get("language", {})
+                lang = (lang_e.get("value", "") if isinstance(lang_e, dict)
+                        else str(lang_e)).strip() or "English"
+                for alert in msgs[:4]:
+                    await self.session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": (
+                            f"{alert}\n\n"
+                            f"Relay this market alert to the user briefly in {lang}. "
+                            "One or two factual sentences — no prediction, no advice."
+                        )}]},
+                        turn_complete=True,
+                    )
+                    await asyncio.sleep(4)        # gap between consecutive alerts
+            except Exception as e:
+                print(f"[TradeAlerts] ⚠️ delivery error: {e}")
+
     # ── Ambient participation ───────────────────────────────────────────────────
 
     def _ambient_rules(self) -> str:
@@ -2968,6 +3004,7 @@ class JarvisLive:
                     tg.create_task(self._play_audio())
                     tg.create_task(self._run_system_monitor())
                     tg.create_task(self._run_background_monitor())
+                    tg.create_task(self._run_trade_alerts())
                     tg.create_task(self._run_proactive_mode())
                     tg.create_task(self._run_glance_loop())
                     tg.create_task(self._run_learning_loop())
