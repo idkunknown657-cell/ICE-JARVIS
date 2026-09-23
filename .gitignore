@@ -31,6 +31,13 @@ config/improvements.json
 config/ui_strategies.json
 config/usage_counts.json
 
+# Trading journal, paper account, alerts, and risk settings — personal
+# financial data (positions, P/L, account size, limits). Never repo content.
+config/trading_journal.json
+config/paper_account.json
+config/trading_alerts.json
+config/trading_settings.json
+
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

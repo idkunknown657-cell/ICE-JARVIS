@@ -2,6 +2,64 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — Trading / market analysis module
+
+### Market data with provenance (§1/§7/§8)
+- New `market_data` tool: quote (price, change, OHLC, volume, timeframe,
+  timestamp, provider), candles across 1m–1M timeframes (4H aggregated from
+  1H bars), news headlines with source + publish time, and earnings/calendar
+  answers that honestly say the provider does not support them — delayed data
+  always carries "Market data may be delayed." and is never called real-time;
+  failures surface the provider's own words instead of invented numbers
+- Pluggable provider registry (`core/trading/data.py`, default Yahoo — no API
+  key), TTL cache + rate-limit-friendly background evaluation (§21)
+
+### Analysis as scenarios, never certainties (§2–§4, §6, §16)
+- New `market_analysis` tool: quick per-timeframe readouts (SMA/EMA/VWAP/RSI/
+  MACD/Bollinger/ATR/ADX/stochastic/volume/support-resistance/previous
+  highs-lows/breakouts/trend structure/volatility/MA crosses) and a full
+  multi-timeframe report (higher TF trend → middle TF structure → lower TF
+  entry) with CURRENT MARKET STATE / BULLISH SCENARIO / BEARISH SCENARIO /
+  INVALIDATION / RISK / TRADE PLAN sections — entry zone, invalidation,
+  targets, risk/reward, confirmation checklist, worked position sizing, and a
+  FACT-vs-INTERPRETATION news block; `core/trading/language.py` enforces the
+  no-false-certainty phrase guard and fixed disclaimers
+
+### Risk, order workflow, paper trading, journal, backtest (§5, §12–§15, §18, §19)
+- `risk_calculator`: position size = maximum dollar risk / distance to stop,
+  shown long-hand every time; `check_trade` guardrails (stop required, budget,
+  leverage cap, daily loss/trade caps, existing/correlated exposure) STOP
+  live preparation with arithmetic — limits are only ever written by the
+  user-facing settings tool (§17), never raised silently; impulsive requests
+  ("all in", "double my position", "make it back") get calm numbers and forced
+  confirmation, no shaming
+- `trade_order`: ANALYZE → PREPARE → SHOW → CONFIRM → SUBMIT → VERIFY →
+  JOURNAL. A live execution is structurally unreachable except through the
+  on-screen CONFIRM button (`core/confirm.py` — the model cannot forge it),
+  and unconfigured platform automation refuses honestly instead of
+  blind-clicking a real-money order ticket; fills are verified on screen or
+  reported as unverified
+- `paper_trading` (default mode on a fresh install; virtual balance/positions/
+  P/L), `trading_journal` (paper/live never blended; win rate, drawdown, avg
+  risk/reward with the past≠future disclaimer), `backtest_strategy`
+  (next-bar-open fills, fees + slippage, profit factor, per-trade Sharpe,
+  winning/losing streaks, zero-trade results reported as results)
+
+### Alerts, position watching, chart reading (§9–§11)
+- `trade_alerts` background worker (20 s cadence, fires once by default) —
+  price/percent/breakout/RSI/MA-cross/volume/support-resistance/stop/target/
+  news types; `economic_event` honestly refused until a provider ships a
+  calendar. Fired alerts are delivered by a new main-loop drain alongside the
+  existing news monitor
+- `trade_monitor` watches open trades (entry/current/stop/targets, unrealized
+  P/L $ and %, time in trade, distances) and auto-registers its stop/target
+  price alerts; `chart_analysis` reads chart images strictly from what is
+  printed (unreadable → "Please zoom in or provide the timeframe.", never
+  estimates)
+- New `trading_settings` tool (mode/risk/platform/prefs) is the sole writer
+  of trading config; `config/trading_*.json` + `paper_account.json` are
+  gitignored (personal financial data)
+
 ## Unreleased — PC Control engine hardening
 
 ### Automation stop (voice/UI interrupt now halts work, not just speech)
