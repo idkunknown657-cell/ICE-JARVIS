@@ -57,7 +57,7 @@
     settingsLoaded: null,
     settingsPage: "general",
     avatar: { mode: "classic", size: 1, x: 0, y: 0, anim: 1, expr: 1,
-              light: "#38bdf8", perf: "balanced", visible: true },
+              light: "#38bdf8", perf: "balanced", visible: true, orbit: true },
     avatar3dLoading: false,
   };
 
@@ -89,9 +89,24 @@
     document.head.appendChild(s);
   }
 
+  const AVATAR_LABEL = { classic: "CLASSIC", minimal: "MINIMAL", orbit: "ORBIT",
+                         helix: "HELIX", anime3d: "3D ANIME" };
+
+  // Bottom-corner HUD readouts: which avatar is live and whether JARVIS can
+  // currently see the screen. Cheap, and the answer to "did that click do
+  // anything?" without hunting through Settings.
+  function paintHud() {
+    const m = $("hudMode");
+    if (m) m.innerHTML = "MODE · <b>" + esc(AVATAR_LABEL[S.avatar.mode] || "CLASSIC") + "</b>";
+    const g = $("hudSight");
+    if (g) g.innerHTML = "SIGHT · <b>" + (S.screen.active ? "WATCHING" : "OFF") + "</b>";
+    document.body.dataset.sight = S.screen.active ? "1" : "0";
+  }
+
   function applyAvatarMode(cfg) {
     if (cfg) Object.assign(S.avatar, cfg);
     const mode = S.avatar.mode;
+    paintHud();
     const face = $("face");
     const mount = $("avatar3dMount");
     const av2d = window.JarvisAvatar;
@@ -111,9 +126,15 @@
       window.Jarvis3DAvatar && window.Jarvis3DAvatar.destroy();
       mount.hidden = true; mount.textContent = "";
       face.style.display = "";
+      face.style.opacity = "";
+      face.style.transition = "";
       if (av2d) {
         av2d.setPaused(false);
-        av2d.style = mode === "minimal" ? "minimal" : (S.hudStyle === "core" && mode !== "minimal" ? "core" : "face");
+        av2d.style = mode === "minimal" ? "minimal"
+          : mode === "orbit" ? "orbit"
+          : mode === "helix" ? "helix"
+          : (S.hudStyle === "core" ? "core" : "face");
+        av2d.setVisible(S.avatar.visible !== false);
       }
     }
   }
@@ -154,12 +175,17 @@
     const pill = $("statePill");
     pill.dataset.state = state;
     pill.textContent = state;
+    document.body.dataset.state = state;   // state-reactive ambience hooks
     const av = window.JarvisAvatar;
     if (av) {
       av.state = state === "MUTED" ? "MUTED" : state;
       av.muted = S.muted;
     }
     $("faceCaption").textContent = STATE_CAPTIONS[state] || state;
+
+    // HUD readout: the face caption's little sibling, top-left of the stage
+    const hud = $("hudState");
+    if (hud) hud.innerHTML = "SYS · <b>" + esc(String(state)) + "</b>";
 
     // stop button visible while speaking
     $("btnStop").hidden = state !== "SPEAKING" && state !== "EXECUTING";
@@ -271,7 +297,7 @@
       else if (/🤔|🧐|❓|hmm/i.test(text)) expr = "confused";
       if (expr) {
         const av = window.JarvisAvatar;
-        if (av && S.avatar.mode !== "anime3d") { av.expression = expr; av.exprUntil = tNow() + 3; }
+        if (av && S.avatar.mode !== "anime3d") av.setExpression(expr, 3);
         const a3 = window.Jarvis3DAvatar && window.Jarvis3DAvatar.instance();
         if (a3) a3.setExpression(expr, 3);
       }
@@ -313,6 +339,42 @@
   }
 
   function tNow() { return performance.now() / 1000; }
+
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  // Smooth mode crossfade: the stage dips out, the style swaps mid-fade, and
+  // the new look fades back in. Never blocks — old-mode rendering continues
+  // while the fade runs, so there is no blank-frame flash.
+  // Hardened: a thrown swap or a throttled rAF can no longer strand the stage
+  // at opacity 0, and clicks that land mid-fade are queued instead of dropped.
+  let _fadeBusy = false, _fadePending = null;
+  function crossfadeAvatar(applyFn) {
+    const stage = $("faceStage");
+    if (_fadeBusy) { _fadePending = applyFn; return; }   // run the newest swap once this one ends
+    // No stage, a background window (rAF is paused there) or reduced motion:
+    // swap immediately rather than risk a fade that never completes.
+    if (!stage || document.hidden || prefersReducedMotion()) { applyFn(); return; }
+    _fadeBusy = true;
+    stage.classList.add("av-fade");
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      stage.classList.remove("av-fade");
+      _fadeBusy = false;
+      const next = _fadePending;
+      _fadePending = null;
+      if (next) crossfadeAvatar(next);
+    };
+    setTimeout(() => {
+      try { applyFn(); }
+      catch (err) { console.warn("avatar mode swap failed", err); }
+      requestAnimationFrame(() => requestAnimationFrame(finish));
+      setTimeout(finish, 420);      // rAF is frozen in a hidden window — never stay faded out
+    }, 170);
+  }
 
   function onLog(payload) {
     const line = payload.line || "";
@@ -580,6 +642,7 @@
   const PAGES = [
     ["general", "⚙", "General"], ["ai", "🧠", "AI & Models"], ["api", "🔑", "API Keys"],
     ["voice", "🎙", "Voice & Language"], ["persona", "🎭", "Personality"], ["memory", "🗂", "Memory"],
+    ["training", "🎓", "Self-training"],
     ["screen", "👁", "Screen Awareness"], ["pc", "🖱", "PC Control"], ["integrations", "🧩", "Integrations"],
     ["steam", "🎮", "Steam"], ["appearance", "🎨", "Appearance"], ["startup", "🚀", "Startup & Background"],
     ["privacy", "🔒", "Privacy"], ["performance", "📈", "Performance"], ["advanced", "🛠", "Advanced"],
@@ -819,6 +882,335 @@
   }
   setTimeout(() => { silentUpdateCheck(); setInterval(silentUpdateCheck, 5 * 60 * 1000); }, 60000);
 
+  // ════════════════════════════════════════════════════════════════════════
+  //  AUTONOMY RAIL — the six switches that decide what JARVIS may do
+  //
+  //  The rail is the answer to "what is it allowed to touch right now?" — it
+  //  is always on screen, it reflects the real backend state (pushed, not
+  //  guessed), and turning a lever off is a brake rather than a setting: the
+  //  backend cancels whatever step is running the moment it lands.
+  // ════════════════════════════════════════════════════════════════════════
+  const MODES = [
+    ["pc_control",       "🖱", "PC Control",  "mouse + keyboard"],
+    ["autonomous",       "✋", "Autonomous",  "acts unasked"],
+    ["screen_awareness", "👁", "Sight",       "can see the screen"],
+    ["proactive",        "💬", "Proactive",   "may speak first"],
+    ["discord",          "🎧", "Discord",     "may use Discord"],
+    ["voice",            "🎙", "Voice",       "mic is live"],
+  ];
+
+  S.pc = { modes: {}, feed: [], state: {} };
+
+  function buildRail() {
+    const wrap = $("autoSwitches");
+    wrap.textContent = "";
+    MODES.forEach(([key, ico, label]) => {
+      const b = el("button", "auto-sw" + (key === "autonomous" ? " sw-hot" : ""));
+      b.dataset.mode = key;
+      b.dataset.on = "0";
+      b.title = label;
+      b.appendChild(el("span", "sw-dot"));
+      b.appendChild(el("span", "sw-ico", ico));
+      b.appendChild(el("span", "sw-name", label));
+      b.appendChild(el("span", "sw-state", "—"));
+      b.addEventListener("click", () => toggleMode(key));
+      wrap.appendChild(b);
+    });
+  }
+
+  function toggleMode(key) {
+    const on = !!(S.pc.modes || {})[key];
+    // Optimistic paint: the switch must feel instant even though the real
+    // state round-trips through the backend.
+    S.pc.modes[key] = !on;
+    paintRail();
+    save(key, !on, true).catch(() => {});
+    if (key === "autonomous") {
+      toast(!on ? "Autonomous mode ON — JARVIS may use this PC"
+                : "Autonomous mode OFF — hands off", !on ? "ok" : undefined);
+    }
+  }
+
+  function paintRail() {
+    const modes = S.pc.modes || {};
+    document.querySelectorAll(".auto-sw").forEach(b => {
+      const key = b.dataset.mode;
+      const on = !!modes[key];
+      b.dataset.on = on ? "1" : "0";
+      const st = b.querySelector(".sw-state");
+      if (st) st.textContent = on ? "ON" : "OFF";
+    });
+    const auto = !!modes.autonomous;
+    document.body.dataset.autopilot = auto ? "1" : "0";   // hooks the HUD readout CSS
+    const hudAuto = $("hudAuto");
+    if (hudAuto) hudAuto.innerHTML = "AUTO · <b>" + (auto ? "ENGAGED" : "OFF") + "</b>";
+    const chip = $("chipAuto");
+    chip.dataset.on = auto ? "1" : "0";
+    chip.title = auto
+      ? "Autonomous mode is ON — click to take control back"
+      : "Autonomous mode — let JARVIS use this PC on its own";
+    chip.lastChild.textContent = auto ? "AUTOPILOT ON" : "AUTOPILOT OFF";
+    $("autoRail").classList.toggle("mode-auto", auto);
+    const ho = $("btnHandover");
+    ho.dataset.on = auto ? "1" : "0";
+    $("hoLabel").textContent = auto ? "STOP" : "TAKE OVER";
+    $("autoRailSub").textContent = !modes.pc_control
+      ? "Hands off — JARVIS cannot use the mouse"
+      : (auto ? "Using your PC — press STOP for hands off"
+              : "Watching, not touching");
+  }
+
+  function askHandover() {
+    const auto = !!(S.pc.modes || {}).autonomous;
+    if (!S.pc.modes.pc_control) {
+      toast("Turn PC Control on first", "err");
+      return;
+    }
+    if (auto) return quick("Stop taking over my PC.");
+    quick("Take over my PC. Use it for a while and do something useful.");
+  }
+
+  function quick(phrase) {
+    return api.quick_action(phrase)
+      .then(() => toast("Sent: " + phrase, "ok"))
+      .catch(() => toast("Backend not reachable", "err"));
+  }
+
+  // ── control feed ──────────────────────────────────────────────────────
+  const FEED_ICON = { ok: "✓", fail: "✗", mode: "◉", info: "·", act: "▸",
+                      discord: "🎧" };
+
+  function feedRow(entry) {
+    const row = el("div", "pc-row k-" + (entry.kind || "info"));
+    const t = entry.at ? new Date(entry.at * 1000) : new Date();
+    row.appendChild(el("span", "pc-time",
+      String(t.getHours()).padStart(2, "0") + ":" +
+      String(t.getMinutes()).padStart(2, "0") + ":" +
+      String(t.getSeconds()).padStart(2, "0")));
+    row.appendChild(el("span", "pc-ico", FEED_ICON[entry.kind] || "·"));
+    row.appendChild(el("span", "pc-text", entry.text || ""));
+    return row;
+  }
+
+  function addFeed(entry) {
+    const body = $("pcFeed");
+    const empty = $("pcEmpty");
+    if (empty) empty.remove();
+    body.appendChild(feedRow(entry));
+    while (body.children.length > 60) body.firstChild.remove();
+    body.scrollTop = body.scrollHeight;
+    // A working assistant should look like it is working.
+    if (entry.kind && entry.kind !== "info") {
+      const live = $("pcLive");
+      live.classList.add("on");
+      clearTimeout(addFeed._t);
+      addFeed._t = setTimeout(() => live.classList.remove("on"), 2600);
+    }
+  }
+
+  function setFeed(rows) {
+    const body = $("pcFeed");
+    body.textContent = "";
+    if (!rows || !rows.length) {
+      body.appendChild(el("div", "pc-empty", "Nothing yet."));
+      return;
+    }
+    rows.forEach(r => body.appendChild(feedRow(r)));
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function paintPcFoot(state) {
+    if (!state) return;
+    const bits = [];
+    if (state.foreground) bits.push("<b>" + esc(state.foreground) + "</b>");
+    if (state.monitors) bits.push(state.monitors + (state.monitors > 1 ? " monitors" : " monitor"));
+    if (state.desktop) bits.push(esc(state.desktop));
+    bits.push(state.uia ? "accessibility tree" : "vision only");
+    const foot = $("pcFoot");
+    foot.innerHTML = bits.join(" · ");
+    foot.hidden = false;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  async function loadPc() {
+    try {
+      const st = await api.pc_status();
+      if (!st) return;
+      S.pc.modes = st.modes || S.pc.modes;
+      S.pc.state = st.state || {};
+      paintRail();
+      setFeed(st.feed || []);
+      paintPcFoot(S.pc.state);
+    } catch (e) { /* headless or old backend */ }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  SELF-TRAINING — what it practises while nobody is talking
+  //
+  //  Three questions, in this order: is it working right now, what is it
+  //  working on, and is that work paying off. Every number is real — the bars
+  //  are win rates out of the competency ledger in core/self_training.py, fed
+  //  by the control log itself, and the rules are written by JARVIS (the card
+  //  says "self-written" out loud because that is what they are).
+  // ════════════════════════════════════════════════════════════════════════
+  S.train = {
+    enabled: true, active: true, intensity: "balanced", memory_enabled: true,
+    running: false, cycles: 0, learned: 0, drill_count: 0, focus_label: "",
+    rounds_left: 0, rounds_per_hour: 2, last_ts: 0,
+    competency: [], drills: [], self_scored: true,
+  };
+  let trainManual = false;
+
+  function agoText(ts) {
+    if (!ts) return "never";
+    const s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + "m ago";
+    if (s < 172800) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
+  }
+
+  function paintTrain() {
+    const card = $("trainCard");
+    if (!card) return;
+    const t = S.train;
+    card.dataset.busy = t.running ? "1" : "0";
+    document.body.dataset.training = t.running ? "1" : "0";
+
+    const live = $("trainLive");
+    if (live) {
+      if (t.running) { live.dataset.on = "2"; live.lastChild.textContent = "PRACTISING"; }
+      else if (!t.active) { live.dataset.on = "3"; live.lastChild.textContent = "OFF"; }
+      else if (t.cycles) { live.dataset.on = "1"; live.lastChild.textContent = "IDLE"; }
+      else { live.dataset.on = "0"; live.lastChild.textContent = "READY"; }
+    }
+
+    const focus = $("trainFocus");
+    if (focus) {
+      if (t.running) {
+        focus.innerHTML = "Practising now — one round on its weakest step, then it tells me what it learned.";
+      } else if (!t.active) {
+        focus.innerHTML = t.memory_enabled === false
+          ? "Off — memory is switched off, so nothing may be learned on its own."
+          : "Off. It only learns while you are talking to it.";
+      } else if (t.focus_label) {
+        focus.innerHTML = "Last round drilled <b>" + esc(t.focus_label) +
+          "</b> — the step with the worst real record.";
+      } else {
+        focus.innerHTML = "Watching how its own clicks, keys and reads actually land, then drilling the weakest one while you are quiet.";
+      }
+    }
+
+    // Competency bars: weakest first, with the trend so a bar that is stuck low
+    // can be told apart from one that is climbing.
+    const bars = $("trainBars");
+    if (bars) {
+      bars.textContent = "";
+      const rows = (t.competency || []).slice(0, 4);
+      if (!rows.length) {
+        bars.appendChild(el("div", "train-focus dim",
+          "No evidence yet — it starts keeping score from the first click it makes for you."));
+      }
+      rows.forEach(r => {
+        const row = el("div", "train-bar" +
+          (r.score < 0.6 ? " poor" : r.score < 0.8 ? " weak" : ""));
+        const name = el("span", "train-bar-name", r.label || r.capability);
+        const track = el("div", "train-bar-track");
+        const fill = el("i", "train-bar-fill");
+        fill.style.width = Math.round((r.score || 0) * 100) + "%";
+        track.appendChild(fill);
+        const val = el("span", "train-bar-val");
+        let trend = "";
+        if (r.trend > 0.02) trend = " <span class=\"up\">▲" + Math.round(r.trend * 100) + "</span>";
+        else if (r.trend < -0.02) trend = " <span class=\"down\">▼" + Math.round(Math.abs(r.trend) * 100) + "</span>";
+        val.innerHTML = Math.round((r.score || 0) * 100) + "% · " +
+          (r.wins || 0) + "/" + (r.attempts || 0) + trend;
+        row.appendChild(name); row.appendChild(track); row.appendChild(val);
+        bars.appendChild(row);
+      });
+    }
+
+    // Newest rule it wrote for itself.
+    const box = $("trainNew");
+    if (box) {
+      const d = (t.drills || [])[0];
+      if (d && d.rule) {
+        box.textContent = d.rule + (d.situation ? "  (when: " + d.situation + ")" : "");
+        box.hidden = false;
+      } else {
+        box.hidden = true;
+      }
+    }
+
+    const foot = $("trainFoot");
+    if (foot) {
+      foot.innerHTML = "<b>" + (t.cycles || 0) + "</b> round" +
+        ((t.cycles || 0) === 1 ? "" : "s") + " · <b>" + (t.learned || 0) +
+        "</b> rules written · <b>" + (t.drill_count || 0) + "</b> in playbook · <b>" + (t.rounds_left || 0) + "/" +
+        (t.rounds_per_hour || 2) + "</b> left this hour · last " + agoText(t.last_ts);
+    }
+  }
+
+  async function loadTrain() {
+    try {
+      const st = await api.training_get();
+      if (st && typeof st === "object") S.train = Object.assign(S.train, st);
+    } catch (e) { /* older backend, or the bridge is not up yet */ }
+    paintTrain();
+  }
+
+  function trainRun() {
+    trainManual = true;
+    S.train.running = true;
+    paintTrain();
+    api.training_run(true).then(r => {
+      if (r && r.ok === false) {
+        S.train.running = false; trainManual = false; paintTrain();
+        toast(r.err || "A round is already running", "err");
+      }
+    }).catch(() => { S.train.running = false; paintTrain(); });
+  }
+
+  Bus.on("training", ev => {
+    if (!ev || typeof ev !== "object") return;
+    if (ev.phase === "running") {
+      S.train.running = true;
+      paintTrain();
+      return;
+    }
+    if (ev.state && typeof ev.state === "object") {
+      S.train = Object.assign(S.train, ev.state, { running: false });
+    } else {
+      S.train.running = false;
+    }
+    // The pushed snapshot is the truth for these two levers; keep the settings
+    // page's copy of them in step so the switch and the card cannot disagree.
+    const st = ev.state;
+    if (st && S.settingsLoaded && typeof S.settingsLoaded === "object") {
+      if (typeof st.enabled === "boolean") S.settingsLoaded.self_training = st.enabled;
+      if (st.intensity) S.settingsLoaded.training_intensity = st.intensity;
+    }
+    paintTrain();
+    if (S.settingsLoaded && S.settingsPage === "training") renderSettingsPage("training");
+
+    const r = ev.report || {};
+    if (ev.phase === "done") {
+      if (r.learned) {
+        toast("Learned " + r.learned + " new rule" + (r.learned > 1 ? "s" : "") +
+              " while you were quiet — ⚙ Self-training", "ok");
+      } else if (trainManual) {
+        toast(r.ok === false
+          ? "Training: " + (r.reason === "memory-off" ? "memory is off" : (r.err || r.reason || "nothing to do"))
+          : "Training round done — nothing new to learn", "");
+      }
+      trainManual = false;
+    }
+  });
+
   function toggleEl(get, set) {
     const t = el("button", "toggle" + (get() ? " on" : ""));
     t.setAttribute("aria-pressed", get());
@@ -847,6 +1239,22 @@
   function save(key, value, quiet) {
     return api.save_setting(key, value).then(r => {
       if (!quiet) toast("Saved", "ok");
+      // Keep the local settings snapshot in step with what was just written.
+      // It used to be refetched only when Settings was first opened, so a page
+      // re-rendered a moment later (a pushed event, or leaving and coming back)
+      // redrew the OLD value — a switch you had just turned off came back on,
+      // and clicking that stale switch saved the opposite of what you meant.
+      if (S.settingsLoaded && typeof S.settingsLoaded === "object") {
+        S.settingsLoaded[key] = value;
+        if (key.indexOf("avatar_") === 0) loadSettings();   // nested on purpose
+        else if ($("view-settings").classList.contains("active")) {
+          // Redraw the open page from the value we just wrote, so the control
+          // on screen and the stored setting can never drift apart. A page that
+          // was re-rendered from a stale snapshot used to show the opposite of
+          // the truth, and the next click then saved the opposite too.
+          renderSettingsPage(S.settingsPage);
+        }
+      }
       if (r && r.refresh) loadSettings();
       return r;
     }).catch(() => toast("Could not save", "err"));
@@ -1003,6 +1411,101 @@
       return p;
     },
 
+    training(d) {
+      const p = page("Self-training",
+        "JARVIS practises on its own while you are quiet, and writes itself rules from its own mistakes.");
+
+      p.appendChild(card("Self-training",
+        "Watches how its own clicks, keys and reads land, then spends one model call \u2014 while you "
+        + "are not talking \u2014 on the step with the worst real record. Off means nothing is learned "
+        + "while idle; it stops by itself when memory is switched off.",
+        toggleEl(() => d.self_training !== false, v => save("self_training", v))));
+
+      p.appendChild(card("How hard it practises",
+        "Gentle: one round an hour \u00b7 Balanced: two \u00b7 Focused: five. Rounds only ever run "
+        + "after you have been quiet, and never during a task.",
+        pillsEl([["gentle", "GENTLE"], ["balanced", "BALANCED"], ["focused", "FOCUSED"]],
+          () => d.training_intensity || "balanced", v => save("training_intensity", v))));
+
+      // live numbers, refreshed from the same snapshot the Home card uses
+      const stats = el("div", "train-stats");
+      p.appendChild(cardCol("What it has done so far",
+        "Rounds are its own practice sessions; rules are the playbook entries they produced.", stats));
+      const rules = el("div");
+      rules.style.marginTop = "8px";
+      p.appendChild(cardCol("Its playbook",
+        "Rules JARVIS wrote for itself. Nothing here was written by you, and any of them can go.", rules));
+
+      const actions = el("div", "set-col");
+      const row = el("div", "set-row2");
+      row.appendChild(btnSm("Practise now", trainRun));
+      row.appendChild(btnSm("Forget everything it taught itself", () => {
+        api.training_reset().then(() => { loadTrain(); toast("Playbook cleared", "ok"); })
+          .catch(() => toast("Could not clear", "err"));
+      }));
+      actions.appendChild(row);
+      p.appendChild(cardCol("Take it back",
+        "Reversible, and logged: every rule is stored as ordinary memory, so forgetting one is the "
+        + "same as forgetting anything else.", actions));
+
+      const note = el("div", "note");
+      note.textContent = "What it can and cannot do: it can only change what JARVIS believes \u2014 its "
+        + "own playbook. It cannot touch settings, keys, permissions or files, it never drives the "
+        + "mouse or keyboard by itself, and the rules are written and graded by the model, which is "
+        + "why they are labelled self-written. Reversible at any time on this page.";
+      p.appendChild(note);
+
+      const paint = st => {
+        if (!st) return;
+        S.train = Object.assign(S.train, st);
+        paintTrain();
+        stats.textContent = "";
+        const tiles = [
+          [st.cycles || 0, "rounds"],
+          [st.learned || 0, "rules written"],
+          [st.drill_count || 0, "in playbook"],
+          [(st.rounds_left || 0) + "/" + (st.rounds_per_hour || 2), "left this hour"],
+        ];
+        tiles.forEach(([val, name]) => {
+          const tile = el("div", "train-stat");
+          tile.appendChild(el("div", "train-stat-val", String(val)));
+          tile.appendChild(el("div", "train-stat-name", name));
+          stats.appendChild(tile);
+        });
+        if (st.focus_label) {
+          const f = el("div", "dim");
+          f.style.cssText = "font-size:11.5px;margin-top:8px";
+          f.textContent = "Last practised: " + st.focus_label + " \u00b7 " + agoText(st.last_ts);
+          stats.appendChild(f);
+        }
+
+        rules.textContent = "";
+        const list = st.drills || [];
+        if (!list.length) {
+          rules.appendChild(el("div", "dim",
+            "Nothing yet \u2014 the first rules appear after a round finds something new to fix."));
+        }
+        list.forEach(dr => {
+          const line = el("div", "train-rule");
+          const body = el("div", "train-rule-body");
+          body.appendChild(el("span", "train-rule-cap", dr.label || dr.capability || ""));
+          body.appendChild(el("span", null, dr.rule || ""));
+          if (dr.situation) body.appendChild(el("span", "train-rule-when", "when: " + dr.situation));
+          line.appendChild(body);
+          const x = el("button", "xbtn", "✕");
+          x.title = "Forget this rule";
+          x.addEventListener("click", () => api.training_forget(dr.id)
+            .then(() => { line.remove(); loadTrain(); toast("Forgotten", "ok"); })
+            .catch(() => toast("Could not forget", "err")));
+          line.appendChild(x);
+          rules.appendChild(line);
+        });
+      };
+      paint(S.train);
+      api.training_get().then(paint).catch(() => {});
+      return p;
+    },
+
     screen(d) {
       const p = page("Screen Awareness", "Let JARVIS see the active window. Everything stays on this machine.");
       p.appendChild(card("Screen share", "Off = observer off and captures refused.",
@@ -1024,15 +1527,57 @@
     },
 
     pc(d) {
-      const p = page("PC Control", "Automation, verification and autonomy.");
-      p.appendChild(card("Verify clicks", "Confirm before JARVIS clicks anything on your PC.",
+      const p = page("PC Control", "What JARVIS may do with this machine, and how it proves it did it.");
+
+      // The levers first, because they are the ones people actually flip.
+      const modes = S.pc.modes || {};
+      MODES.forEach(([key, ico, label, sub]) => {
+        p.appendChild(card(label, sub.charAt(0).toUpperCase() + sub.slice(1) + ".",
+          toggleEl(() => !!modes[key], v => {
+            S.pc.modes[key] = v;
+            paintRail();
+            return save(key, v, true);
+          })));
+      });
+
+      p.appendChild(cardCol("Try it",
+        "Hand the machine over, or send one instruction and watch the control feed on Home.", (() => {
+          const row = el("div", "set-col");
+          const r1 = el("div", "set-row2");
+          r1.appendChild(btnSm("Take over my PC", askHandover));
+          r1.appendChild(btnSm("Where is the pointer?",
+            () => quick("Move the mouse to the middle of the screen and tell me where it landed.")));
+          r1.appendChild(btnSm("What can you see?",
+            () => quick("Look at my screen and tell me what I am doing.")));
+          row.appendChild(r1);
+          const r2 = el("div", "set-row2");
+          r2.appendChild(btnSm("Test Discord (no send)",
+            () => quick("Open Discord and read me the conversation on screen.")));
+          row.appendChild(r2);
+          return row;
+        })()));
+
+      p.appendChild(card("Verify every action",
+        "After each click or type, look at the screen again and check it actually took. "
+        + "This is what stops JARVIS saying \u201cdone\u201d when nothing happened — it costs "
+        + "one quick look per action, not a question.",
         toggleEl(() => d.verify_clicks, v => save("verify_clicks", v))));
-      p.appendChild(card("Goal agent", "Plan-and-execute complex goals with on-screen confirmation for risky steps.",
+      p.appendChild(card("Goal agent",
+        "Plan and execute a longer goal end to end. Risky steps still wait for you.",
         toggleEl(() => d.goal_agent, v => save("goal_agent", v))));
-      p.appendChild(card("Goal agent auto-run", "Let the agent finish without asking between steps.",
+      p.appendChild(card("Goal agent auto-run",
+        "Let the agent finish without asking between steps.",
         toggleEl(() => d.goal_agent_auto, v => save("goal_agent_auto", v))));
       p.appendChild(card("Start with Windows", "Launch JARVIS when you log in.",
         toggleEl(() => d.autostart, v => save("autostart", v))));
+
+      const note = el("div", "note");
+      note.textContent = "What always waits for you, even in autonomous mode: money, "
+        + "permanent deletion, shutdown or restart, passwords and security settings, "
+        + "installing software, and any message JARVIS decided to send on its own. "
+        + "Everything else it will just do. Press STOP on the Home rail for hands off — "
+        + "it stops mid-step.";
+      p.appendChild(note);
       return p;
     },
 
@@ -1079,8 +1624,9 @@
       b.addEventListener("click", () => api.quick_action("Open my Steam library."));
       row.appendChild(b);
       p.appendChild(cardCol("Try it", "", row));
-      p.appendChild(card("Confirm purchases", "Installs and buys always wait for your on-screen confirmation.",
-        toggleEl(() => d.verify_clicks, v => save("verify_clicks", v))));
+      p.appendChild(card("Confirm purchases",
+        "Installs and buys always wait for your on-screen confirmation.",
+        toggleEl(() => d.goal_agent_auto, v => save("goal_agent_auto", v))));
       return p;
     },
 
@@ -1106,13 +1652,20 @@
       p.appendChild(cardCol("Accent colour", "Recolours the entire interface.", row));
 
       // ── AI Avatar Mode ────────────────────────────────────────────────
+      const AVATAR_HINT = {
+        classic: "The classic JARVIS face — eyes, brows and a mouth that moves with the voice.",
+        minimal: "One calm core and one soft ring. The lightest thing that still feels alive.",
+        orbit: "Satellites circling a pulsing sun — read system activity at a glance, no face.",
+        helix: "A rotating double helix that tightens while JARVIS speaks.",
+        anime3d: "The optional 3D anime companion. Loads on demand and unloads completely when switched off.",
+      };
       p.appendChild(card("AI Avatar Mode",
-        "Classic JARVIS face · Minimal core · optional 3D Anime AI Girl. " +
-        "The 3D model loads only when selected and unloads completely when switched off.",
+        "Classic face · Minimal core · Orbit · Helix · optional 3D Anime AI Girl. " +
+        (AVATAR_HINT[S.avatar.mode] || ""),
         pillsEl(
-          [["classic", "CLASSIC"], ["minimal", "MINIMAL"], ["anime3d", "3D ANIME GIRL"]],
+          [["classic", "CLASSIC"], ["minimal", "MINIMAL"], ["orbit", "ORBIT"], ["helix", "HELIX"], ["anime3d", "3D ANIME GIRL"]],
           () => (S.avatar.mode || "classic"),
-          v => { S.avatar.mode = v; applyAvatarMode({ mode: v });
+          v => { S.avatar.mode = v; crossfadeAvatar(() => applyAvatarMode({ mode: v }));
                  const r = save("avatar_mode", v, true);
                  renderSettingsPage("appearance");   // reveal/hide the options panel
                  return r; })));
@@ -1145,6 +1698,9 @@
           grid.appendChild(mkSlider("Position Y", "y", -0.6, 0.6, 0.05, v => v.toFixed(2)));
           grid.appendChild(mkSlider("Animation intensity", "anim", 0, 1.5, 0.05, v => Math.round(v * 100) + "%"));
           grid.appendChild(mkSlider("Expression intensity", "expr", 0, 1.5, 0.05, v => Math.round(v * 100) + "%"));
+          grid.appendChild(card("Orbital companion", "", toggleEl(
+            () => S.avatar.orbit !== false,
+            v => { S.avatar.orbit = v; applyAvatarMode({ orbit: v }); return save("avatar_orbit", v, true); })));
           const lrow = el("div", "set-row2");
           const llbl = el("span", null, "Lighting");
           llbl.style.cssText = "flex:0 0 150px;font-size:12px;color:var(--text-med);";
@@ -1176,7 +1732,7 @@
         p.appendChild(cardCol("Avatar options",
           S.avatar.mode === "anime3d" ?
             "Idle frames are cheap; quality rises automatically while she speaks. BATTERY caps FPS and resolution for low-end PCs."
-            : "The minimal core draws a handful of shapes — the lightest possible avatar.",
+            : "Every 2D style is drawn on one canvas and drops to a calm 15 fps while idle, so it stays cheap on low-end PCs.",
           grid));
         p.appendChild(card("Show avatar", "Hide the avatar without changing the mode.",
           toggleEl(() => S.avatar.visible !== false,
@@ -1680,12 +2236,23 @@
     if (window.JarvisAvatar && S.avatar.mode !== "anime3d") window.JarvisAvatar.setPaused(false);
   });
   $("camClose").addEventListener("click", () => api.stop_camera().catch(() => {}));
-  Bus.on("screen", s => { S.screen = s; refreshHomeTiles(); });
+  Bus.on("screen", s => { S.screen = s; refreshHomeTiles(); paintHud(); });
   Bus.on("wake", w => { S.wake = w; refreshHomeTiles(); if (S.settingsLoaded) { S.settingsLoaded.wake_word = w; if (S.settingsPage === "startup") renderSettingsPage("startup"); } });
   Bus.on("perf", p => { S.perf = p; paintTopPerf(p); });
   Bus.on("confirm", c => { $("confirmTitle").textContent = c.title; $("confirmDetail").textContent = c.detail; $("confirmVeil").hidden = false; });
   Bus.on("confirm_hide", () => { $("confirmVeil").hidden = true; });
   Bus.on("toast", t => toast(t.text, t.kind));
+  // Computer-control traffic: one line per step, live, plus a full snapshot
+  // whenever a lever changes so the rail can never drift out of sync.
+  Bus.on("pc_feed", e => addFeed(e || {}));
+  Bus.on("control", c => {
+    S.pc.modes = c.modes || S.pc.modes;
+    S.pc.state = c.state || S.pc.state;
+    paintRail();
+    setFeed(c.feed || []);
+    paintPcFoot(S.pc.state);
+    if (S.settingsLoaded && S.settingsPage === "pc") renderSettingsPage("pc");
+  });
   Bus.on("phone", () => toast("Phone connected via Remote Dashboard", "ok"));
   Bus.on("muted", m => applyMuted(!!m.muted));
   Bus.on("config", c => {
@@ -1717,12 +2284,102 @@
     const cpu = $("chipCpu"), mem = $("chipMem");
     if (typeof p.cpu === "number") {
       cpu.textContent = "CPU " + Math.round(p.cpu) + "%";
-      cpu.className = "chip" + (p.cpu > 85 ? " chip-bad" : "");
+      cpu.className = "chip" + (p.cpu > 85 ? " chip-bad" : " chip-load");
+      cpu.style.setProperty("--load", Math.min(100, Math.max(0, p.cpu)) + "%");
     }
     if (typeof p.mem === "number") {
       mem.textContent = "MEM " + Math.round(p.mem) + "%";
-      mem.className = "chip chip-alt" + (p.mem > 88 ? " chip-bad" : "");
+      mem.className = "chip chip-alt" + (p.mem > 88 ? " chip-bad" : " chip-load");
+      mem.style.setProperty("--load", Math.min(100, Math.max(0, p.mem)) + "%");
     }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  PARTICLE FIELD — drifting constellation behind the app.  Dots link with
+  //  faint lines when close; the whole field leans toward the pointer with a
+  //  soft lag.  Pauses when the tab is hidden, skips itself under
+  //  prefers-reduced-motion, and caps devicePixelRatio at 1.5 for perf.
+  // ════════════════════════════════════════════════════════════════════════
+  function startParticles() {
+    const cv = $("fxCanvas");
+    if (!cv || cv.dataset.running) return;
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    cv.dataset.running = "1";
+    const ctx = cv.getContext("2d");
+    const N = 70, LINK = 130;
+    let W = 0, H = 0, dpr = 1, parts = [];
+    let mx = 0.5, my = 0.42;              // pointer in [0..1], smoothed
+    let tx = 0.5, ty = 0.42;              // pointer target
+    let running = true;
+
+    function resize() {
+      dpr = Math.min(1.5, window.devicePixelRatio || 1);
+      W = cv.clientWidth; H = cv.clientHeight;
+      cv.width = Math.max(1, W * dpr); cv.height = Math.max(1, H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    function seed() {
+      parts = [];
+      for (let i = 0; i < N; i++) parts.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: (Math.random() - .5) * .22, vy: (Math.random() - .5) * .22,
+        r: Math.random() * 1.4 + .5,
+        tw: Math.random() * Math.PI * 2,               // twinkle phase
+        tws: .006 + Math.random() * .012,              // twinkle speed
+      });
+    }
+    addEventListener("resize", () => { resize(); seed(); });
+    addEventListener("pointermove", e => {
+      tx = e.clientX / Math.max(1, innerWidth);
+      ty = e.clientY / Math.max(1, innerHeight);
+    }, { passive: true });
+    document.addEventListener("visibilitychange", () => { running = !document.hidden; });
+
+    resize(); seed();
+    (function frame() {
+      if (running) {
+        // ease the parallax origin toward the pointer — no snapping
+        mx += (tx - mx) * .04; my += (ty - my) * .04;
+        const ox = (mx - .5) * 26, oy = (my - .5) * 18;  // max lean in px
+        // the field mirrors JARVIS's state: agitated while working, nearly
+        // still while asleep — read once per frame, cheap
+        const st = document.body.dataset.state || "";
+        const flow = st === "EXECUTING" ? 3.2 : st === "THINKING" ? 2.0
+                   : st === "SLEEPING"  ? 0.35 : 1.0;
+        ctx.clearRect(0, 0, W, H);
+        for (const p of parts) {
+          p.x += p.vx * flow; p.y += p.vy * flow; p.tw += p.tws * Math.min(2, flow);
+          if (p.x < -10) p.x = W + 10; if (p.x > W + 10) p.x = -10;
+          if (p.y < -10) p.y = H + 10; if (p.y > H + 10) p.y = -10;
+        }
+        // links first, dots on top
+        ctx.lineWidth = 1;
+        for (let i = 0; i < N; i++) {
+          const a = parts[i];
+          for (let j = i + 1; j < N; j++) {
+            const b = parts[j];
+            const dx = a.x - b.x, dy = a.y - b.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < LINK * LINK) {
+              const al = (1 - Math.sqrt(d2) / LINK) * .16;
+              ctx.strokeStyle = "rgba(56,189,248," + al.toFixed(3) + ")";
+              ctx.beginPath();
+              ctx.moveTo(a.x + ox * (a.r / 2), a.y + oy * (a.r / 2));
+              ctx.lineTo(b.x + ox * (b.r / 2), b.y + oy * (b.r / 2));
+              ctx.stroke();
+            }
+          }
+        }
+        for (const p of parts) {
+          const tw = .35 + .65 * (0.5 + 0.5 * Math.sin(p.tw));
+          ctx.fillStyle = "rgba(125,211,252," + (tw * .5).toFixed(3) + ")";
+          ctx.beginPath();
+          ctx.arc(p.x + ox * (p.r / 2), p.y + oy * (p.r / 2), p.r, 0, 6.2832);
+          ctx.fill();
+        }
+      }
+      requestAnimationFrame(frame);
+    })();
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -1746,6 +2403,18 @@
     if (!real && window.__installMock) window.__installMock();
 
     buildSetup();
+    buildRail();
+    paintRail();
+    $("trainRun").addEventListener("click", trainRun);
+    loadTrain();
+    // Pushed events keep the card live; this slow poll keeps it honest after a
+    // backend restart or a tab that was asleep.
+    setInterval(loadTrain, 30000);
+    $("btnHandover").addEventListener("click", askHandover);
+    $("chipAuto").addEventListener("click", askHandover);
+    $("pcClear").addEventListener("click", () => {
+      api.pc_feed_clear().then(() => setFeed([])).catch(() => setFeed([]));
+    });
     let init = null;
     for (let i = 0; i < 60; i++) {
       try { init = await api.get_initial(); break; }
@@ -1767,7 +2436,13 @@
     if (init.compact) { S.compact = true; document.body.classList.add("compact"); }
     if (typeof init.muted === "boolean") applyMuted(init.muted);
     applyState("LISTENING");
+    startParticles();
     refreshHomeTiles();
+    paintHud();
+    loadPc();
+    // The feed is pushed, but a slow poll keeps the rail honest if an event is
+    // missed (backend restart, tab asleep) without any real cost.
+    setInterval(loadPc, 20000);
     api.window("announce_ready").catch(() => {});
     if (!S.configured) {
       $("setupVeil").hidden = false;

@@ -50,6 +50,40 @@ try:
 except Exception:                                   # pragma: no cover
     pc_log = None
 
+# The shared engine is imported for two reasons that matter even though the
+# clicking here stays in this module:
+#   * importing it declares the process per-monitor DPI aware, without which a
+#     UIA rectangle and pyautogui's coordinate space disagree on a scaled
+#     display and every click lands offset by the scale factor;
+#   * it keeps one context memory, so a target found here can be the "there"
+#     that the next sentence refers to.
+try:
+    from core import pc_engine as _engine
+except Exception:                                   # pragma: no cover
+    _engine = None
+
+
+def _clamp(x: int, y: int) -> tuple[int, int]:
+    """Keep a point inside the real virtual desktop, corner-abort points aside."""
+    try:
+        if _engine is not None:
+            return _engine.clamp_screen(x, y)
+    except Exception:
+        pass
+    return int(x), int(y)
+
+
+def _remember_target_ctx(label: str, x: int, y: int, w: int, h: int,
+                         source: str) -> None:
+    """Feed the shared context memory so "move it there" has something to mean."""
+    try:
+        if _engine is not None:
+            _engine.remember_target(_engine.Target(
+                label=str(label)[:60], x=int(x), y=int(y), w=int(w), h=int(h),
+                source=source, confidence=0.9))
+    except Exception:
+        pass
+
 _TARGET_WINDOW: str | None = None   # module state set by the "window" action
 
 _INTERESTING = {
@@ -523,10 +557,14 @@ def _click_action(parameters: dict, button: str = "left", clicks: int = 1) -> st
                 f"so I did not click. {payload}")
     if mode == "hit":
         cx, cy = _center(payload)
+        cx, cy = _clamp(cx, cy)
         if _PAG is None:
             return (f"'{item}' is at {cx},{cy} but pyautogui is missing; "
                     f"cannot physically click.")
         _safe_pag(_PAG.click, cx, cy, button=button, clicks=clicks)
+        _remember_target_ctx(payload.get("name") or item, payload.get("x", cx),
+                             payload.get("y", cy), payload.get("w", 0),
+                             payload.get("h", 0), "uia")
         under = _element_at_point(cx, cy)
         verb = ("Double-clicked" if clicks == 2
                 else ("Right-clicked" if button == "right" else "Clicked"))
@@ -568,9 +606,13 @@ def _hover_action(parameters: dict) -> str:
                 f"so I did not move the pointer. {payload}")
     if mode == "hit":
         cx, cy = _center(payload)
+        cx, cy = _clamp(cx, cy)
         if _PAG is None:
             return "pyautogui missing; cannot physically move the mouse."
         _safe_pag(_PAG.moveTo, cx, cy, duration=0.3)
+        _remember_target_ctx(payload.get("name") or item, payload.get("x", cx),
+                             payload.get("y", cy), payload.get("w", 0),
+                             payload.get("h", 0), "uia")
         under = _element_at_point(cx, cy)
         ok = under and under.strip().lower() == (payload.get("name") or "").lower()
         if pc_log:

@@ -376,6 +376,43 @@
     this.halo.position.set(0, 2.5, -0.7);
     scene.add(this.halo);
 
+    // ── orbital companion — the ORBIT avatar, living behind her.
+    //    Three tilted rings with glowing satellites; spins faster while
+    //    thinking, brightens with her voice. Toggleable via cfg.orbit.
+    this.orbit = new THREE.Group();
+    const orbMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(this.cfg.light || "#38bdf8"),
+      transparent: true, opacity: 0.30, depthWrite: false,
+    });
+    const ORBITS = [
+      { r: 1.55, tiltX: 1.25, tiltZ: 0.20, sats: 2, op: 0.34 },
+      { r: 1.95, tiltX: 1.45, tiltZ: -0.30, sats: 3, op: 0.24 },
+      { r: 2.30, tiltX: 1.05, tiltZ: 0.45, sats: 1, op: 0.16 },
+    ];
+    this.orbitSats = [];
+    for (const o of ORBITS) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(o.r, 0.012, 8, 80),
+        orbMat.clone());
+      ring.material.opacity = o.op;
+      ring.rotation.x = o.tiltX;
+      ring.rotation.z = o.tiltZ;
+      this.orbit.add(ring);
+      for (let s = 0; s < o.sats; s++) {
+        const sat = new THREE.Mesh(
+          new THREE.SphereGeometry(0.045, 10, 8),
+          new THREE.MeshBasicMaterial({
+            color: new THREE.Color(this.cfg.light || "#38bdf8"),
+            transparent: true, opacity: 0.95, depthWrite: false,
+          }));
+        sat.userData = { ring, a: (s / o.sats) * Math.PI * 2, speed: 0.5 + o.r * 0.18 };
+        this.orbit.add(sat);
+        this.orbitSats.push(sat);
+      }
+    }
+    this.orbit.position.set(0, 2.35, -1.7);
+    this.orbit.visible = this.cfg.orbit !== false;
+    scene.add(this.orbit);
+
     // ── hologram dust — slow-orbiting light motes around her ──────────────
     // Count scales with the perf preset; battery gets none. Additive blending
     // over the transparent canvas, one sprite texture, zero per-frame updates
@@ -501,6 +538,10 @@
     if (this.halo) {
       this.halo.children.forEach(r => { r.material.color = accent; });
     }
+    if (this.orbit) {
+      this.orbit.visible = this.cfg.orbit !== false;
+      this.orbit.traverse(o => { if (o.material) o.material.color = accent; });
+    }
     if (this.particles) this.particles.material.color = accent;
     if (this.glow) this.glow.material.color = accent;
     this._applyPixelRatio();
@@ -608,6 +649,33 @@
       const pulse = this.state === "SPEAKING"
         ? 0.3 + 0.2 * Math.abs(Math.sin(t * 6)) : 0.28 + 0.06 * Math.sin(t * 1.6);
       this.halo.children[0].material.opacity = pulse;
+    }
+
+    // orbital companion: precess slowly, satellites ride their rings, the
+    // whole system brightens with her voice and races while thinking
+    if (this.orbit && this.orbit.visible) {
+      const spin = this.state === "THINKING" ? 2.4 : this.state === "SPEAKING" ? 0.9 : 0.3;
+      this.orbit.rotation.y += step * spin * 0.4;
+      this.orbit.rotation.z = Math.sin(t * 0.21) * 0.08;      // slow precession
+      for (const sat of this.orbitSats) {
+        sat.userData.a += step * spin * sat.userData.speed * 0.55;
+        const ring = sat.userData.ring;
+        const ex = Math.cos(sat.userData.a) * ring.geometry.parameters.radius;
+        const ey = Math.sin(sat.userData.a) * ring.geometry.parameters.radius;
+        sat.position.set(
+          ex * Math.cos(ring.rotation.z) - ey * Math.sin(ring.rotation.z) * 0.25,
+          ey * Math.cos(ring.rotation.x),
+          ey * Math.sin(ring.rotation.x));
+      }
+      const bright = this.state === "SPEAKING" ? 0.55 + this.level * 0.6
+                   : this.state === "THINKING" ? 0.5
+                   : 0.3 + 0.08 * Math.sin(t * 1.4);
+      for (const ring of this.orbit.children) {
+        if (ring.geometry && ring.geometry.type === "TorusGeometry") {
+          ring.material.opacity +=
+            (bright * 0.5 - ring.material.opacity) * Math.min(1, step * 3);
+        }
+      }
     }
 
     // hologram dust: slow orbit, brightening with the voice

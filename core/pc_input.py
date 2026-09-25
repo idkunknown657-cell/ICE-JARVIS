@@ -435,13 +435,24 @@ def key_hotkey(*names: str, interval: float = 0.05) -> None:
 
 
 def key_type(text: str, interval: float = 0.02) -> None:
-    """Type arbitrary text (any Unicode — Hindi, emoji, symbols) as key events."""
+    """Type arbitrary text (any Unicode — Hindi, emoji, symbols) as key events.
+
+    Characters outside the BMP (emoji and friends, e.g. \U0001F600) do not fit
+    the 16-bit scan-code field: assigning them used to truncate silently and a
+    wrong character landed in the field. They are sent as their UTF-16 surrogate
+    pair instead, which is exactly what Windows expects for KEYEVENTF_UNICODE.
+    """
     _need_windows("key_type")
     for ch in str(text):
         code = ord(ch)
-        _send(_key_event(None, ch, 0, code))
-        time.sleep(0.002)
-        _send(_key_event(None, ch, _KF_KEYUP, code))
+        units = (code,) if code <= 0xFFFF else (
+            0xD800 + ((code - 0x10000) >> 10),          # high surrogate
+            0xDC00 + ((code - 0x10000) & 0x3FF),        # low surrogate
+        )
+        for u in units:
+            _send(_key_event(None, chr(u), 0, u))
+            time.sleep(0.002)
+            _send(_key_event(None, chr(u), _KF_KEYUP, u))
         if interval:
             time.sleep(interval)
 

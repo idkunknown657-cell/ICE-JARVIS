@@ -612,6 +612,86 @@ def save_goal_agent_auto(enabled: bool) -> None:
     _save_flag("goal_agent_auto", enabled)
 
 
+# ── PC control & autonomy (the computer-use levers) ──────────────────────────
+# Six independent switches, read live by core/autonomy.py so flipping one on the
+# HUD takes effect on the very next action instead of the next restart.
+#
+#   pc_control        JARVIS may drive the mouse/keyboard at all. Off = read-only.
+#   autonomous        it may act while the user is idle, without being asked.
+#   discord_control   it may use the user's Discord.
+#   voice_control     the mic is live (mirrors the HUD mute button).
+# screen_awareness and proactive_enabled already existed above.
+
+def get_pc_control() -> bool:
+    """Master switch for physical computer control."""
+    return bool(load_api_keys().get("pc_control", True))
+
+
+def save_pc_control(enabled: bool) -> None:
+    _save_flag("pc_control", enabled)
+
+
+def get_autonomous_mode() -> bool:
+    """Whether JARVIS may take the initiative on the machine while idle.
+
+    Off by default: this is the one lever that grants standing permission, and
+    standing permission must be given deliberately, by the user, out loud or on
+    the HUD — never inherited from a previous session's enthusiasm.
+    """
+    return bool(load_api_keys().get("autonomous", False))
+
+
+def save_autonomous_mode(enabled: bool) -> None:
+    _save_flag("autonomous", enabled)
+
+
+def get_discord_control() -> bool:
+    """Whether JARVIS may use Discord (it still never messages anyone unasked)."""
+    return bool(load_api_keys().get("discord_control", True))
+
+
+def save_discord_control(enabled: bool) -> None:
+    _save_flag("discord_control", enabled)
+
+
+def get_voice_control() -> bool:
+    """Whether the microphone is live. Mirrors the HUD's mute button."""
+    return bool(load_api_keys().get("voice_control", True))
+
+
+def save_voice_control(enabled: bool) -> None:
+    _save_flag("voice_control", enabled)
+
+
+def get_self_training() -> bool:
+    """Whether JARVIS may train itself while the user is idle.
+
+    On by default, because the whole point is that it improves without being
+    asked to. It is still bounded and reversible: rounds are throttled, the
+    rules it writes live in ordinary memory (`forget` removes them), and memory
+    being switched off stops it completely — see core/self_training.py.
+    """
+    return bool(load_api_keys().get("self_training", True))
+
+
+def save_self_training(enabled: bool) -> None:
+    _save_flag("self_training", enabled)
+
+
+TRAINING_INTENSITIES = ("gentle", "balanced", "focused")
+
+
+def get_training_intensity() -> str:
+    """How hard it practises: gentle 1 round/hour, balanced 2, focused 5."""
+    v = str(load_api_keys().get("training_intensity", "balanced") or "").lower()
+    return v if v in TRAINING_INTENSITIES else "balanced"
+
+
+def save_training_intensity(level: str) -> None:
+    v = str(level or "").lower()
+    _save_flag("training_intensity", v if v in TRAINING_INTENSITIES else "balanced")
+
+
 def get_observe_interval() -> int:
     """Seconds between active-window samples. Clamped to [2, 60]."""
     try:

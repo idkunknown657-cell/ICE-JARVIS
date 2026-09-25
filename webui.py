@@ -82,6 +82,12 @@ from memory.config_manager import (
     get_proactive_enabled, save_proactive_enabled,
     get_free_providers, save_free_provider_key,
     get_hud_style,
+    get_pc_control, save_pc_control,
+    get_autonomous_mode, save_autonomous_mode,
+    get_discord_control, save_discord_control,
+    get_voice_control, save_voice_control,
+    get_self_training, save_self_training,
+    get_training_intensity, save_training_intensity,
 )
 from core import audio_devices
 from core import confirm as confirm_gate
@@ -255,6 +261,7 @@ class JarvisAPI:
         self._last_net = psutil.net_io_counters()
         self._last_net_t = time.time()
         self._update_busy = False        # one update download at a time
+        self._training_busy = False      # one self-training round at a time
         threading.Thread(target=self._perf_loop, daemon=True).start()
 
     # ── boot / initial state ────────────────────────────────────────────────
@@ -374,6 +381,131 @@ class JarvisAPI:
             ui._current_file = None
         return {"ok": True}
 
+    # ── computer control: live state + the action feed ──────────────────────
+    #
+    # The HUD needs to answer two questions at a glance: what is JARVIS allowed
+    # to do, and what is it doing right now. Both are pushed rather than polled,
+    # so the feed stays live without the browser asking every second.
+    def pc_status(self) -> dict:
+        out: dict = {"modes": {}, "feed": [], "state": {}}
+        try:
+            from core import autonomy
+            out["modes"] = autonomy.modes()
+            out["feed"] = autonomy.feed_recent(30)
+        except Exception:
+            pass
+        try:
+            from core import pc_engine
+            st = pc_engine.state()
+            out["state"] = {
+                "uia": bool(st.get("uia")),
+                "monitors": int(st.get("monitors") or 1),
+                "foreground": st.get("foreground", ""),
+                "pointer": list(st.get("pointer") or (0, 0)),
+                "desktop": st.get("desktop", ""),
+                "input": bool(st.get("input")),
+                "vision": bool(st.get("vision")),
+            }
+        except Exception:
+            pass
+        return out
+
+    def pc_feed_clear(self) -> dict:
+        try:
+            from core import autonomy
+            autonomy.feed_clear()
+        except Exception:
+            pass
+        _PUMP.push("control", self.pc_status())
+        return {"ok": True}
+
+    # ── self-training: the rounds JARVIS runs while nobody is talking ───────
+    #
+    # Same two questions as the control feed — what is it learning, and can I
+    # take it back? A round is a model call, so it never runs on the calling
+    # thread: the HUD hears "running" and then the finished report.
+    def training_get(self) -> dict:
+        try:
+            from core import self_training
+            return self_training.snapshot()
+        except Exception:
+            return {"enabled": False, "active": False, "competency": [],
+                    "drills": [], "history": [], "cycles": 0, "learned": 0,
+                    "drill_count": 0}
+
+    def training_run(self, force: bool = True) -> dict:
+        """One round, now, off-thread. `force` runs a round even in a throttle
+        window — the user pressed the button, so their clock wins."""
+        if self._training_busy:
+            return {"ok": False, "err": "a round is already running"}
+        self._training_busy = True
+
+        def _worker():
+            try:
+                from core import self_training as st
+                _PUMP.push("training", {"phase": "running", "reason": "manual"})
+                report = st.run_cycle("manual", force=bool(force))
+                _PUMP.push("training", {"phase": "done", "report": report,
+                                        "state": st.snapshot()})
+            except Exception as e:
+                _PUMP.push("training", {"phase": "done",
+                                        "report": {"ok": False, "err": str(e)[:120]}})
+            finally:
+                self._training_busy = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def training_forget(self, drill_id: str) -> dict:
+        """Take one self-written rule back. Reversible by design."""
+        try:
+            from core import self_training
+            ok = self_training.forget(str(drill_id or ""))
+            _PUMP.push("training", {"phase": "changed",
+                                    "state": self_training.snapshot()})
+            return {"ok": bool(ok)}
+        except Exception as e:
+            return {"ok": False, "err": str(e)[:120]}
+
+    def training_forget_all(self) -> dict:
+        try:
+            from core import self_training
+            n = self_training.forget_all()
+            _PUMP.push("training", {"phase": "changed",
+                                    "state": self_training.snapshot()})
+            return {"ok": True, "forgotten": int(n)}
+        except Exception as e:
+            return {"ok": False, "err": str(e)[:120]}
+
+    def training_reset(self) -> dict:
+        """Forget the whole ledger and every drill. The audit log stays."""
+        try:
+            from core import self_training
+            self_training.reset()
+            _PUMP.push("training", {"phase": "changed",
+                                    "state": self_training.snapshot()})
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "err": str(e)[:120]}
+
+    @staticmethod
+    def _notify_autonomy(kind: str, text: str) -> None:
+        """Record a control action in the feed and push it to the HUD now."""
+        try:
+            from core import autonomy
+            autonomy.feed(kind, text)
+        except Exception:
+            pass
+
+    # Bound to core/autonomy.bind_feed by main.py so every control step the
+    # assistant takes appears on screen as it happens.
+    def push_control(self, entry: dict) -> None:
+        try:
+            _PUMP.push("pc_feed", entry if isinstance(entry, dict)
+                       else {"text": str(entry)})
+        except Exception:
+            pass
+
     # ── settings: read + write ──────────────────────────────────────────────
     def get_settings(self) -> dict:
         cfg = _read_full_config()
@@ -407,6 +539,17 @@ class JarvisAPI:
             "compact": bool(cfg.get("compact", False)),
             "avatar": self._avatar_cfg(),
             "proactive": _safe(get_proactive_enabled, True),
+            # The computer-use levers. `autonomous` is the one that grants
+            # standing permission, so it is surfaced as its own switch rather
+            # than folded into the goal-agent settings.
+            "pc_control": _safe(get_pc_control, True),
+            "autonomous": _safe(get_autonomous_mode, False),
+            "discord_control": _safe(get_discord_control, True),
+            "voice_control": _safe(get_voice_control, True),
+            # Self-training: it practises while nobody is talking. The switch is
+            # the user's, and it stops dead when memory is off.
+            "self_training": _safe(get_self_training, True),
+            "training_intensity": _safe(get_training_intensity, "balanced"),
             "media_resolution": _safe(get_media_resolution, "medium"),
             "currency": _safe(get_currency_code, "USD"),
             "update_source": (cfg.get("update_manifest_url") or ""),
@@ -493,6 +636,32 @@ class JarvisAPI:
                 _PUMP.push("avatar", self._avatar_cfg())
             elif key == "proactive":
                 save_proactive_enabled(bool(value))
+            elif key == "pc_control":
+                save_pc_control(bool(value))
+                _PUMP.push("control", self.pc_status())
+            elif key == "autonomous":
+                save_autonomous_mode(bool(value))
+                _PUMP.push("control", self.pc_status())
+            elif key == "discord_control":
+                save_discord_control(bool(value))
+                self._notify_autonomy(
+                    "mode",
+                    f"Discord control → {'ON' if bool(value) else 'OFF'}")
+            elif key == "self_training":
+                save_self_training(bool(value))
+                _PUMP.push("training", {"phase": "changed",
+                                        "state": self.training_get()})
+            elif key == "training_intensity":
+                save_training_intensity(str(value))
+                _PUMP.push("training", {"phase": "changed",
+                                        "state": self.training_get()})
+            elif key == "voice_control":
+                save_voice_control(bool(value))
+                # The mic switch and the mute button are the same fact, so move
+                # the mute state with it instead of letting them disagree.
+                if self.ui is not None:
+                    self.ui._muted = not bool(value)
+                _PUMP.push("mute", {"muted": not bool(value)})
             else:
                 return {"ok": False, "err": "unknown key: " + str(key)}
             return {"ok": True}
@@ -1269,6 +1438,14 @@ class JarvisUI:
 
     def set_screen_status(self, active: bool, caption: str = ""):
         _PUMP.push("screen", {"active": bool(active), "caption": str(caption or "")[:24]})
+
+    def push_training(self, payload: dict):
+        """A self-training round started or finished — Home updates live, so a
+        quiet assistant does not look like an idle one."""
+        try:
+            _PUMP.push("training", payload if isinstance(payload, dict) else {})
+        except Exception:
+            pass
 
     def show_camera_frame(self, img_bytes: bytes):
         try:

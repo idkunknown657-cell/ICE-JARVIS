@@ -92,6 +92,7 @@ from core.viseme               import VisemeStream
 from core.language             import language_directive, strip_transient_prefix
 from core.persona              import build_persona_block
 from core                      import learning as learning_mod
+from core                      import self_training
 from core                      import usage as usage_mod
 from core                      import reasoner as reasoner_mod
 from core.screen_share        import settings_for, frame_fingerprint
@@ -373,6 +374,94 @@ def _describe_limits(has_vision: bool, has_mic: bool) -> str:
             "- You hear nothing while the microphone is muted, and you cannot "
             "unmute it yourself.")
     return "\n".join(out)
+
+
+def _boundary_rules() -> str:
+    """The prompt half of the action policy, generated from the policy table.
+
+    Written here rather than in prompt.txt so the categories the model is told
+    to be careful about are literally the ones core/autonomy.py gates — a
+    hand-written list drifts the first time one of the two is edited.
+    """
+    try:
+        from core import autonomy
+        lines = [
+            "- Money: buying, paying, ordering, subscribing, transferring, "
+            "anything with a price on it — the exact amount must be seen by them.",
+            "- Something that cannot be undone: permanent deletion, emptying the "
+            "recycle bin, formatting, wiping, overwriting.",
+            "- The machine going down: restart, shut down, sign out, closing "
+            "everything they have open.",
+            "- Security and identity: passwords, two-factor codes, API keys, "
+            "bank or card details, permissions, antivirus, firewall.",
+            "- Running new software: installers, executing a downloaded file, "
+            "editing the registry.",
+            "- Reaching another person, when *you* thought of it rather than "
+            "them: messages, emails, posts, comments, invites. When the user "
+            "asks you to send something, send it — do not ask twice.",
+            f"\n{autonomy.boundary_summary()}",
+        ]
+        return "\n".join(lines)
+    except Exception:
+        return ("- Money, permanent deletion, shutdown, security changes, "
+                "installs, and messages you decided to send yourself.")
+
+
+def _autonomy_rules() -> str:
+    """What the model may do unasked, when autonomous mode is on.
+
+    Read live, and it changes what the model is told *now* rather than at the
+    next launch: with the lever off, the honest sentence is "you may suggest, "
+    "you may not act", and saying that is cheaper than letting it discover the
+    refusal by being blocked.
+    """
+    try:
+        from core import autonomy
+        on = autonomy.get_mode("autonomous")
+        pc = autonomy.get_mode("pc_control")
+    except Exception:
+        return ""
+    if not pc:
+        return ("\n[AUTONOMY] PC control is switched OFF right now. You may look, "
+                "read, answer and suggest — you may not move the mouse, click, or "
+                "type on this machine. If a request needs that, say so in one "
+                "clause and tell them the PC control switch is off.")
+    if not on:
+        return ("\n[AUTONOMY] Autonomous mode is OFF. Do exactly what is asked of "
+                "you and nothing beyond it. You may still offer a next step — but "
+                "only when you actually have one worth offering.")
+    return ("\n[AUTONOMY] Autonomous mode is ON: the user has handed over the PC. "
+            "While they are idle you may act on this machine yourself for "
+            "anything harmless — open things, search, read, play music or a "
+            "video, look around, organise, prepare something useful — and you do "
+            "not ask permission for those. Stay light: one useful thing at a "
+            "time, quiet when there is a real reason to be quiet, and idle when "
+            "nothing is worth doing. The list above still waits for a human, "
+            "always.")
+
+
+def _training_rules() -> str:
+    """How the model may use its own practice drill.
+
+    The tool is passive (find → point, never click) so it is safe for the
+    assistant to request on its own — but the throttle, not the model, decides
+    when, and this block says so plainly. The prompt and the tool's refusals are
+    describing the same machine, so neither can promise what the other denies.
+    """
+    try:
+        from core import self_training
+        if not self_training.enabled():
+            return ""
+    except Exception:
+        return ""
+    return ("\n[SELF-TRAINING] You keep score of how well your own clicks, keys "
+            "and screen reads land, and you practise your weakest skill while "
+            "the user is quiet. You may call the training_run tool yourself with "
+            "a 'target' to practise on — it is passive: it finds the element and "
+            "moves the pointer onto it WITHOUT clicking. Use it sparingly: only "
+            "when the user has not spoken for a while, never mid-task, and let "
+            "its throttle refuse you when a round is not due — a refusal there "
+            "is the schedule working, not an error to retry.")
 
 
 def _render_prompt(template: str, values: dict) -> str:
@@ -832,6 +921,17 @@ class JarvisLive:
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
+        # Autonomous initiative governor: when the user hands over the PC, this
+        # decides when a contribution is welcome at all. It holds no thread and
+        # does no polling of its own — the existing proactive loop asks it, so
+        # autonomy costs one branch, not another background worker.
+        try:
+            from core import autonomy as _autonomy_mod
+            self._autonomy = _autonomy_mod
+        except Exception:
+            self._autonomy = None
+        self._idle_governor = (
+            self._autonomy.IdleGovernor() if self._autonomy else None)
         self._screen_observer  = None   # core.screen_observer.ScreenObserver (started in run())
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
@@ -1382,6 +1482,12 @@ class JarvisLive:
             "personality_rules":  personality_hint(),
             "action_style_rules": narration_hint(),
             "emotion_rules":      emotion_rules(),
+            # Computer-use boundaries and autonomous behaviour, both derived from
+            # core/autonomy.py so the words the model is given and the policy the
+            # tools actually enforce can never drift apart.
+            "boundary_rules": _boundary_rules(),
+            "autonomy_rules": _autonomy_rules(),
+            "training_rules": _training_rules(),
         })
 
         parts = [time_ctx, identity_ctx]
@@ -1397,6 +1503,15 @@ class JarvisLive:
                 parts.append(persona_block)
         except Exception as e:
             print(f"[JARVIS] persona block skipped: {e}")
+        # What it has been practising on its own, plus the rules it wrote itself
+        # while idle — so a lesson learned with nobody watching changes the very
+        # next conversation (see core/self_training.py). '' when off or empty.
+        try:
+            digest = self_training.curriculum_digest()
+            if digest:
+                parts.append(digest)
+        except Exception as e:
+            print(f"[JARVIS] training digest skipped: {e}")
         parts.append(sys_prompt)
 
         cfg = dict(
@@ -2397,10 +2512,45 @@ class JarvisLive:
             except Exception as e:
                 print(f"[Learning] ⚠️ loop error: {e}")
             try:
+                await self._maybe_train()
+            except Exception as e:
+                print(f"[Training] ⚠️ loop error: {e}")
+            try:
                 usage_mod.flush()
                 if time.monotonic() - self._last_usage_flush >= 900:
                     usage_mod.prune_older_than(days=45)
                     self._last_usage_flush = time.monotonic()
+            except Exception:
+                pass
+
+    async def _maybe_train(self) -> None:
+        """A self-training round — but only while the user is quiet.
+
+        Two throttles stand between this and burning API quota: this method
+        refuses to interrupt speech or a sleeping session at all, and
+        core/self_training.cycle_due() owns the hourly budget and the minimum
+        quiet time. The round is one model call on a worker thread, and the HUD
+        is told when it starts and what it learned.
+        """
+        if not self._awake:
+            return
+        with self._speaking_lock:
+            if self._is_speaking:
+                return
+        idle = time.monotonic() - self._last_user_speech
+        if not self_training.cycle_due(idle):
+            return
+        push = getattr(self.ui, "push_training", None)
+        if push:
+            try:
+                push({"phase": "running"})
+            except Exception:
+                pass
+        report = await asyncio.to_thread(self_training.run_cycle, "idle")
+        if push:
+            try:
+                snap = await asyncio.to_thread(self_training.snapshot)
+                push({"phase": "done", "report": report, "state": snap})
             except Exception:
                 pass
 
@@ -2695,6 +2845,10 @@ class JarvisLive:
             # presence is not hollowed out by a 60-second tick.
             cadence = self._proactive.apply_cadence(get_talk_cadence())
             tick = 15 if cadence == "chatty" else (30 if cadence == "live" else 60)
+            # Handed-over PC: check in on the same brisk tick, because the
+            # governor — not the sleep — is what keeps the rate sane.
+            if self._autonomy and self._autonomy.get_mode("autonomous"):
+                tick = min(tick, 30)
             await asyncio.sleep(tick)
 
             if not self.session or not self._awake:
@@ -2709,10 +2863,21 @@ class JarvisLive:
             if speaking:
                 continue
 
-            if not self._proactive.should_trigger(self._last_user_speech):
+            # Autonomous mode changes which clock applies: with the PC handed
+            # over, the floor is "the user has been quiet a couple of minutes"
+            # rather than "nothing has been said for fifteen". Without it, the
+            # old cadence is untouched.
+            idle_now = time.monotonic() - self._last_user_speech
+            autonomous_tick = bool(
+                self._idle_governor
+                and self._idle_governor.due(idle=idle_now))
+            if not autonomous_tick and not self._proactive.should_trigger(
+                    self._last_user_speech):
                 continue
 
             self._proactive.mark_triggered()
+            if autonomous_tick:
+                self._idle_governor.mark("idle initiative", now=time.monotonic())
 
             try:
                 memory       = await asyncio.to_thread(load_memory)
@@ -2773,7 +2938,16 @@ class JarvisLive:
                     # "notices routines without being told" half of proactivity.
                     routines      = await asyncio.to_thread(
                         usage_mod.workflow_candidates) or None,
+                    # An autonomous moment may act, not just talk, so the rules
+                    # that normally forbid tool calls are lifted for it.
+                    allow_tools   = autonomous_tick,
                 )
+                if autonomous_tick:
+                    prompt += "\n\n" + self._autonomy.idle_agenda(
+                        activity=screen or "",
+                        idle_seconds=idle_now,
+                        recent=" | ".join(recent_turns[-3:]) if recent_turns else "",
+                        autonomous=True)
                 parts = [{"text": prompt}]
                 if frame_part:
                     import base64 as _b64
@@ -2885,6 +3059,24 @@ class JarvisLive:
             log  = self.ui.write_log,
         )
         set_trim_notifier(self.ui.write_log)
+
+        # Every computer-control step reports itself to the HUD as it happens.
+        # Bound here (not inside the actions) so the action layer never needs to
+        # know whether there is an interface attached — and so a headless run
+        # simply keeps the feed in memory instead of crashing on it.
+        try:
+            from core import autonomy as _autonomy_mod
+            push = getattr(self.ui, "push_control", None)
+            if callable(push):
+                _autonomy_mod.bind_feed(push)
+            _autonomy_mod.feed(
+                "info",
+                "PC control ready"
+                + (" · autonomous mode ON" if _autonomy_mod.get_mode("autonomous")
+                   else " · autonomous mode off"),
+            )
+        except Exception as e:
+            print(f"[JARVIS] control feed not bound: {e}")
 
         # Tell the device picker the exact rates the streams open at, from the
         # constants that actually open them — so it can never list a device that

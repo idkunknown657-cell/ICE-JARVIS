@@ -9,6 +9,15 @@
 <body>
 <div id="app">
 
+  <!-- ══════════════ AMBIENT FX (pure CSS, GPU-composited, behind everything) ══ -->
+  <div class="fx-layer" aria-hidden="true">
+    <i class="fx-aurora"></i>
+    <i class="fx-grid"></i>
+    <i class="fx-scan"></i>
+    <canvas class="fx-particles" id="fxCanvas" aria-hidden="true"></canvas>
+    <i class="fx-vignette"></i>
+  </div>
+
   <!-- ══════════════ TITLEBAR ══════════════ -->
   <header id="titlebar" class="pywebview-drag-region">
     <div class="brand pywebview-drag-region">
@@ -30,6 +39,9 @@
       <span class="chip" id="chipCpu" title="CPU usage">CPU --</span>
       <span class="chip chip-alt" id="chipMem" title="RAM usage">MEM --</span>
       <span class="chip" id="chipEyes" title="Screen awareness" hidden>👁 OFF</span>
+      <button class="chip chip-mode" id="chipAuto" title="Autonomous mode — JARVIS may use this PC on its own" data-on="0">
+        <span class="mode-dot"></span>AUTOPILOT OFF
+      </button>
       <div class="clock pywebview-drag-region">
         <div class="clock-time" id="clockTime">--:--</div>
         <div class="clock-date" id="clockDate">&nbsp;</div>
@@ -48,10 +60,36 @@
 
     <!-- ─────────── HOME ─────────── -->
     <section class="view active" id="view-home">
+
+      <!-- Autonomy rail — the six switches that decide what JARVIS may do.
+           Spans the whole workspace, above the face, because it is the one
+           control the user needs mid-task without leaving what they are doing. -->
+      <div class="auto-rail" id="autoRail">
+        <div class="auto-rail-lead">
+          <span class="auto-rail-title">Control</span>
+          <span class="auto-rail-sub" id="autoRailSub">JARVIS is watching, not touching</span>
+        </div>
+        <div class="auto-switches" id="autoSwitches"></div>
+        <button class="btn btn-handover" id="btnHandover" title="Hand the PC over until you say stop">
+          <span class="ho-ico">✋</span><span id="hoLabel">TAKE OVER</span>
+        </button>
+      </div>
+
       <div class="home-grid">
 
         <div class="home-face-col">
           <div class="face-stage pywebview-drag-region" id="faceStage">
+            <i class="hud-ring r1" aria-hidden="true"></i>
+            <i class="hud-ring r2" aria-hidden="true"></i>
+            <i class="hud-ring r3" aria-hidden="true"></i>
+            <i class="hud-core" aria-hidden="true"></i>
+            <i class="hud-core-glow" id="hudCoreGlow" aria-hidden="true"></i>
+            <i class="hud-frame" aria-hidden="true"><b class="tl"></b><b class="tr"></b><b class="bl"></b><b class="br"></b></i>
+            <span class="hud-readout ro-left" id="hudState">SYS · <b>BOOT</b></span>
+            <span class="hud-readout ro-right" id="hudAuto">AUTO · <b>OFF</b></span>
+            <span class="hud-readout ro-bl" id="hudMode">MODE · <b>CLASSIC</b></span>
+            <span class="hud-readout ro-br" id="hudSight">SIGHT · <b>OFF</b></span>
+            <span class="hud-vu" id="hudVu" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
             <canvas id="face" class="pywebview-drag-region" width="640" height="640" aria-label="JARVIS status face"></canvas>
             <div id="avatar3dMount" class="pywebview-drag-region" hidden></div>
           </div>
@@ -80,6 +118,20 @@
             </div>
           </div>
 
+          <div class="card train-card" id="trainCard">
+            <div class="card-head">
+              <span class="card-title">Self-training</span>
+              <span class="train-live" id="trainLive" data-on="0" title="Practising while you are quiet"><i></i>IDLE</span>
+              <button class="xbtn" id="trainRun" title="Practise one round now">▶</button>
+            </div>
+            <div class="card-body train-body">
+              <div class="train-focus" id="trainFocus">Watching how its own steps land…</div>
+              <div class="train-bars" id="trainBars"></div>
+              <div class="train-new" id="trainNew" hidden></div>
+              <div class="train-foot" id="trainFoot"></div>
+            </div>
+          </div>
+
           <div class="card content-card" id="contentCard" hidden>
             <div class="card-head">
               <span class="card-title" id="contentTitle">Content</span>
@@ -94,6 +146,18 @@
               <button class="xbtn" id="reviewClose" title="Dismiss">✕</button>
             </div>
             <div class="card-body content-body" id="reviewBody"></div>
+          </div>
+
+          <div class="card pc-card" id="pcCard">
+            <div class="card-head">
+              <span class="card-title">Control feed</span>
+              <span class="pc-live" id="pcLive" title="Live"><i></i>LIVE</span>
+              <button class="xbtn" id="pcClear" title="Clear">⌫</button>
+            </div>
+            <div class="card-body pc-body" id="pcFeed">
+              <div class="pc-empty" id="pcEmpty">Nothing yet. Say “take over my PC” and this fills up.</div>
+            </div>
+            <div class="pc-foot" id="pcFoot" hidden></div>
           </div>
 
           <div class="card activity-card">

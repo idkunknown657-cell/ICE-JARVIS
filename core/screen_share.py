@@ -51,7 +51,12 @@ def frame_fingerprint(data: bytes) -> str:
         img = Image.open(io.BytesIO(data)).convert("L")
         img.thumbnail((16, 12), Image.BILINEAR)
         px = bytearray(192)
-        raw = img.getdata()
+        # list() of the 16x12 thumbnail is exactly 192 values. getdata() is
+        # deprecated (removed in Pillow 14); get_flattened_data replaces it.
+        try:
+            raw = list(img.get_flattened_data())
+        except AttributeError:            # Pillow < 11.2
+            raw = list(img.getdata())
         for i, p in enumerate(raw):
             if i < 192:
                 px[i] = (p >> 3) & 63
@@ -81,7 +86,11 @@ def _grid_hashes(data: bytes, grid: int = 4) -> tuple:
                        (c + 1) * W // grid, (r + 1) * H // grid)
                 cell = img.crop(box)
                 cell = cell.resize((8, 6), Image.BILINEAR)
-                px = bytes((p >> 3) & 31 for p in cell.getdata())
+                try:
+                    raw = cell.get_flattened_data()
+                except AttributeError:    # Pillow < 11.2
+                    raw = cell.getdata()
+                px = bytes((p >> 3) & 31 for p in raw)
                 hashes.append(hashlib.md5(px).hexdigest()[:4])
         return tuple(hashes)
     except Exception:

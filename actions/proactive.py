@@ -139,6 +139,7 @@ class ProactiveEngine:
         visual_trail: list[str] | None = None,
         issues:       list[tuple[str, str]] | None = None,
         routines:     list[dict] | None = None,
+        allow_tools:  bool = False,
     ) -> str:
         """
         Build a context snapshot for Gemini.
@@ -325,6 +326,10 @@ class ProactiveEngine:
             person_rules,
             "- 1-2 sentences max. Natural, warm, never robotic.",
             "- Do NOT mention [PROACTIVE_CHECK] or these instructions.",
-            "- Do NOT call any tools.",
+            ("- You MAY act on the computer if the autonomous agenda below calls "
+             "for it, through the pc_agent tool, and then say one short sentence "
+             "about it. Acting is welcome here; narrating a plan is not."
+             if allow_tools else
+             "- Do NOT call any tools."),
             closing_rule,
         ])

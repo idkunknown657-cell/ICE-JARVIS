@@ -31,6 +31,7 @@
   let blinkPhase = 0;        // 0..1..0 while blinking
   let glanceX = 0, glanceY = 0, tgtGX = 0, tgtGY = 0, nextGlance = 4;
   let dispLevel = 0, dispOpen = 0, dispWide = 0;
+  let exprUntilT = 0;        // expiry on THIS module's clock (see setExpression)
   let running = true, pageVisible = true;
 
   const TAU = Math.PI * 2;
@@ -53,6 +54,18 @@
     if (AV.expression === "error")    return { main: "#ff5c7a", glow: "rgba(255,92,122," };
     return p;
   }
+
+  // ── expressions ────────────────────────────────────────────────────────
+  // app.js used to set AV.exprUntil = performance.now()/1000 + 3 (epoch) while
+  // this loop compares against its own `t` (seconds since boot) — expressions
+  // could never expire and the face stayed happy/confused forever. Callers now
+  // use setExpression, which expires on the clock the renderer actually uses.
+  AV.setExpression = function (expr, seconds) {
+    const map = { playful: "happy", surprised: "confused", sad: "confused" };
+    AV.expression = map[expr] || expr || null;
+    exprUntilT = t + Math.max(0.5, Number(seconds) || 3);
+    AV.exprUntil = exprUntilT;          // kept in sync for any external reader
+  };
 
   // ── viseme scheduling (mirrors backend push_visemes semantics) ────────
   let vFrames = null, vHop = 0, vStart = 0;
@@ -121,10 +134,18 @@
   // ── main render ───────────────────────────────────────────────────────
   function render() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // A hidden view (Settings, a minimised window) has no layout box, and
+    // writing that 0 straight into canvas.width used to lock the canvas at
+    // 0x0 FOREVER — the face went permanently blank and silent the first time
+    // the stage lost its box. No box ⇒ keep the last frame and skip the draw;
+    // the backing store only ever mirrors a real box.
     const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
-    if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
-      canvas.width = Math.round(cssW * dpr);
-      canvas.height = Math.round(cssH * dpr);
+    if (cssW < 2 || cssH < 2) return;
+    const bw = Math.max(1, Math.round(cssW * dpr));
+    const bh = Math.max(1, Math.round(cssH * dpr));
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
@@ -153,6 +174,105 @@
       ctx.fillStyle = cg;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill();
       ring(cx, cy, r * 1.18, 0, TAU, 1.6, p.glow + "0.35)", 0);
+      if (AV.muted) {
+        ring(cx, cy, r * 1.30, Math.PI * 0.62, Math.PI * 0.88, 3,
+             "rgba(255,92,122,0.85)", 6);
+      }
+      return;
+    }
+
+    // ── ORBIT mode: a tiny pulsing sun with satellites on tilted rings.
+    //    Pure motion, no face — reads as "system activity at a glance".
+    if (AV.style === "orbit") {
+      const p = palette();
+      const amp = AV.state === "LISTENING" ? dispLevel :
+                  AV.state === "SPEAKING"  ? Math.max(dispLevel, AV.viseme.level) : 0;
+      const spin = AV.state === "THINKING" ? t * 2.2 : t * 0.5;
+      // centre
+      const coreR = R * (0.16 + amp * 0.05 + 0.012 * Math.sin(t * 2.4));
+      const cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 2.2);
+      cg.addColorStop(0, p.glow + "0.9)");
+      cg.addColorStop(0.5, p.glow + "0.25)");
+      cg.addColorStop(1, p.glow + "0)");
+      ctx.fillStyle = cg;
+      ctx.beginPath(); ctx.arc(cx, cy, coreR * 2.2, 0, TAU); ctx.fill();
+      // three tilted orbit rings with satellites
+      const orbits = [
+        { r: 0.52, tilt: -0.45, speed: 1.0,  sats: 2 },
+        { r: 0.78, tilt: 0.30,  speed: -0.6, sats: 3 },
+        { r: 1.02, tilt: -0.12, speed: 0.35, sats: 1 },
+      ];
+      for (const o of orbits) {
+        const rr = R * o.r;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(o.tilt);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rr, rr * 0.36, 0, 0, TAU);
+        ctx.lineWidth = 1.1;
+        ctx.strokeStyle = p.glow + "0.28)";
+        ctx.stroke();
+        for (let s = 0; s < o.sats; s++) {
+          const a = spin * o.speed + (s / o.sats) * TAU;
+          const sx = Math.cos(a) * rr, sy = Math.sin(a) * rr * 0.36;
+          const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, 5.5);
+          sg.addColorStop(0, "#ffffff");
+          sg.addColorStop(0.4, p.glow + "0.95)");
+          sg.addColorStop(1, p.glow + "0)");
+          ctx.fillStyle = sg;
+          ctx.beginPath(); ctx.arc(sx, sy, 5.5, 0, TAU); ctx.fill();
+        }
+        ctx.restore();
+      }
+      if (AV.muted) {
+        ring(cx, cy, R * 1.14, Math.PI * 0.62, Math.PI * 0.88, 3,
+             "rgba(255,92,122,0.85)", 6);
+      }
+      return;
+    }
+
+    // ── HELIX mode: a rotating double helix of dots with rungs — the
+    //    "genome of thoughts". Twist tightens with the audio level.
+    if (AV.style === "helix") {
+      const p = palette();
+      const amp = AV.state === "LISTENING" ? dispLevel :
+                  AV.state === "SPEAKING"  ? Math.max(dispLevel, AV.viseme.level) : 0;
+      const spin = AV.state === "THINKING" ? t * 2.6 : t * 0.9;
+      const H2 = R * 2.1;
+      const N = 26;
+      const twist = 2.6 + amp * 2.2;          // radians over the strand
+      const pts = [[], []];
+      for (let s = 0; s < 2; s++) {
+        for (let i = 0; i < N; i++) {
+          const f = i / (N - 1);              // 0..1 along the strand
+          const y = cy - H2 / 2 + f * H2;
+          const a = spin + f * twist * Math.PI + s * Math.PI;
+          const depth = 0.5 + 0.5 * Math.sin(a);      // -1..1 → fake z
+          const x = cx + Math.cos(a) * R * 0.52;
+          pts[s].push({ x, y, depth });
+        }
+      }
+      // rungs first (behind the dots)
+      ctx.lineWidth = 1;
+      for (let i = 0; i < N; i += 2) {
+        const a1 = pts[0][i], b1 = pts[1][i];
+        const al = 0.10 + 0.25 * (a1.depth + b1.depth) / 2;
+        ctx.strokeStyle = p.glow + al.toFixed(3) + ")";
+        ctx.beginPath(); ctx.moveTo(a1.x, a1.y); ctx.lineTo(b1.x, b1.y); ctx.stroke();
+      }
+      // dots — depth sorts size and alpha, giving real parallax feel
+      for (let s = 0; s < 2; s++) {
+        for (const q of pts[s]) {
+          const d = (q.depth + 1) / 2;        // 0 back .. 1 front
+          const rr = 1.4 + d * 2.4 + amp * 1.6;
+          ctx.fillStyle = p.glow + (0.18 + 0.72 * d).toFixed(3) + ")";
+          ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, TAU); ctx.fill();
+        }
+      }
+      if (AV.muted) {
+        ring(cx, cy, R * 1.16, Math.PI * 0.62, Math.PI * 0.88, 3,
+             "rgba(255,92,122,0.85)", 6);
+      }
       return;
     }
 
@@ -306,15 +426,28 @@
     ctx.globalAlpha = 1;
   }
 
-  // ── loop (30 fps cap, pauses when hidden) ─────────────────────────────
+  // ── loop (adaptive frame budget, pauses when hidden) ──────────────────
+  // Full rate only while JARVIS is actually working or sound is coming in;
+  // a calm 15 fps when it is merely idling, and a slow drift for reduced
+  // motion. The animation clock still advances in real time, so nothing
+  // changes speed — a low-end PC just draws fewer frames.
+  const mqReduce = window.matchMedia
+    ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  function fpsCap() {
+    if (mqReduce && mqReduce.matches) return 8;
+    const loud = Math.max(dispLevel, AV.viseme.level) > 0.05;
+    if (AV.state === "THINKING" || AV.state === "SPEAKING" || loud) return 30;
+    return 15;
+  }
+
   function frame(now) {
     requestAnimationFrame(frame);
     if (!running || !pageVisible) return;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now; t += dt;
 
-    // expressions expire
-    if (AV.expression && t > AV.exprUntil) AV.expression = null;
+    // expressions expire (on this module's clock)
+    if (AV.expression && t > exprUntilT) AV.expression = null;
 
     // blink timer
     blinkT += dt;
@@ -339,8 +472,22 @@
     dispOpen  = ease(dispOpen, AV.viseme.openness, dt * 14);
     dispWide  = ease(dispWide, AV.viseme.width, dt * 14);
 
+    // voice-reactive room glow: the ambient core behind the face breathes
+    // with the actual mic/voice level, and its two lobes ride the viseme
+    // channels — tall lobe with jaw openness, wide lobe with mouth width.
+    // The vars live on the stage so the HUD (VU meter, halo, readouts) reads
+    // the same numbers without any extra bookkeeping.
+    const varHost = document.getElementById("faceStage") ||
+                    document.getElementById("hudCoreGlow");
+    if (varHost) {
+      const lv = Math.max(dispLevel, AV.viseme.level);
+      varHost.style.setProperty("--voice", lv.toFixed(3));
+      varHost.style.setProperty("--open", dispOpen.toFixed(3));
+      varHost.style.setProperty("--wide", dispWide.toFixed(3));
+    }
+
     acc += dt;
-    if (acc >= 1 / 30) { acc = 0; tickVisemes(t); render(); }
+    if (acc >= 1 / fpsCap()) { acc = 0; tickVisemes(t); render(); }
   }
   requestAnimationFrame(frame);
 
@@ -352,4 +499,10 @@
   window.addEventListener("blur",  () => { /* keep last frame; still cheap */ });
 
   AV.setPaused = function (p) { running = !p; last = performance.now(); };
+
+  // Show/hide without tearing down the mode (the settings toggle used to only
+  // affect the 3D avatar — the 2D face ignored it entirely).
+  AV.setVisible = function (v) {
+    canvas.style.visibility = v ? "" : "hidden";
+  };
 })();
