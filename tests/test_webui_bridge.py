@@ -341,6 +341,98 @@ class TestSanitizers(unittest.TestCase):
         self.assertEqual(rows[1]["model"], "")
 
 
+class TestSelfTrainingBridge(unittest.TestCase):
+    """The self-training surface: what the HUD reads, and taking it back.
+
+    Nothing here touches the real ledger, the real config or the network — the
+    ledger path is redirected and the model call is stubbed, so a round is
+    instant and offline.
+    """
+
+    def setUp(self):
+        import tempfile
+        from core import self_training as st
+        self.st = st
+        self.ui = _fresh_ui()
+        self.api = self.ui._api
+        webui._PUMP._q.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        for target, attr, value in (
+            (st, "STATE_PATH", Path(self._tmp.name) / "self_training.json"),
+        ):
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self._state = st._STATE
+        st._STATE = None
+        self.addCleanup(lambda: setattr(st, "_STATE", self._state))
+
+    def tearDown(self):
+        webui._PUMP._q.clear()
+
+    def test_training_get_is_jsonable_and_complete(self):
+        snap = self.api.training_get()
+        json.dumps(snap)
+        for key in ("enabled", "intensity", "competency", "drills",
+                    "drill_count", "cycles", "learned", "rounds_left"):
+            self.assertIn(key, snap)
+        self.assertIsInstance(snap["drills"], list)
+        self.assertIsInstance(snap["drill_count"], int)
+
+    def test_settings_expose_both_levers(self):
+        d = self.api.get_settings()
+        self.assertIn("self_training", d)
+        self.assertIn("training_intensity", d)
+
+    def test_save_setting_roundtrips_the_switch_and_intensity(self):
+        from memory.config_manager import (get_self_training,
+                                           get_training_intensity)
+        with _ConfigGuard():
+            try:
+                self.assertTrue(self.api.save_setting("self_training", False)["ok"])
+                self.assertIs(get_self_training(), False)
+                self.assertTrue(self.api.save_setting("training_intensity", "focused")["ok"])
+                self.assertEqual(get_training_intensity(), "focused")
+                # junk intensity falls back instead of being stored
+                self.api.save_setting("training_intensity", "ludicrous")
+                self.assertEqual(get_training_intensity(), "balanced")
+            finally:
+                self.api.save_setting("self_training", True)
+                self.api.save_setting("training_intensity", "balanced")
+
+    def test_save_setting_pushes_the_new_state_to_the_hud(self):
+        with _ConfigGuard():
+            try:
+                self.api.save_setting("self_training", False)
+            finally:
+                self.api.save_setting("self_training", True)
+        phases = [p.get("phase") for n, p in webui._PUMP._q if n == "training"]
+        self.assertIn("changed", phases)
+
+    def test_run_starts_a_round_off_thread_and_reports_by_event(self):
+        report = {"ok": True, "capability": "screen", "learned": 1}
+        with mock.patch.object(self.st, "run_cycle", return_value=report) as rc:
+            r = self.api.training_run(True)
+            self.assertTrue(r["started"])
+            for _ in range(40):
+                if any(n == "training" and p.get("phase") == "done"
+                       for n, p in webui._PUMP._q):
+                    break
+                threading.Event().wait(0.05)
+        rc.assert_called_once_with("manual", force=True)
+        done = [p for n, p in webui._PUMP._q if n == "training" and p.get("phase") == "done"]
+        self.assertTrue(done)
+        self.assertEqual(done[-1]["report"]["learned"], 1)
+        self.assertIsInstance(done[-1]["state"], dict)
+
+    def test_forget_and_reset_are_safe_with_nothing_stored(self):
+        self.assertTrue(self.api.training_forget("nope")["ok"] is False)
+        self.assertTrue(self.api.training_forget_all()["ok"])
+        self.assertTrue(self.api.training_reset()["ok"])
+        self.assertEqual(self.api.training_get()["drills"], [])
+
+
 class TestCoreToUIPush(unittest.TestCase):
     def setUp(self):
         self.ui = _fresh_ui()
@@ -374,6 +466,12 @@ class TestCoreToUIPush(unittest.TestCase):
         self.ui.set_audio_level(0.5)
         self.ui.set_audio_level("bad")
         self.ui.set_audio_level(None)
+
+    def test_push_training_pushes_and_never_raises(self):
+        self.ui.push_training({"phase": "running"})
+        self.assertIn("training", [n for n, _ in webui._PUMP._q])
+        for junk in (None, "x", 5, []):
+            self.ui.push_training(junk)
 
 
 if __name__ == "__main__":

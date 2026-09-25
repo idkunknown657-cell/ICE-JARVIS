@@ -2,6 +2,185 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — Self-training: JARVIS practises while you are quiet
+
+Everything else learns *from the user*. This learns from what JARVIS actually
+did, which is the difference between an assistant that waits to be corrected and
+one that stops repeating a mistake on its own.
+
+### Practice, not just reflection (`actions/pc_drills.py`)
+- New `training_run` tool the assistant can call **on itself**: one passive,
+  read-only drill on the live screen — FIND a described element, POINT the
+  mouse at it (never a click), READ the screen back. Its pass or fail feeds the
+  same competency ledger, so the reflection cycle now has fresh, deliberate
+  evidence instead of only whatever real usage happened to leave behind
+- Gated like every other action: the PC-control master switch, the autonomy
+  policy table (passive drills are free — pinned by a test so the tool and the
+  HUD can never drift), and the same quiet-time + hourly throttle as idle
+  rounds. Power (did the drill run?) and aim (did the aim land?) are scored
+  separately, so an off switch is never recorded as a failed aim
+- Honest refusals: a drill that is not due says the schedule refused, a drill
+  with no target says what it needs, and a miss is reported as a miss — a fake
+  success would poison the very evidence the loop runs on
+- The system prompt gains a `{training_rules}` block generated from the same
+  config the tool enforces, telling the model when it may ask for a drill and
+  that the throttle's refusal is the schedule working, not an error to retry
+
+### The loop (`core/self_training.py`)
+- **Observe** — a competency ledger (pc control, screen reading, typing, tool
+  use, planning, error recovery, memory, conversation) fed by the control log:
+  every click, move, drag, find and type that any module performs reports its own
+  verdict, and verdicts we cannot read are ignored rather than guessed at
+- **Diagnose** — the weakest capability *with real evidence* (two attempts
+  minimum) and its most recent verbatim failures; a single hiccup is not enough
+  to earn a drill round
+- **Drill** — one model call writes at most three "next time this happens, do
+  exactly this" rules for those failures. A rule that restates something already
+  believed is dropped mechanically (the same near-duplicate check the memory
+  extractor uses), so an empty round is possible and is reported as empty
+- **Remember** — surviving rules are stored as ordinary memory (`training`, one
+  entry per drill) and logged in the reversible improvements log; the same text
+  rides into the live session prompt as "what you are currently practising"
+- Bounded and honest: rounds at most 2/hour by default, only after the user has
+  been quiet, never during speech or a task; memory off stops it completely; the
+  drills are model-written and labelled ``self-scored`` everywhere they appear
+- Reversible: forget one rule, forget all, or clear the ledger — the audit log
+  stays because it records what happened, not what is set
+
+### Idle driver (`main.py`)
+- The learning loop now also asks `cycle_due()` whether a quiet round is owed,
+  and pushes `running` → `done` to the HUD so a round is visible while it runs
+- Self-training is off in exactly one situation: the user is talking
+
+### HUD (web UI)
+- **Self-training card on Home**: is it practising right now, what it is
+  practising on, and real win-rate bars per capability (weakest first, with the
+  trend so a stuck bar can be told apart from a climbing one), the newest rule it
+  wrote for itself, and rounds/rules/hour-budget counters
+- **Settings → Self-training**: the switch, how hard it practises (gentle /
+  balanced / focused), what it has done so far, its playbook with one-click
+  forget per rule, "practise now", and one honest paragraph on what it cannot
+  touch
+- While a round runs the ambience leans green through the same state hook the
+  rest of the interface already uses
+
+### Bugs found and fixed on the way
+- **The narrow window lost half the HUD.** Below 980px the whole home side
+  column was `display:none` — status tiles, control feed, activity list and the
+  new card with it. It now stacks under the face and the home view scrolls
+- **A switch could save the opposite of what you meant.** Settings pages were
+  rendered from a snapshot that was only fetched when Settings was first opened,
+  so a page re-rendered a moment later (a pushed event, or leaving and coming
+  back) redrew the *old* value; clicking that stale switch wrote the opposite
+  setting. The local snapshot now follows every save, and the open page repaints
+  from the value that was just written
+- The training snapshot shipped `drills` as both a list and a count, so the
+  count silently overwrote the list on the way to the tab — caught by a test that
+  pins both names
+
+## Unreleased — Avatar modes no longer blind the face
+
+Changing the avatar mode to ORBIT or HELIX looked like it destroyed the whole
+UI: the stage went blank and nothing reacted to the voice any more.
+
+- **Root cause** — the avatar canvas sized itself from its own `width`/`height`
+  *attributes* (`max-width`/`max-height` around an intrinsically sized canvas).
+  The renderer rewrites those attributes to the current CSS box, so the moment
+  the stage had no box the renderer wrote `0x0` into them. The element then
+  collapsed, which kept the next measurement at zero: the face went permanently
+  blank and dead. The home view is `display:none` whenever you are in Settings
+  — exactly where the mode pills live — so simply opening Settings did it, and
+  the mode switch just made it obvious.
+- The canvas box is now pinned to the stage (`position:absolute; inset:0`), so
+  it can never be sized by the very attributes it is writing
+- The render loop refuses to write a zero-size backing store, keeps the last
+  frame when there is no box, and self-heals the store on the next frame
+- Mode crossfades are failure-safe: a thrown swap, a queued click mid-fade or a
+  frozen rAF can no longer leave the stage faded out at opacity 0
+
+### Fresher HUD
+- Bottom-corner readouts: the live avatar mode and screen-awareness state
+- A seven-bar voice VU meter under the avatar; one `--voice` variable written
+  once per frame drives every bar, the halo and the viseme lobes — no per-bar JS
+- The avatar now drops to a calm 15 fps while idle (8 fps under reduced motion)
+  and only runs full rate while it is thinking, speaking or hearing you
+
+## Unreleased — Computer-use engine, autonomy and control HUD
+
+The controller was the weak link, so it was repaired before anything was built
+on top of it.
+
+### One control engine, one idea of where things are (`core/pc_engine.py`)
+- Grounding is a cascade — last-found context ("there"), then the Windows
+  accessibility tree (exact rects, no model call, 1.2 s cache), then vision in
+  two stages (coarse grid-labelled capture → ×3 crop of a ±70 px window), and
+  finally nothing at all: a target that cannot be found is never clicked
+- DPI and multi-monitor correctness: the process is declared per-monitor DPI
+  aware, every capture's scale is measured rather than assumed, absolute moves
+  normalise over the virtual desktop, and the image→screen origin defaults to
+  the virtual desktop's own top-left (a monitor left of or above the primary
+  used to be offset); captures use Pillow directly because pyautogui's
+  screenshot crops a primary-screen grab and so mis-reads second monitors
+- Typing that proves itself: find and click the field → clear → type (clipboard
+  paste for long or non-Latin text, keystrokes otherwise) → read the field back
+  (UIA value, else select-all/copy with the user's clipboard restored) → on a
+  mismatch clear and retry once by the other method → otherwise report exactly
+  what the field actually contains
+- Verification is local first: a 48×27 grayscale fingerprint decides "the screen
+  changed" in milliseconds, so the model is only consulted when nothing moved
+- Error-state precision: an empty field, an unreadable field, a click that
+  physically happened but changed nothing, and a target that does not exist are
+  four different answers — not one "done"
+
+### One tool, one call (`actions/pc_agent.py`)
+- A deterministic intent router turns ordinary phrasing into concrete primitives
+  with no model call at all — "move the arrow to Settings", "click that
+  button", "type hello into the search box", "open YouTube", "scroll down a
+  bit", "press ctrl+s", "focus the Discord window", "search youtube for lofi"
+- `steps` runs a whole ordered sequence in one call, and a compound instruction
+  ("open YouTube and play music") is split into its actions locally, so a
+  multi-step request no longer costs a round trip per step
+- Recovery instead of repetition: a failed step re-looks with a fresh tree, then
+  tries the other route (keyboard for mouse, unnamed field for a named one), and
+  never repeats an identical dead click
+- "there" / "it" / "that one" resolve from the last thing actually found, and the
+  memory is dropped the moment the foreground window changes
+- Smart method selection: a bare brand name ("open YouTube") opens the site when
+  the shell and the app launcher both decline; a short non-brand name is looked
+  for as a real control in the current window before anything is launched
+
+### Autonomy with real boundaries (`core/autonomy.py`)
+- A policy table answers classify(intent, asked_by_user) → free / ask-if-unasked
+  / always-ask. Browsing, searching, watching, reading, clicking, typing,
+  scrolling, opening apps and harmless organisation are free — no question, ever.
+  Money, permanent deletion, power, security and installs always ask; messages
+  and posts are free when the user asked and never when autonomy invented them
+- Six levers (PC control, autonomous, sight, proactive, Discord, voice) read live,
+  switchable by voice ("take over my PC", "give me back control") or on the HUD;
+  switching control off cancels the running step immediately rather than after it
+- Autonomous idle uses the existing proactive loop plus an `IdleGovernor` — a
+  grace period, a cooldown and a priority ladder that ends in "do nothing at
+  all", so being handed the PC does not mean a moving mouse on an empty screen
+- The prompt's boundary list is generated from the same table the tools enforce,
+  so the words and the behaviour cannot drift apart
+
+### Discord, properly (`actions/discord_control.py`)
+- FOCUS → QUICK SWITCHER → MESSAGE BOX → TYPE → READ BACK → SEND → VERIFY: the
+  conversation is selected through Discord's own quick switcher, the text is
+  confirmed present before Enter, and the box being empty afterwards is the
+  proof it sent. The recipient is never guessed, and autonomous mode cannot
+  message anyone unless the user has explicitly allowed it
+
+### Control HUD (web UI)
+- An autonomy rail on Home: six live switches plus a TAKE OVER / STOP button,
+  mirrored by an AUTOPILOT chip in the titlebar
+- A live control feed showing every step as it happens, with the located
+  coordinates and how each one was verified, and a footer naming the foreground
+  window, monitor count and whether the accessibility tree is answering
+- PC Control settings rewritten: the real levers, honest copy (the old "Verify
+  clicks" label claimed it asked for confirmation before every click — it never
+  did), a what-always-waits-for-you list, and one-tap tests
+
 ## Unreleased — Trading / market analysis module
 
 ### Market data with provenance (§1/§7/§8)

@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-430%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-880%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
@@ -101,6 +101,7 @@ ICE is a full desktop AI assistant — conversational first, capable underneath.
 | **Mouse control** | Moves and clicks the pointer with pixel accuracy |
 | **Screenshots** | Captures the screen whenever you ask |
 | **Desktop shortcut** | Creates an **ICE** icon on your Desktop with one request — it launches in the background, no console window |
+| **Self-training** | Keeps score of how its own clicks, keys and reads land, then practises the weakest one while you are quiet |
 | **Memory** | Remembers what matters locally, across sessions |
 | **Privacy** | Keys, memory and data stay on your machine — nothing leaves your PC |
 
@@ -110,6 +111,35 @@ whether that's opening an app, finding something online, or operating the
 computer for you.
 
 ---
+
+## 🎓 Self-training — it practises while you are quiet
+
+Most assistants only learn when you correct them. ICE also learns from what it
+*did*: every click, keystroke and screen reading reports whether it actually
+worked, which builds a private score for each capability (PC control, screen
+reading, typing, tool use, planning, error recovery). After you have been quiet
+for a while it takes the worst one, reads its own recent failures and writes
+itself a few concrete rules — *"when the target has no name, walk the window with
+`Tab` and read the focused element back before clicking"* — then uses those rules
+in the next conversation.
+
+What it can and cannot do:
+
+- it can only change **what JARVIS believes** — nothing else. No settings, no
+  API keys, no permissions, no files, and it never drives the mouse or keyboard
+  by itself;
+- rounds are bounded (2 per hour by default, gentle/balanced/focused), run only
+  after you have been quiet, and stop the moment you speak — or entirely when
+  **memory is switched off**;
+- besides reading its own history it can **practise live**: a passive, read-only
+  drill that finds a described element on screen and moves the pointer onto it
+  — never a click — with the pass or fail feeding the same score. The drill
+  goes through the same autonomy gate and throttle as everything else;
+- every rule is written by the model itself, so the interface labels them
+  **self-written**, and each one can be forgotten in a click on
+  **⚙ Settings → Self-training**;
+- the ledger lives in `config/self_training.json` (git-ignored, never uploaded)
+  and the audit trail in `config/improvements.json`, both local.
 
 ## 🔑 API keys
 
@@ -147,7 +177,7 @@ python -m unittest discover -s tests -p "test_[a-u]*.py"
 python -m unittest discover -s tests -p "test_[v-z]*.py"
 ```
 
-Both halves pass — 433 tests total.
+Both halves pass — 880 tests total.
 
 ---
 
@@ -168,7 +198,7 @@ ICE-JARVIS/
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
 ├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
-└── tests/             # 433 unit tests
+└── tests/             # 880 unit tests
 ```
 
 ---

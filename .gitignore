@@ -30,6 +30,9 @@ memory/*.db
 config/improvements.json
 config/ui_strategies.json
 config/usage_counts.json
+# The self-training ledger: how well each capability has actually performed on
+# this machine, plus the rules it wrote itself. Local behaviour, local file.
+config/self_training.json
 
 # Trading journal, paper account, alerts, and risk settings — personal
 # financial data (positions, P/L, account size, limits). Never repo content.

@@ -63,6 +63,24 @@ def event(name: str, **fields) -> None:
                 fh.write(line + "\n")
     except Exception:
         pass
+    _train(str(name), fields)
+
+
+def _train(name: str, fields: dict) -> None:
+    """Every control decision is also training evidence.
+
+    core/self_training.py turns these verdicts into a per-capability record and
+    practises whatever is weakest. The call is one-way and optional on purpose:
+    logging must never depend on the trainer, so a missing module, a disabled
+    trainer or a broken ledger changes nothing here.
+    """
+    if not fields.get("verify"):
+        return
+    try:
+        from core import self_training
+        self_training.note_pc_event(str(name), fields)
+    except Exception:
+        pass
 
 
 def note_text(text: str) -> str:
