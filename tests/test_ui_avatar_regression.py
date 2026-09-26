@@ -107,6 +107,96 @@ class VoiceMeterTest(unittest.TestCase):
         self.assertEqual(len(thresholds), 7)
 
 
+class LivingMotionTest(unittest.TestCase):
+    """The core must look alive, and it must never be able to break itself.
+
+    The bug that cost an afternoon: spring("tilt") integrates MOTION.tilt AND
+    MOTION.tiltv, but the state object declared `vtilt`/`vpulse`. Undeclared
+    fields read `undefined`, `undefined += x` is NaN, NaN reached the canvas
+    radius and `createRadialGradient` threw every single frame — the whole
+    avatar froze. A single name mismatch is invisible in review and silent in
+    a browser, so the invariant is asserted instead: every channel a spring
+    integrates has BOTH its position and its velocity declared, the published
+    values are clamped near the centre, and the CSS vars the halo rides are
+    really published.
+    """
+
+    def _motion_fields(self):
+        js = _read(JS_AVATAR)
+        block = js[js.index("const MOTION = {"):]
+        block = block[:block.index("};\n")]
+        block = re.sub(r"//[^\n]*", "", block)          # comments hold prose
+        return js, set(re.findall(r"(\w+)\s*:", block))
+
+    def test_every_spring_channel_declares_position_and_velocity(self):
+        js, declared = self._motion_fields()
+        channels = set(re.findall(r'spring\("(\w+)"', js))
+        self.assertTrue(channels, "the motion driver stopped driving springs")
+        for ch in sorted(channels):
+            self.assertIn(ch, declared,
+                          "spring(%r) has no MOTION.%s to integrate" % (ch, ch))
+            self.assertIn(ch + "v", declared,
+                          "spring(%r) integrates MOTION.%sv; an undeclared "
+                          "velocity field is `undefined`, which becomes NaN and "
+                          "kills the frame" % (ch, ch))
+
+    def test_a_poisoned_channel_heals_instead_of_freezing_the_frame(self):
+        js = _read(JS_AVATAR)
+        body = js[js.index("function spring("):]
+        body = body[:body.index("\n  }\n")]
+        self.assertIn("!isFinite(MOTION[ch])", body)
+        self.assertIn('!isFinite(MOTION[ch + "v"])', body)
+        # the sanitising must happen BEFORE anything integrates
+        self.assertLess(body.index("!isFinite(MOTION[ch])"),
+                        body.index("MOTION[ch + \"v\"] +="))
+
+    def test_published_motion_stays_near_the_centre(self):
+        js = _read(JS_AVATAR)
+        for field, limit in (("cx", 0.12), ("cy", 0.12), ("cz", 0.12), ("rot", 0.12)):
+            m = re.search(
+                r"MOTION\.%s = Math\.max\((-?[\d.]+), Math\.min\((-?[\d.]+)"
+                % field, js)
+            self.assertIsNotNone(
+                m, "MOTION.%s is published unclamped — the core could leave the "
+                   "centre" % field)
+            lo, hi = float(m.group(1)), float(m.group(2))
+            self.assertLessEqual(max(abs(lo), abs(hi)), limit,
+                                 "MOTION.%s clamp is wider than %.0f%% of the "
+                                 "core radius" % (field, limit * 100))
+        m = re.search(r"MOTION\.swell = 1 \+ Math\.max\((-?[\d.]+), "
+                      r"Math\.min\((-?[\d.]+)", js)
+        self.assertIsNotNone(m, "the scale swell is no longer bounded")
+        self.assertGreaterEqual(float(m.group(1)), -0.05)
+        self.assertLessEqual(float(m.group(2)), 0.15)
+
+    def test_motion_is_published_to_the_hud_as_one_body(self):
+        js = _read(JS_AVATAR)
+        for var in ("--mx", "--my", "--mz", "--mrot", "--mswell"):
+            self.assertIn('setProperty("%s"' % var, js,
+                          "the HUD halo no longer rides %s" % var)
+        # a non-finite value must never be written into a CSS variable
+        for var in ("--mx", "--my", "--mz", "--mrot", "--mswell"):
+            line = [l for l in js.splitlines() if 'setProperty("%s"' % var in l]
+            self.assertTrue(line, "%s vanished" % var)
+            self.assertIn("isFinite", line[0],
+                          "%s can be published as NaN" % var)
+
+    def test_halo_motion_composes_with_centring_instead_of_overwriting_it(self):
+        css = _read(CSS)
+        block = css_rule(css, ".hud-core-glow")
+        self.assertIn("translate: calc(-50%", block,
+                      "the halo must keep its centring inside translate")
+        self.assertIn("--mrot", block)
+        self.assertIn("--mswell", block)
+        self.assertNotIn("transform:", block,
+                         "a transform here would overwrite the centring")
+        # and the core underneath still centres itself with transform, because
+        # its breathing keyframes animate transform and nothing else
+        core = css_rule(css, ".hud-core")
+        self.assertIn("transform: translate(-50%, -50%)", core)
+        self.assertIn("--mx", core)
+
+
 class BundleIsFreshTest(unittest.TestCase):
 
     def test_preview_bundle_was_rebuilt_after_the_frontend_changes(self):

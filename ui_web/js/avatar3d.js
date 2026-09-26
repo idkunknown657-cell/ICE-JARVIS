@@ -27,6 +27,21 @@
     quality:  { idle: 30, active: 60, pr: 2.0 },
   };
 
+  // ── living-motion helpers (the same feel as the 2D core) ────────────
+  // Layered incommensurate sines: smooth pseudo-noise that never repeats
+  // visibly and never jumps — the cheapest organic drift there is.
+  function drift3(t, a, b, phase) {
+    return 0.62 * Math.sin(t * a + phase) + 0.38 * Math.sin(t * b + phase * 1.7);
+  }
+  // Critically-damped spring step on a { p, v } channel: glides toward the
+  // target, never overshoots into oscillation, never snaps.
+  function spring3(ch, target, dt, k, d) {
+    ch.v += (target - ch.p) * k * dt;
+    ch.v *= Math.max(0, 1 - d * dt);
+    ch.p += ch.v * dt;
+    return ch.p;
+  }
+
   function Jarvis3D() {
     this.mount = null;
     this.renderer = null;
@@ -63,6 +78,20 @@
     this.particles = null;          // hologram dust motes
     this.glow = null;               // accent ground glow
     this.gaze = { x: 0, y: 0, tx: 0, ty: 0, nextAt: 2.0 };
+
+    // living presence: the same layered-sine + spring drift the 2D core
+    // uses — she breathes, sways, leans and pulses with her voice. Every
+    // channel starts at rest and is integrated in _tick(), so even the
+    // first frame after init() can never teleport.
+    this._motion = {
+      x:     { p: 0, v: 0 },   // gentle left/right sway
+      y:     { p: 0, v: 0 },   // slight vertical bob
+      z:     { p: 0, v: 0 },   // subtle toward/away lean
+      rot:   { p: 0, v: 0 },   // small body tilt (radians)
+      pulse: { p: 0, v: 0 },   // voice-driven scale swell
+    };
+    this._energy = 0;
+    this._energySlow = 0;
 
     this.cfg = {
       size: 1.0, x: 0, y: 0,
@@ -614,10 +643,60 @@
     // expressions expire
     if (this.expression && t > this.exprUntil) this._applyFace("normal");
 
-    // breathing + weight shift (always alive)
+    // ── living presence: drift, sway, lean and voice-pulse ───────────────
+    // Layered sines give the target, springs give the glide — she can never
+    // jerk or teleport, and every state change blends instead of cutting.
+    // Speech intensity scales the amplitudes: quiet voice ≈ still, excited
+    // speech visibly (but gently) moves more.
+    const lvl3 = Math.max(this.level, this.viseme.level);
+    this._energy += (Math.min(1, lvl3 * 1.15) - this._energy) * Math.min(1, step * 3.2);
+    this._energySlow += (this._energy - this._energySlow) * Math.min(1, step * 1.4);
+    const en = this._energy, enSlow = this._energySlow;
+    let tx, ty, tz, trot, tpulse;
+    if (this.state === "SPEAKING") {
+      // speech drives everything, scaled by loudness; a slow talking rhythm
+      // rides on top so she nods while she talks
+      tx   = drift3(t, 0.9, 0.41, 0.0) * (0.018 + en * 0.040);
+      ty   = drift3(t, 0.7, 1.3,  2.1) * (0.012 + en * 0.026)
+           + Math.sin(t * 3.1) * en * 0.008;
+      tz   = drift3(t, 0.5, 0.33, 4.2) * (0.012 + en * 0.034);
+      trot = drift3(t, 0.6, 0.29, 1.3) * (0.008 + enSlow * 0.022);
+      tpulse = 0.008 + en * 0.042;
+    } else if (this.state === "THINKING") {
+      // slow intelligent ambient: long, unhurried wanders
+      tx   = drift3(t, 0.33, 0.13, 2.6) * 0.020;
+      ty   = drift3(t, 0.27, 0.11, 4.9) * 0.012;
+      tz   = drift3(t, 0.21, 0.09, 0.7) * 0.014;
+      trot = drift3(t, 0.3, 0.12, 5.5) * 0.016;
+      tpulse = 0.003;
+    } else if (this.state === "LISTENING") {
+      // attentive: nearly still, a slow lean toward "you"
+      tx   = drift3(t, 0.5, 0.23, 5.0) * 0.010;
+      ty   = drift3(t, 0.4, 0.19, 1.8) * 0.007 + 0.003;
+      tz   = 0.005 + this.level * 0.010;
+      trot = drift3(t, 0.4, 0.17, 3.3) * 0.007;
+      tpulse = 0.004 + this.level * 0.014;
+    } else {
+      // idle / executing / sleeping: soft breathing and a lazy orbit
+      tx   = drift3(t, 0.4, 0.17, 1.1) * 0.012;
+      ty   = drift3(t, 0.31, 0.14, 3.8) * 0.009;
+      tz   = drift3(t, 0.24, 0.10, 2.2) * 0.009;
+      trot = drift3(t, 0.35, 0.15, 0.4) * 0.010;
+      tpulse = 0.003 + 0.003 * Math.sin(t * 0.9);
+    }
+    const mx     = spring3(this._motion.x, tx, step, 2.2, 3.4);
+    const my     = spring3(this._motion.y, ty, step, 2.4, 3.6);
+    const mz     = spring3(this._motion.z, tz, step, 1.8, 3.0);
+    const mrot   = Math.max(-0.05, Math.min(0.05, spring3(this._motion.rot, trot, step, 1.6, 2.6)));
+    const mpulse = Math.max(-0.02, Math.min(0.07, spring3(this._motion.pulse, tpulse, step, 6.0, 5.0)));
+
+    // breathing + weight shift (always alive), now carrying the voice swell
+    // and the drift: x/z glide, the whole body breathes, rotation tilts her
     const breathe = Math.sin(t * 1.25) * 0.012 * anim;
-    this.body.scale.set(1 + breathe * 0.4, 1 + breathe, 1);
-    this.body.rotation.z = Math.sin(t * 0.45) * 0.012 * anim;
+    this.body.scale.set(1 + breathe * 0.4 + mpulse, 1 + breathe + mpulse, 1 + breathe * 0.4 + mpulse);
+    this.body.rotation.z = Math.sin(t * 0.45) * 0.012 * anim + mrot;
+    this.body.position.x = mx;
+    this.body.position.z = mz * 0.8;
 
     // head pose per state
     const head = this.head;
@@ -755,12 +834,10 @@
       this.mouth.scale.x += (1 - this.mouth.scale.x) * Math.min(1, step * 8);
     }
 
-    // mic level → tiny body emphasis while listening
-    if (this.state === "LISTENING") {
-      this.body.position.y = this.level * 0.03 * anim;
-    } else {
-      this.body.position.y *= 0.9;
-    }
+    // mic level → tiny body emphasis while listening (layered ON TOP of the
+    // living drift, which owns x/z — the two never fight over an axis)
+    const levelLift = this.state === "LISTENING" ? this.level * 0.03 * anim : 0;
+    this.body.position.y = my * 0.5 + levelLift;
 
     this.renderer.render(this.scene, this.camera);
   };
