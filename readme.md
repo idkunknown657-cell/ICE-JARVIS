@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-880%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-917%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
@@ -101,6 +101,7 @@ ICE is a full desktop AI assistant — conversational first, capable underneath.
 | **Mouse control** | Moves and clicks the pointer with pixel accuracy |
 | **Screenshots** | Captures the screen whenever you ask |
 | **Desktop shortcut** | Creates an **ICE** icon on your Desktop with one request — it launches in the background, no console window |
+| **Microphone diagnostics** | Measures real input (not just "device exists"), checks Windows privacy gates, diagnoses the full chain — device → permission → capture → signal — with plain-language fixes |
 | **Self-training** | Keeps score of how its own clicks, keys and reads land, then practises the weakest one while you are quiet |
 | **Memory** | Remembers what matters locally, across sessions |
 | **Privacy** | Keys, memory and data stay on your machine — nothing leaves your PC |
@@ -177,7 +178,7 @@ python -m unittest discover -s tests -p "test_[a-u]*.py"
 python -m unittest discover -s tests -p "test_[v-z]*.py"
 ```
 
-Both halves pass — 880 tests total.
+Both halves pass — 917 tests total.
 
 ---
 
@@ -198,7 +199,7 @@ ICE-JARVIS/
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
 ├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
-└── tests/             # 880 unit tests
+└── tests/             # 917 unit tests
 ```
 
 ---
@@ -211,6 +212,7 @@ ICE-JARVIS/
 | **Something failed at startup** | Normal mode hides the console on purpose — the full traceback is in `logs\jarvis.log` (setup errors: `logs\setup.log`). Run `start_debug.bat` to watch it live. |
 | **`python setup.py` crashes with a Unicode error** | Fixed — setup now forces UTF-8 output. Just up-to-date: `git pull`. |
 | **Voice doesn't respond / silent after one reply** | Mic tile on Home → unmute; Settings → Voice & Language → right input device. Voice replies depend on a working mic + speakers. |
+| **Microphone not heard on a desktop PC** | Settings → Voice & Language → **Test**. It measures real audio and names the failing link: Windows privacy gate, device held by another app, exclusive-mode format, or no signal. One-tap button opens Windows microphone permissions. |
 | **No speech output** | Settings → Voice & Language → choose another output voice; some voices need a restart. |
 | **Mouse click/arrow lands off-target** | Say *"move mouse to center"* then *"mouse position"* to recalibrate; scaled displays (125%/150%) are handled automatically. |
 | **Desktop shortcut not created** | OneDrive accounts redirect the Desktop — ICE now asks Windows for the real Desktop path, so `ICE.lnk` may appear under `OneDrive\Desktop`. |

@@ -307,5 +307,153 @@ class ReversibilityTest(Base):
         self.assertEqual(st.drills(), [])
 
 
+class PayoffTest(Base):
+    """VERIFY: a rule is judged by the outcomes that arrived after it was written.
+
+    The loop used to drill and remember without ever asking whether the drilling
+    worked, so the playbook could only grow. These tests pin the opposite: a
+    verdict needs new evidence, a rule that did not help is reported as such,
+    and a capability that stops moving is practised differently instead of
+    harder — including on the smarter model.
+    """
+
+    def _round(self, *rules):
+        with mock.patch.object(st, "gemini") as g:
+            g.as_json.return_value = _rules(*rules)
+            return st.run_cycle("idle"), g
+
+    def test_a_rule_is_measuring_until_there_is_evidence(self):
+        st.record_outcome("screen", False, "screen_ai.find: no match")
+        st.record_outcome("screen", True)
+        report, _ = self._round("check the window list before searching again")
+        self.assertEqual(report["learned"], 1)
+        # the round that wrote it cannot score it: nothing has happened since
+        self.assertEqual(report["checked"], [])
+        self.assertEqual(st.drills()[0]["verdict"], "measuring")
+        self.assertIsNone(st.drills()[0]["delta"])
+
+    def test_a_rule_that_improved_the_record_says_helped(self):
+        for _ in range(3):
+            st.record_outcome("screen", False, "screen_ai.find: no match")
+        self._round("check the window list before searching again")
+        # real evidence arrives after the rule was written, and it is better
+        for _ in range(5):
+            st.record_outcome("screen", True)
+        report, _ = self._round("a different rule this time round")
+        self.assertEqual(len(report["checked"]), 1)
+        check = report["checked"][0]
+        self.assertEqual(check["capability"], "screen")
+        self.assertEqual(check["verdict"], "helped")
+        self.assertGreater(check["delta"], 0)
+        self.assertEqual(check["attempts"], 5)
+        self.assertEqual(st.drills()[1]["verdict"], "helped")
+        self.assertEqual(st.stats()["helped"], 1)
+
+    def test_a_rule_that_changed_nothing_says_flat_not_helped(self):
+        for _ in range(4):
+            st.record_outcome("keyboard", False, "discord.send: box not found")
+        self._round("read the message box back before pressing Enter")
+        st.record_outcome("keyboard", False)          # same record, one new try
+        report, _ = self._round("try a different focus route")
+        self.assertEqual(report["checked"][0]["verdict"], "flat")
+        self.assertEqual(st.stats()["helped"], 0)
+        self.assertEqual(st.stats()["flat"], 1)
+
+    def test_a_regression_is_practised_before_a_stable_capability(self):
+        """Planning reads 75% and screen 62%, so a plain "lowest score wins"
+        rule would drill screen — but planning has just fallen off a cliff while
+        screen is only mediocre, and the fall is the thing still worth stopping."""
+        for ok in (True,) * 9 + (False,) * 3:      # planning: 75%, but −0.50 trend
+            st.record_outcome("planning", ok)
+        for ok in (1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1):
+            st.record_outcome("screen", bool(ok))  # screen: 62%, no real trend
+        rows = {r["capability"]: r for r in st.competency()}
+        self.assertGreater(rows["planning"]["score"], rows["screen"]["score"])
+        cap, _ = st._weakest(st._load())
+        self.assertEqual(cap, "planning")
+
+    def test_a_steady_capability_is_still_practised_first_when_it_is_worse(self):
+        """The regression penalty re-orders near-ties, it does not chase noise:
+        a genuinely worse record is still the one that gets drilled."""
+        for ok in (True,) * 4 + (False,) * 4:      # planning: 50%, falling slowly
+            st.record_outcome("planning", ok)
+        for ok in (1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1):
+            st.record_outcome("screen", bool(ok))  # screen: 62%, worse penalty-free
+        cap, _ = st._weakest(st._load())
+        self.assertEqual(cap, "planning")
+
+    def test_stalled_practice_is_drilled_differently_and_on_the_smarter_model(self):
+        for _ in range(4):
+            st.record_outcome("screen", False, "screen_ai.find: no match")
+        st._load()["stuck"] = {"screen": 1}      # one earlier round went nowhere
+        report, g = self._round("stop and ask before guessing at a control")
+        self.assertTrue(report["escalated"])
+        self.assertEqual(g.as_json.call_args.kwargs["tier"], st._ESCALATED_TIER)
+        prompt = g.as_json.call_args.args[0]
+        self.assertIn("HAS NOT MOVED", prompt)
+
+    def test_a_clean_capability_stays_on_the_cheap_model(self):
+        for _ in range(3):
+            st.record_outcome("screen", False, "screen_ai.find: no match")
+        report, g = self._round("check the window list before searching again")
+        self.assertFalse(report["escalated"])
+        self.assertNotEqual(g.as_json.call_args.kwargs["tier"], st._ESCALATED_TIER)
+
+    def test_a_round_that_writes_nothing_counts_as_stalled(self):
+        with mock.patch.object(st, "gemini") as g:
+            g.as_json.return_value = {"rules": []}
+            st.run_cycle("idle")
+        self.assertEqual(st.stats()["focus_stuck"], 1)
+        with mock.patch.object(st, "gemini") as g:
+            g.as_json.return_value = {"rules": []}
+            report = st.run_cycle("idle")
+        self.assertTrue(report["escalated"])
+
+    def test_the_digest_prefers_rules_that_proved_themselves(self):
+        for _ in range(3):
+            st.record_outcome("screen", False, "screen_ai.find: no match")
+        self._round("check the window list before searching again")
+        for _ in range(5):
+            st.record_outcome("screen", True)
+        self._round("switch to the keyboard route after two misses")  # scoring round
+        self.assertEqual(st.drills()[1]["verdict"], "helped")
+        # one proven rule and one still measuring, both for the same capability:
+        # the digest must lead with the one that has already paid off.
+        text = st.curriculum_digest(limit=1)
+        self.assertIn("check the window list", text)
+        self.assertNotIn("switch to the keyboard route", text)
+        self.assertIn("weakest", text)
+
+    def test_payoff_reports_what_the_playbook_is_worth(self):
+        for _ in range(3):
+            st.record_outcome("screen", False, "screen_ai.find: no match")
+        self._round("check the window list before searching again")
+        p = st.payoff()
+        self.assertEqual(p["total"], 1)
+        self.assertEqual(p["counts"]["measuring"], 1)
+        self.assertIn("helped", st.snapshot())
+        self.assertIsInstance(st.snapshot()["slipping"], list)
+
+    def test_verdicts_survive_a_reload_of_the_ledger(self):
+        for _ in range(3):
+            st.record_outcome("screen", False, "screen_ai.find: no match")
+        self._round("check the window list before searching again")
+        for _ in range(5):
+            st.record_outcome("screen", True)
+        report, _ = self._round("switch to the keyboard route after two misses")
+        self.assertEqual(report["checked"][0]["verdict"], "helped")
+        st.flush()
+        st._STATE = None                           # read it back from disk
+        self.assertEqual(st.drills()[1]["verdict"], "helped")
+        self.assertEqual(st.stats()["helped"], 1)
+
+    def test_a_corrupt_stuck_map_is_ignored_not_believed(self):
+        st._load()["stuck"] = {"screen": "lots", "keyboard": None}
+        st.flush()
+        st._STATE = None
+        self.assertEqual(st.stats()["focus_stuck"], 0)
+        self.assertTrue(st.snapshot())
+
+
 if __name__ == "__main__":
     unittest.main()

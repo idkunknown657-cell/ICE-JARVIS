@@ -9,20 +9,36 @@ WHY THIS EXISTS
     quiet: it watches what the assistant actually *did*, works out where it is
     weakest, and drills that weakness until the mistake stops repeating.
 
-THE LOOP — OBSERVE → DIAGNOSE → DRILL → REMEMBER
+THE LOOP — OBSERVE → DIAGNOSE → DRILL → REMEMBER → VERIFY
     1. OBSERVE   the competency ledger: per-capability attempts/wins, fed by the
                  control log (core/pc_log.py) and by record_outcome() calls from
                  anything that knows whether a step worked.
     2. DIAGNOSE  the weakest capability with real evidence behind it, plus that
-                 capability's most recent verbatim failures.
+                 capability's most recent verbatim failures. "Weakest" is not
+                 just the lowest win rate: a capability that reads 80% but has
+                 just fallen from 95% is more urgent than one that has sat at
+                 70% for a week, because the first is a regression it can still
+                 stop and the second is a limitation. A capability actively
+                 slipping therefore outranks a stable one with a similar score.
     3. DRILL     one model call writes at most three "next time this happens, do
                  exactly this" rules for those specific failures — not advice,
                  an instruction. Rules that merely restate something already
-                 believed are dropped mechanically (learning._similar).
+                 believed are dropped mechanically (learning._similar). A
+                 capability whose practice has stopped moving escalates to the
+                 smarter model and is told, in the prompt, that repeating the
+                 same habits is worthless.
     4. REMEMBER  surviving rules are stored as the user's own memory would be —
                  category "training", one entry per drill — and logged in the
                  reversible improvements log, so `forget` removes them and the
                  whole round is auditable.
+    5. VERIFY    every unmeasured rule is scored against the outcomes that
+                 arrived AFTER it was written: the capability's win rate now
+                 minus its win rate when the rule was written. That verdict
+                 (helped / flat / hurt) rides on the rule itself, so a playbook
+                 entry that never paid off is visible and can be forgotten,
+                 instead of accumulating forever on the strength of having once
+                 sounded plausible. A rule with no new evidence behind it is
+                 reported as "measuring" — never guessed at.
 
 WHAT IT CANNOT DO (hard boundaries, same brief as core/learning.py)
     * it never writes code, settings, permissions or credentials; the only two
@@ -115,6 +131,15 @@ INTENSITIES: dict[str, tuple[int, int]] = {
 }
 DEFAULT_INTENSITY = "balanced"
 
+# How much the win rate has to move before a rule is credited. Noise-sized
+# moves (±2%) are called flat, because a verdict is a claim about the world.
+_PAYOFF_BAND = 0.02
+
+# Escalation: a capability whose practice has stalled runs its next drill on the
+# smarter tier. Cheap rounds stay cheap; stalled ones buy reasoning power.
+_BASE_TIER = gemini.FAST
+_ESCALATED_TIER = gemini.SMART
+
 _MAX_RULES_PER_CYCLE = 3
 _MAX_RULE_CHARS = 220
 _MAX_SITUATION_CHARS = 160
@@ -195,6 +220,9 @@ def _blank() -> dict:
         "competency": {},
         "drills": [],
         "history": [],
+        # capability → consecutive rounds whose practice did not move the score.
+        # Only used to decide when to stop repeating itself (see _recheck).
+        "stuck": {},
     }
 
 
@@ -216,6 +244,11 @@ def _load() -> dict:
     for key in ("drills", "history"):
         if not isinstance(state.get(key), list):
             state[key] = []
+    if not isinstance(state.get("stuck"), dict):
+        state["stuck"] = {}
+    else:
+        state["stuck"] = {str(k): int(v) for k, v in state["stuck"].items()
+                          if isinstance(v, (int, float)) and not isinstance(v, bool)}
     _STATE = state
     return state
 
@@ -341,9 +374,34 @@ def note_pc_event(name: str, fields: dict | None = None) -> None:
 #  DIAGNOSE — where is it weakest, with evidence
 # ════════════════════════════════════════════════════════════════════════════
 
+def _effective(e: dict) -> float:
+    """Win rate, punished for a capability that is actively slipping.
+
+    A drop matters more than a level: something at 80% that just fell from 95%
+    is a regression the next round can still stop, while something parked at 70%
+    is a standing limitation. The penalty is half the drop and capped at it, so
+    this re-orders near-ties instead of chasing a noisy window — a capability
+    with a genuinely lower score is still practised first.
+    """
+    score = _score(e.get("recent") or [])
+    drop = max(0.0, -_trend(e))
+    return round(score - 0.5 * drop, 3)
+
+
+def _pick_reason(e: dict) -> str:
+    """Why this capability won the round — shown to the model and to the user,
+    so the choice is never a mystery."""
+    if _trend(e) <= -0.1:
+        return "slipping"
+    if _score(e.get("recent") or []) <= 0.6:
+        return "weak"
+    return "lowest"
+
+
 def _weakest(state: dict) -> tuple[str, dict]:
     """The capability most worth practising: lowest win rate among those with
-    real evidence, tie-broken by how often it was attempted.
+    real evidence, tie-broken by how often it was attempted, with a capability
+    that is currently slipping pulled ahead of a stable one at a similar score.
 
     With no evidence at all the answer is `conversation` — the thing every
     session exercises — rather than a capability it has never once tried.
@@ -353,7 +411,7 @@ def _weakest(state: dict) -> tuple[str, dict]:
             if isinstance(e, dict) and int(e.get("attempts") or 0) >= 2]
     if not rows:
         return "conversation", _entry(state, "conversation")
-    rows.sort(key=lambda kv: (_score(kv[1].get("recent") or []),
+    rows.sort(key=lambda kv: (_effective(kv[1]),
                               -int(kv[1].get("attempts") or 0)))
     return rows[0][0], rows[0][1]
 
@@ -388,6 +446,78 @@ def _recent_failures(cap: str) -> list[str]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  VERIFY — did the rules it wrote actually work?
+# ════════════════════════════════════════════════════════════════════════════
+
+def _stuck_of(state: dict, cap: str) -> int:
+    try:
+        return max(0, int((state.get("stuck") or {}).get(cap) or 0))
+    except Exception:
+        return 0
+
+
+def _bump_stuck(state: dict, cap: str, moved: bool) -> int:
+    """Count (or clear) consecutive rounds on this capability that went nowhere."""
+    stuck = state.setdefault("stuck", {})
+    n = 0 if moved else _stuck_of(state, cap) + 1
+    stuck[cap] = n
+    return n
+
+
+def _recheck(state: dict) -> list[dict]:
+    """Score every unmeasured rule against what happened after it was written.
+
+    A verdict costs evidence: the capability must have accumulated new outcomes
+    since the rule was stored, otherwise the honest answer is "measuring" and
+    nothing is recorded. Each check also feeds the stuck counter, which is what
+    eventually makes the loop stop repeating itself and think harder instead.
+    """
+    checks: list[dict] = []
+    drills = [d for d in (state.get("drills") or []) if isinstance(d, dict)]
+    if not drills:
+        return checks
+    comp = state.get("competency") or {}
+    by_cap: dict[str, list[dict]] = {}
+    for d in drills:
+        if d.get("checks"):
+            continue
+        by_cap.setdefault(str(d.get("capability") or ""), []).append(d)
+    for cap, pending in by_cap.items():
+        e = comp.get(cap)
+        if not isinstance(e, dict) or int(e.get("attempts") or 0) < 2:
+            continue
+        base_attempts = None
+        for d in pending:
+            try:
+                base_attempts = int(d.get("attempts_at_write"))
+            except Exception:
+                base_attempts = None
+            if base_attempts is not None:
+                break
+        now_attempts = int(e.get("attempts") or 0)
+        new_attempts = now_attempts - (base_attempts if base_attempts is not None
+                                       else now_attempts)
+        if new_attempts <= 0:
+            continue                     # no new evidence: a delta would be noise
+        score_now = _score(e.get("recent") or [])
+        try:
+            baseline = float(pending[0].get("baseline") or 0.0)
+        except Exception:
+            baseline = 0.0
+        delta = round(score_now - baseline, 3)
+        verdict = ("helped" if delta >= _PAYOFF_BAND else
+                   "hurt" if delta <= -_PAYOFF_BAND else "flat")
+        check = {"ts": time.time(), "score": score_now, "baseline": baseline,
+                 "delta": delta, "attempts": new_attempts, "verdict": verdict}
+        for d in pending:
+            d["checks"] = [check]
+            d["verdict"] = verdict
+        _bump_stuck(state, cap, moved=verdict == "helped")
+        checks.append({"capability": cap, **check})
+    return checks
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  DRILL — one model call writes the rules
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -395,10 +525,12 @@ _DRILL_PROMPT = (
     "You are the self-training loop of an assistant that controls a computer. "
     "Nobody is talking to it right now — this is its own practice round.\n\n"
     "CAPABILITY UNDER PRACTICE: {cap_label} ({cap})\n"
+    "IT WAS CHOSEN BECAUSE: {why}\n"
     "ITS REAL RECORD: {wins} of {attempts} attempts worked "
     "(recent win rate {score:.0%}, trend {trend:+.2f}).\n"
     "WHAT WENT WRONG LATELY, transcribed from its own control log:\n{failures}\n\n"
     "WHAT IT ALREADY BELIEVES (repeating any of this is worthless):\n{beliefs}\n\n"
+    "{escalation}"
     "Write at most {n} NEW rules that would have prevented those failures. Each "
     "rule is one concrete situation and the exact move to make in it — an "
     "instruction it can follow in a single step, not advice or a principle. "
@@ -452,8 +584,19 @@ def _novel(rules: list[dict], beliefs: list[str]) -> list[dict]:
     return kept
 
 
-def _store_rules(cap: str, rules: list[dict]) -> list[dict]:
-    """Persist surviving rules as ordinary memory entries the user can forget."""
+def _store_rules(cap: str, rules: list[dict],
+                 entry: dict | None = None) -> list[dict]:
+    """Persist surviving rules as ordinary memory entries the user can forget.
+
+    Each rule carries the win rate it was written at (`baseline`) and the number
+    of outcomes recorded so far, which is the only way a later round can tell
+    whether the rule changed anything (see _recheck).
+    """
+    try:
+        baseline = _score((entry or {}).get("recent") or [])
+        attempts_at_write = int((entry or {}).get("attempts") or 0)
+    except Exception:
+        baseline, attempts_at_write = 0.0, 0
     stored: list[dict] = []
     for r in rules:
         drill_id = uuid.uuid4().hex[:10]
@@ -468,6 +611,7 @@ def _store_rules(cap: str, rules: list[dict]) -> list[dict]:
         stored.append({"id": drill_id, "key": key, "capability": cap,
                        "situation": r.get("situation") or "",
                        "rule": r["rule"], "value": value[:400],
+                       "baseline": baseline, "attempts_at_write": attempts_at_write,
                        "at": time.time()})
     return stored
 
@@ -532,12 +676,31 @@ def run_cycle(reason: str = "manual", force: bool = False) -> dict:
 
         with _LOCK:
             state = _load()
+            # VERIFY first: score whatever rules are still unmeasured against the
+            # outcomes that arrived since they were written. Doing this before
+            # choosing the capability is what lets a rule that never paid off
+            # count as a stalled round rather than being written off silently.
+            checks = _recheck(state)
             cap, entry = _weakest(state)
+            stuck = _stuck_of(state, cap)
             failures = list(entry.get("failures") or [])[:_MAX_FAILURES]
+            _save(force=bool(checks))
         beliefs = _existing_beliefs(cap)
+
+        escalation = ""
+        if stuck:
+            escalation = (
+                f"⚠ YOU HAVE PRACTISED THIS {stuck + 1} TIME(S) AND THE RECORD "
+                "HAS NOT MOVED. The habits above (or the ones you already hold) "
+                "are not working. Do not restate them, and do not reword them: "
+                "name what is actually broken in your approach and write a "
+                "genuinely different instruction. If the capability cannot be "
+                "fixed by a rule at all, say so in one rule that changes when "
+                "you stop and ask the user instead.\n\n")
 
         prompt = _DRILL_PROMPT.format(
             cap_label=CAP_LABEL.get(cap, cap), cap=cap,
+            why=_pick_reason(entry) + " — the weakest effective record it has",
             wins=int(entry.get("wins") or 0), attempts=int(entry.get("attempts") or 0),
             score=_score(entry.get("recent") or []), trend=_trend(entry),
             failures=("\n".join("- " + f for f in failures) if failures
@@ -545,19 +708,24 @@ def run_cycle(reason: str = "manual", force: bool = False) -> dict:
                            "capability in general)"),
             beliefs=("\n".join("- " + b for b in beliefs[:6]) if beliefs
                      else "- (nothing yet)"),
+            escalation=escalation,
             n=_MAX_RULES_PER_CYCLE,
-        )[:6000]
+        )[:7000]
 
         proposed: list[dict] = []
+        tier = reasoner.pick_tier("self training drill for " + cap) or _BASE_TIER
+        escalated = bool(stuck)
+        if escalated:
+            # practice has stalled: buy reasoning power for this one round
+            tier = _ESCALATED_TIER
         try:
-            tier = reasoner.pick_tier("self training drill for " + cap) or gemini.FAST
             data = gemini.as_json(prompt, tier=tier, timeout_ms=45_000, default=None)
             proposed = _sanitize_rules(data, cap)
         except Exception as e:
             print(f"[Training] drill call failed: {e}")
 
         fresh = _novel(proposed, beliefs)
-        stored = _store_rules(cap, fresh) if fresh else []
+        stored = _store_rules(cap, fresh, entry) if fresh else []
         if stored:
             _log_rules(cap, stored)
 
@@ -567,6 +735,11 @@ def run_cycle(reason: str = "manual", force: bool = False) -> dict:
             state["last_ts"] = time.time()
             state["last_reason"] = str(reason)[:40]
             state["focus"] = cap
+            # A round that wrote nothing new is practice that went nowhere; count
+            # it, so the next round on this capability escalates instead of
+            # asking the same question a third time.
+            if not stored:
+                _bump_stuck(state, cap, moved=False)
             drills = [d for d in (state.get("drills") or [])
                       if isinstance(d, dict)]
             same = [d for d in drills if d.get("capability") == cap]
@@ -582,6 +755,9 @@ def run_cycle(reason: str = "manual", force: bool = False) -> dict:
                                     "capability": cap,
                                     "proposed": len(proposed),
                                     "learned": len(stored),
+                                    "checked": len(checks),
+                                    "stuck": _stuck_of(state, cap),
+                                    "escalated": escalated,
                                     "ms": int((time.time() - started) * 1000)}]
                                 )[-_MAX_HISTORY:]
             _save(force=True)
@@ -591,18 +767,26 @@ def run_cycle(reason: str = "manual", force: bool = False) -> dict:
             "reason": str(reason)[:40],
             "capability": cap,
             "capability_label": CAP_LABEL.get(cap, cap),
+            "why": _pick_reason(entry),
             "proposed": len(proposed),
             "learned": len(stored),
             "rules": [{"id": d["id"], "capability": cap, "rule": d["rule"],
-                       "situation": d["situation"], "at": d["at"]} for d in stored],
+                       "situation": d["situation"], "at": d["at"],
+                       "verdict": "measuring"} for d in stored],
+            "checked": checks,
+            "stuck": stuck,
+            "escalated": escalated,
             "score": _score(entry.get("recent") or []),
             "attempts": int(entry.get("attempts") or 0),
             "ms": int((time.time() - started) * 1000),
             "self_scored": True,
         }
+        for c in checks:
+            print(f"[Training] {c['capability']}: last rules {c['verdict']} "
+                  f"({c['delta']:+.0%} over {c['attempts']} new outcome(s)).")
         if stored:
             print(f"[Training] {cap}: learned {len(stored)} new rule(s) "
-                  f"({len(proposed)} proposed).")
+                  f"({len(proposed)} proposed){' [escalated]' if escalated else ''}.")
         else:
             print(f"[Training] {cap}: nothing new this round.")
         return report
@@ -638,15 +822,55 @@ def competency() -> list[dict]:
     return rows
 
 
+def _verdict_of(d: dict) -> tuple[str, float | None]:
+    """(verdict, delta) for one rule. "measuring" until real outcomes arrive."""
+    checks = d.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return "measuring", None
+    last = checks[-1] if isinstance(checks[-1], dict) else {}
+    verdict = str(d.get("verdict") or last.get("verdict") or "measuring")
+    if verdict not in ("helped", "flat", "hurt"):
+        verdict = "measuring"
+    try:
+        delta = (float(last["delta"]) if last.get("delta") is not None else None)
+    except Exception:
+        delta = None
+    return verdict, delta
+
+
 def drills(limit: int = 12) -> list[dict]:
-    """Newest self-written rules, newest first."""
+    """Newest self-written rules, newest first, each with what it actually did."""
     state = _load()
     out = [d for d in (state.get("drills") or []) if isinstance(d, dict)]
     out.sort(key=lambda d: float(d.get("at") or 0), reverse=True)
-    return [{"id": d.get("id"), "capability": d.get("capability"),
-             "label": CAP_LABEL.get(str(d.get("capability")), str(d.get("capability"))),
-             "situation": d.get("situation") or "", "rule": d.get("rule") or "",
-             "at": float(d.get("at") or 0)} for d in out[:limit]]
+    rows: list[dict] = []
+    for d in out[:limit]:
+        verdict, delta = _verdict_of(d)
+        rows.append({"id": d.get("id"), "capability": d.get("capability"),
+                     "label": CAP_LABEL.get(str(d.get("capability")),
+                                            str(d.get("capability"))),
+                     "situation": d.get("situation") or "",
+                     "rule": d.get("rule") or "",
+                     "verdict": verdict, "delta": delta,
+                     "at": float(d.get("at") or 0)})
+    return rows
+
+
+def payoff() -> dict:
+    """How the playbook is actually performing: counts per verdict, plus the
+    capabilities whose record is falling right now."""
+    state = _load()
+    counts = {"helped": 0, "flat": 0, "hurt": 0, "measuring": 0}
+    for d in (state.get("drills") or []):
+        if not isinstance(d, dict):
+            continue
+        verdict, _ = _verdict_of(d)
+        counts[verdict] = counts.get(verdict, 0) + 1
+    slipping = [c for c in competency()
+                if float(c.get("trend") or 0) <= -0.1 and float(c.get("score") or 0) < 0.95]
+    return {"counts": counts, "total": sum(counts.values()),
+            "slipping": slipping[:3],
+            "focus_stuck": _stuck_of(state, str(state.get("focus") or ""))}
 
 
 def stats() -> dict:
@@ -667,6 +891,12 @@ def stats() -> dict:
         "last_reason": state.get("last_reason") or "",
         "rounds_left": max(0, per_hour - last_hour),
         "rounds_per_hour": per_hour,
+        **(lambda p: {"helped": p["counts"]["helped"],
+                      "flat": p["counts"]["flat"],
+                      "hurt": p["counts"]["hurt"],
+                      "measuring": p["counts"]["measuring"],
+                      "slipping": p["slipping"],
+                      "focus_stuck": p["focus_stuck"]})(payoff()),
     }
 
 
@@ -694,25 +924,40 @@ def snapshot() -> dict:
 def curriculum_digest(limit: int = 3) -> str:
     """A short prompt block: what it is currently training on, and the rules it
     wrote for itself. Empty when training is off or there is nothing to say, so
-    the caller can simply skip it."""
+    the caller can simply skip it.
+
+    Proven rules are preferred over unproven ones and over rules that failed to
+    move the record, because the point of the digest is to change behaviour in
+    the next conversation — leaning on an instruction that measurably did not
+    help would be worse than having no digest at all.
+    """
     try:
         if not enabled():
             return ""
         rows = competency()
         weakest = rows[0] if rows else None
-        rules = [d for d in drills(8) if isinstance(d, dict)]
+        rules = [d for d in drills(12) if isinstance(d, dict)]
         if weakest:
             rules = [r for r in rules if r.get("capability") == weakest["capability"]] or rules
-        rules = rules[:limit]
+        rank = {"helped": 0, "measuring": 1, "flat": 2, "hurt": 3}
+        rules.sort(key=lambda r: rank.get(str(r.get("verdict")), 1))
+        good = [r for r in rules if r.get("verdict") in ("helped", "measuring")][:limit]
+        failed = [r for r in rules if r.get("verdict") in ("flat", "hurt")][:2]
         lines: list[str] = []
         if weakest:
+            slip = (" and it is falling right now"
+                    if float(weakest.get("trend") or 0) <= -0.1 else "")
             lines.append(
                 f"Where you are currently weakest, from your own record: "
                 f"{weakest['label']} — {weakest['wins']}/{weakest['attempts']} "
-                f"worked. Be extra deliberate there.")
-        if rules:
+                f"worked{slip}. Be extra deliberate there.")
+        if good:
             lines.append("Rules you wrote for yourself while practising:")
-            lines.extend(f"- {r['rule']}" for r in rules if r.get("rule"))
+            lines.extend(f"- {r['rule']}" for r in good if r.get("rule"))
+        if failed:
+            lines.append("Rules of yours that have NOT improved the record "
+                         "(do not rely on these):")
+            lines.extend(f"- {r['rule']}" for r in failed if r.get("rule"))
         return "\n".join(lines)[:900]
     except Exception:
         return ""

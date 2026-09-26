@@ -1329,6 +1329,9 @@ body[data-state="EXECUTING"] .fx-grid { opacity: 1.5; }
   width: min(56%, 264px); height: min(56%, 264px);
   border-radius: 50%;
   transform: translate(-50%, -50%);
+  /* the same living drift as the halo — a pure offset layered OUTSIDE the
+     breathing keyframes, so it never fights their scale animation */
+  translate: calc(var(--mx, 0) * 18px) calc(var(--my, 0) * 14px);
   background: radial-gradient(circle,
     rgba(56,189,248,.14) 0%, rgba(56,189,248,.05) 45%, transparent 70%);
   filter: blur(2px);
@@ -1361,17 +1364,26 @@ body[data-state="SLEEPING"] .hud-core { opacity: .3; animation-duration: 7s; }
 /* voice-reactive halo: --voice (0..1) is set from the live mic level each
    frame; opacity and scale ride it, so the room glows when JARVIS talks.
    The two LOBES ride the viseme channels instead: ::before stretches tall
-   with mouth openness, ::after stretches wide with mouth width — the room
-   literally breathes with the mouth shape. */
+   with jaw openness, ::after stretches wide with mouth width — the room
+   literally breathes with the mouth shape.
+   Living motion: the halo also carries the same spring-drift the canvas
+   core uses (--mx/--my/--mrot/--mswell, published every frame on the
+   stage), so the drawn face and the ambient glow lean and breathe as ONE
+   body. Centering lives in the individual `translate` (with the motion
+   offset), NOT in `transform` — individual properties compose about the
+   element's own centre, so rotate/scale can never swing it off-anchor. */
 .hud-core-glow {
   position: absolute; left: 50%; top: 50%;
   width: min(72%, 340px); height: min(72%, 340px);
   border-radius: 50%;
-  transform: translate(-50%, -50%);
+  translate: calc(-50% + var(--mx, 0) * 26px)
+             calc(-50% + var(--my, 0) * 20px);
+  rotate: calc(var(--mrot, 0) * 1rad);
+  scale: calc(1 + var(--voice, 0) * 0.16 + var(--mswell, 0) * 2
+              + var(--mz, 0) * 0.6);
   background: radial-gradient(circle,
     rgba(56,189,248,.10) 0%, rgba(56,189,248,.03) 50%, transparent 72%);
   opacity: calc(0.25 + var(--voice, 0) * 1.1);
-  scale: calc(1 + var(--voice, 0) * 0.16);
   transition: opacity .12s linear;
   pointer-events: none;
   filter: blur(4px);
@@ -1572,6 +1584,7 @@ body[data-state="LISTENING"] .face-caption { letter-spacing: 3.4px; color: var(-
   color: var(--text-dim); display: flex; gap: 10px; flex-wrap: wrap;
 }
 .train-foot b { color: var(--text-med); font-weight: 650; }
+.train-foot b.bad { color: var(--red); }
 
 /* the list on the settings page: one rule per row, forgettable in one click */
 .train-rule {
@@ -1586,6 +1599,32 @@ body[data-state="LISTENING"] .face-caption { letter-spacing: 3.4px; color: var(-
   text-transform: uppercase; color: var(--green); margin-bottom: 2px;
 }
 .train-rule-when { display: block; color: var(--text-dim); font-size: 11.5px; margin-top: 2px; }
+
+/* What each self-written rule ACTUALLY did: its verdict is measured against the
+   outcomes that arrived after it was written, never against how plausible it
+   sounded. "measuring…" is a real answer — the loop refuses to score a rule on
+   evidence it does not have yet. */
+.train-fx {
+  display: inline-block; font-family: var(--mono); font-size: 9px;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  padding: 2px 6px; border-radius: var(--r-full); margin-right: 6px;
+  border: 1px solid var(--border); color: var(--text-dim);
+  background: var(--panel); white-space: nowrap; letter-spacing: 1.2px;
+}
+.train-fx.helped    { color: var(--green); border-color: rgba(49,217,174,.34); background: rgba(49,217,174,.07); }
+.train-fx.flat      { color: var(--text-med); }
+.train-fx.hurt      { color: var(--red); border-color: rgba(255,92,122,.32); background: rgba(255,92,122,.07); }
+.train-fx.measuring { color: var(--amber); border-color: rgba(245,180,92,.26); }
+
+/* A capability whose record is falling gets a quiet red edge. The whole point
+   of watching the trend is that it is visible before the score bottoms out. */
+.train-bar.slipping .train-bar-name  { color: var(--red); }
+.train-bar.slipping .train-bar-track { border-color: rgba(255,92,122,.34); }
+.train-slip {
+  grid-column: 1 / -1; font-size: 11.5px; color: var(--red);
+  line-height: 1.45; user-select: text;
+}
+.train-new .train-fx { margin-bottom: 2px; }
 
 .train-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 9px; }
 .train-stat {
@@ -1607,3 +1646,38 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
   .train-live[data-on="2"] i { animation: none; }
   .train-new, .train-rule { animation: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   MICROPHONE PANEL — status, live meter, measured test result, diagnosis
+   ════════════════════════════════════════════════════════════════════ */
+.mic-status {
+  font-size: 12px; line-height: 1.5; margin-top: 6px; user-select: text;
+}
+.mic-status.warn { color: var(--amber); }
+
+.mic-meter {
+  height: 6px; border-radius: var(--r-full); overflow: hidden;
+  background: rgba(148,184,255,.09); border: 1px solid var(--border);
+  margin-top: 10px;
+}
+.mic-meter i {
+  display: block; height: 100%; width: 0%;
+  border-radius: var(--r-full);
+  background: linear-gradient(90deg, var(--green-dim), var(--green), var(--pri));
+  transition: width .09s linear;      /* per-frame updates: no easing lag */
+}
+.mic-meter-label { font-size: 10.5px; margin-top: 4px; letter-spacing: .4px; }
+
+.mic-result {
+  margin-top: 10px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--panel); border: 1px solid var(--border);
+  font-size: 12.5px; line-height: 1.55; user-select: text;
+}
+
+.mic-diag {
+  margin-top: 8px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: rgba(245,180,92,.05); border: 1px solid rgba(245,180,92,.18);
+  font-size: 12px; line-height: 1.55; user-select: text;
+}
+.mic-diag-line { color: var(--text-med); margin: 2px 0; }
+.mic-diag-fix { color: var(--green); font-size: 11.5px; margin: 2px 0 2px 10px; }

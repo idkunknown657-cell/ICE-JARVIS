@@ -1061,9 +1061,29 @@
     enabled: true, active: true, intensity: "balanced", memory_enabled: true,
     running: false, cycles: 0, learned: 0, drill_count: 0, focus_label: "",
     rounds_left: 0, rounds_per_hour: 2, last_ts: 0,
+    helped: 0, flat: 0, hurt: 0, measuring: 0, slipping: [], focus_stuck: 0,
     competency: [], drills: [], self_scored: true,
   };
   let trainManual = false;
+
+  // What a self-written rule actually did, scored against the outcomes that
+  // arrived AFTER it was written. "Measuring" is a real, honest state: the loop
+  // will not grade a rule on evidence it does not have yet.
+  const FX = {
+    helped:    ["helped",     "The record moved up after this rule was written."],
+    flat:      ["no change",  "The record did not move after this rule."],
+    hurt:      ["worse",      "The record got worse after this rule."],
+    measuring: ["measuring\u2026", "Waiting for real outcomes before judging this rule."],
+  };
+
+  function fxBadge(d) {
+    const k = d && FX[d.verdict] ? d.verdict : "measuring";
+    const span = el("span", "train-fx " + k, FX[k][0]);
+    span.title = FX[k][1] +
+      (d && typeof d.delta === "number"
+        ? " (" + (d.delta >= 0 ? "+" : "") + Math.round(d.delta * 100) + "% win rate)" : "");
+    return span;
+  }
 
   function agoText(ts) {
     if (!ts) return "never";
@@ -1097,6 +1117,12 @@
         focus.innerHTML = t.memory_enabled === false
           ? "Off — memory is switched off, so nothing may be learned on its own."
           : "Off. It only learns while you are talking to it.";
+      } else if (t.focus_label && (t.focus_stuck || 0) > 0) {
+        // It practised this and the record did not move. Saying so is the whole
+        // point — the alternative is a card that always looks like progress.
+        focus.innerHTML = "Last round drilled <b>" + esc(t.focus_label) +
+          "</b> — the record has not moved, so the next round takes a different " +
+          "approach on a stronger model.";
       } else if (t.focus_label) {
         focus.innerHTML = "Last round drilled <b>" + esc(t.focus_label) +
           "</b> — the step with the worst real record.";
@@ -1116,9 +1142,12 @@
           "No evidence yet — it starts keeping score from the first click it makes for you."));
       }
       rows.forEach(r => {
+        const slipping = (r.trend || 0) <= -0.1 && (r.score || 0) < 0.95;
         const row = el("div", "train-bar" +
-          (r.score < 0.6 ? " poor" : r.score < 0.8 ? " weak" : ""));
+          (r.score < 0.6 ? " poor" : r.score < 0.8 ? " weak" : "") +
+          (slipping ? " slipping" : ""));
         const name = el("span", "train-bar-name", r.label || r.capability);
+        if (slipping) name.title = "Falling right now — it will practise this one first.";
         const track = el("div", "train-bar-track");
         const fill = el("i", "train-bar-fill");
         fill.style.width = Math.round((r.score || 0) * 100) + "%";
@@ -1139,7 +1168,10 @@
     if (box) {
       const d = (t.drills || [])[0];
       if (d && d.rule) {
-        box.textContent = d.rule + (d.situation ? "  (when: " + d.situation + ")" : "");
+        box.textContent = "";
+        box.appendChild(fxBadge(d));
+        box.appendChild(el("span", null, d.rule +
+          (d.situation ? "  (when: " + d.situation + ")" : "")));
         box.hidden = false;
       } else {
         box.hidden = true;
@@ -1148,9 +1180,14 @@
 
     const foot = $("trainFoot");
     if (foot) {
+      const payoff = (t.drill_count || 0)
+        ? " · <b>" + (t.helped || 0) + "</b> paid off" +
+          ((t.hurt || 0) ? " · <b class=\"bad\">" + t.hurt + "</b> made it worse" : "")
+        : "";
       foot.innerHTML = "<b>" + (t.cycles || 0) + "</b> round" +
         ((t.cycles || 0) === 1 ? "" : "s") + " · <b>" + (t.learned || 0) +
-        "</b> rules written · <b>" + (t.drill_count || 0) + "</b> in playbook · <b>" + (t.rounds_left || 0) + "/" +
+        "</b> rules written · <b>" + (t.drill_count || 0) + "</b> in playbook" + payoff +
+        " · <b>" + (t.rounds_left || 0) + "/" +
         (t.rounds_per_hour || 2) + "</b> left this hour · last " + agoText(t.last_ts);
     }
   }
@@ -1269,6 +1306,16 @@
     body.scrollTop = 0;
   }
 
+  // Verdict → [colour, plain-language sentence]. A device that merely exists
+  // is never "working": the colour comes from measured audio, not from a
+  // successful open.
+  const MIC_VERDICT = {
+    ok:        ["var(--green)", "Microphone detected — signal is live."],
+    faint:     ["var(--amber)", "Weak signal — speak up, or raise the input level in Windows sound settings."],
+    no_signal: ["var(--red)", "No microphone input detected — the device opens but no audio arrives."],
+    failed:    ["var(--red)", "Could not capture from this device."],
+  };
+
   const renderers = {
 
     general(d) {
@@ -1345,25 +1392,163 @@
         pillsEl([["standard", "STANDARD"], ["warm", "WARM"], ["live", "LIVE"], ["chatty", "CHATTY"]],
           () => d.talk_cadence, v => save("talk_cadence", v))));
 
+      // ── Microphone panel — the mic is the one input the whole product
+      // stands on, so it gets more than a dropdown. Status, a REAL measured
+      // test, and diagnosis of the whole chain (device → permission →
+      // capture → signal) instead of a device list that can look healthy
+      // while every endpoint is silent.
+      p.appendChild(renderers.micPanel(d));
+
       const dev = el("div", "set-col");
-      const inSel = el("select", "text-input"), outSel = el("select", "text-input");
-      const inRow = el("div", "set-row2"), outRow = el("div", "set-row2");
+      const outSel = el("select", "text-input");
+      const outRow = el("div", "set-row2");
       Promise.all([api.devices_get(), Promise.resolve(d)]).then(([dv]) => {
-        fillDeviceSel(inSel, dv.input, d.input_device, "System default");
         fillDeviceSel(outSel, dv.output, d.output_device, "System default");
       });
-      inRow.appendChild(inSel);
-      inRow.appendChild(btnSm("Set", () => save("input_device", inSel.value)));
       outRow.appendChild(outSel);
       outRow.appendChild(btnSm("Set", () => save("output_device", outSel.value)));
-      dev.appendChild(inRow); dev.appendChild(outRow);
-      p.appendChild(cardCol("Microphone & speakers", "Picking by name survives replugs (device indices shift).", dev));
+      dev.appendChild(outRow);
+      p.appendChild(cardCol("Speakers", "Picking by name survives replugs (device indices shift).", dev));
 
       const lang = el("div", "note");
       lang.textContent = "Language: " + (d.language_mode || "auto") + " — JARVIS detects your language on first use and adapts.";
       p.appendChild(lang);
       return p;
     },
+
+  micPanel(d) {
+    const wrap = el("div", "set-col");
+
+    // picker + actions row
+    const sel = el("select", "text-input");
+    const row = el("div", "set-row2");
+    row.appendChild(sel);
+    const testBtn = btnSm("Test", () => runMicTest(sel.value));
+    row.appendChild(testBtn);
+    row.appendChild(btnSm("Refresh", () => reloadMicDevices(true)));
+    wrap.appendChild(row);
+
+    // selected-device status line
+    const status = el("div", "mic-status dim", "Reading devices…");
+    wrap.appendChild(status);
+
+    // live input meter — fed by the SAME audio level the HUD waveform uses,
+    // so the meter moves exactly when JARVIS is hearing you
+    const meter = el("div", "mic-meter");
+    const fill = el("i");
+    meter.appendChild(fill);
+    const meterLabel = el("div", "mic-meter-label dim", "Live input level");
+    wrap.appendChild(meter); wrap.appendChild(meterLabel);
+
+    // test result + diagnosis blocks (hidden until needed)
+    const result = el("div", "mic-result", "");
+    result.hidden = true;
+    wrap.appendChild(result);
+    const diag = el("div", "mic-diag", "");
+    diag.hidden = true;
+    wrap.appendChild(diag);
+
+    const fixBtn = el("button", "btn btn-sm", "Open Windows microphone settings");
+    fixBtn.addEventListener("click", () => api.mic_open_windows_settings().catch(() => {}));
+    fixBtn.hidden = true;
+    wrap.appendChild(fixBtn);
+
+    // devices + permission + which mic the capture loop actually opened
+    async function paintDevices(refresh) {
+      status.textContent = refresh ? "Refreshing…" : "Reading devices…";
+      let md = null;
+      try { md = await api.mic_devices(refresh === true); } catch (e) { /* old bridge */ }
+      sel.textContent = "";
+      const defOpt = el("option", null, "System default (recommended)");
+      defOpt.value = "";
+      sel.appendChild(defOpt);
+      (md && md.devices ? md.devices : []).forEach(dev => {
+        if (!dev.name) return;
+        const o = el("option", null, dev.name +
+          (dev.default ? "  —  Windows default" : "") +
+          (dev.default_comm ? "  (communication)" : ""));
+        o.value = dev.name;
+        sel.appendChild(o);
+      });
+      const saved = (md && md.selected) || d.input_device || "";
+      sel.value = saved;
+      if (sel.selectedIndex < 0) sel.value = "";
+      const perm = md && md.permission;
+      const active = (md && md.active) || saved || "System default";
+      const devCount = (md && md.devices ? md.devices.filter(x => x.name).length : 0);
+      let s = devCount + " recording device" + (devCount === 1 ? "" : "s") +
+        " · JARVIS is listening to: " + active;
+      if (perm && perm.supported && !perm.allowed) {
+        s += " · ⚠ Windows microphone permission is OFF";
+        fixBtn.hidden = false;
+      } else {
+        fixBtn.hidden = true;
+      }
+      status.textContent = s;
+      status.classList.toggle("warn", !!(perm && perm.supported && !perm.allowed));
+    }
+    reloadMicDevices(false);
+
+    async function reloadMicDevices(refresh) {
+      await paintDevices(refresh);
+      if (refresh) {
+        // A replug can change the device JARVIS actually opened; tell the
+        // backend to re-resolve by triggering the audio reconnect path.
+        api.save_setting("input_device", sel.value).catch(() => {});
+      }
+    }
+
+    // The test: measure real audio on the chosen device and show the verdict.
+    async function runMicTest(name) {
+      testBtn.disabled = true;
+      result.hidden = false;
+      result.style.color = "";
+      result.textContent = "Listening to " + (name || "the system default") + " for about a second…";
+      diag.hidden = true;
+      let r = null;
+      try { r = await api.mic_test(name); }
+      catch (e) { r = { verdict: "failed", message: String(e) }; }
+      const [color, text] = MIC_VERDICT[r.verdict] || MIC_VERDICT.failed;
+      result.style.color = color;
+      result.textContent = text + (r.message && r.verdict !== "ok" ? "  (" + r.message + ")" : "");
+      if (r.verdict === "ok" || r.verdict === "faint") {
+        result.textContent += "  Peak level " + Math.round((r.peak_rms || 0)) +
+          (r.noisy ? " · noisy input" : "");
+      }
+      // On any failure pull the full chain diagnosis: device → permission →
+      // capture → signal, with fixes.
+      if (r.verdict !== "ok") {
+        try {
+          const dg = await api.mic_diag();
+          diag.hidden = false;
+          diag.textContent = "";
+          (dg.problems || []).forEach(p => {
+            const line = el("div", "mic-diag-line", "• " + p);
+            diag.appendChild(line);
+          });
+          (dg.fixes || []).forEach(fx => {
+            diag.appendChild(el("div", "mic-diag-fix", "→ " + fx));
+          });
+          if (dg.permission && dg.permission.supported && !dg.permission.allowed) fixBtn.hidden = false;
+        } catch (e) { diag.hidden = true; }
+      } else {
+        diag.hidden = true;
+      }
+      testBtn.disabled = false;
+    }
+
+    // Live meter: the backend pushes audio_level from the capture callback;
+    // show it here whenever the Voice page is open.
+    Bus.on("audio_level", ev => {
+      if (!S.view || document.getElementById("view-settings").classList.contains("active") === false) return;
+      if (S.settingsPage !== "voice") return;
+      const lv = Math.max(0, Math.min(1, Number(ev && ev.level) || 0));
+      fill.style.width = Math.round(lv * 100) + "%";
+      meterLabel.textContent = lv > 0.02 ? "Live input level — hearing you" : "Live input level";
+    });
+
+    return wrap;
+  },
 
     persona(d) {
       const p = page("Personality", "Warmth, humour and emotional range.");
@@ -1417,8 +1602,10 @@
 
       p.appendChild(card("Self-training",
         "Watches how its own clicks, keys and reads land, then spends one model call \u2014 while you "
-        + "are not talking \u2014 on the step with the worst real record. Off means nothing is learned "
-        + "while idle; it stops by itself when memory is switched off.",
+        + "are not talking \u2014 on the step with the worst real record. It then checks whether the rules "
+        + "it wrote actually moved that record, and practises a capability that is falling before one "
+        + "that has merely always been mediocre. Off means nothing is learned while idle; it stops by "
+        + "itself when memory is switched off.",
         toggleEl(() => d.self_training !== false, v => save("self_training", v))));
 
       p.appendChild(card("How hard it practises",
@@ -1434,7 +1621,8 @@
       const rules = el("div");
       rules.style.marginTop = "8px";
       p.appendChild(cardCol("Its playbook",
-        "Rules JARVIS wrote for itself. Nothing here was written by you, and any of them can go.", rules));
+        "Rules JARVIS wrote for itself, each tagged with what it actually did to the record. Nothing "
+        + "here was written by you, and any of them can go.", rules));
 
       const actions = el("div", "set-col");
       const row = el("div", "set-row2");
@@ -1464,6 +1652,7 @@
           [st.cycles || 0, "rounds"],
           [st.learned || 0, "rules written"],
           [st.drill_count || 0, "in playbook"],
+          [st.helped || 0, "rules that helped"],
           [(st.rounds_left || 0) + "/" + (st.rounds_per_hour || 2), "left this hour"],
         ];
         tiles.forEach(([val, name]) => {
@@ -1475,8 +1664,20 @@
         if (st.focus_label) {
           const f = el("div", "dim");
           f.style.cssText = "font-size:11.5px;margin-top:8px";
-          f.textContent = "Last practised: " + st.focus_label + " \u00b7 " + agoText(st.last_ts);
+          f.textContent = "Last practised: " + st.focus_label + " \u00b7 " + agoText(st.last_ts) +
+            ((st.focus_stuck || 0) > 0
+              ? " \u00b7 that round did not move the record, so the next one changes approach"
+              : "");
           stats.appendChild(f);
+        }
+        const slipping = st.slipping || [];
+        if (slipping.length) {
+          const s = el("div", "train-slip");
+          s.textContent = "Falling right now: " + slipping.map(r =>
+            (r.label || r.capability) + " (" + Math.round((r.trend || 0) * 100) + "%)"
+          ).join(", ") + " \u2014 these get practised first, before a capability that has "
+            + "simply always been weak.";
+          stats.appendChild(s);
         }
 
         rules.textContent = "";
@@ -1488,7 +1689,9 @@
         list.forEach(dr => {
           const line = el("div", "train-rule");
           const body = el("div", "train-rule-body");
-          body.appendChild(el("span", "train-rule-cap", dr.label || dr.capability || ""));
+          const cap = el("span", "train-rule-cap", (dr.label || dr.capability || "") + " ");
+          cap.appendChild(fxBadge(dr));
+          body.appendChild(cap);
           body.appendChild(el("span", null, dr.rule || ""));
           if (dr.situation) body.appendChild(el("span", "train-rule-when", "when: " + dr.situation));
           line.appendChild(body);

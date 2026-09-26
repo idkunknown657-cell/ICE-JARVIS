@@ -245,6 +245,48 @@
     async wake_install() { settings.wake_word.ready = true; emit("wake", settings.wake_word); return { ok: true, msg: "Wake word ready." }; },
     async wake_manual() { settings.wake_word.awake = !settings.wake_word.awake; emit("wake", settings.wake_word); return {}; },
     async devices_get() { return settings.devices; },
+
+    // ── microphone diagnostics (demo) ─────────────────────────────────
+    async mic_devices() {
+      return {
+        devices: [
+          { name: "Microphone (Realtek Audio)", api: "DirectSound", channels: 2,
+            rates: "48000 Hz", default: true, default_comm: false, index: 1, openable: true },
+          { name: "HyperX Mic", api: "WASAPI", channels: 1,
+            rates: "48000 Hz", default: false, default_comm: false, index: 4, openable: true },
+          { name: "Webcam Mic (HD Camera)", api: "MME", channels: 1,
+            rates: "44100 Hz", default: false, default_comm: true, index: 6, openable: true },
+        ],
+        permission: { supported: true, allowed: true, master: "allowed",
+                      store_apps: "allowed", desktop_apps: "allowed" },
+        selected: "",
+        active: "System default",
+      };
+    },
+    async mic_test(name) {
+      emit("mic_status", { device: name, verdict: "measuring", peak: 0 });
+      await new Promise(r => setTimeout(r, 1200));
+      const ok = name !== "Webcam Mic (HD Camera)";
+      const r = ok
+        ? { opened: true, delivered: true, verdict: "ok", peak_rms: 2604.0,
+            floor_rms: 318.0, speech_headroom: 8.2, noisy: false,
+            message: "signal detected and it looks like a microphone that carries speech" }
+        : { opened: true, delivered: true, verdict: "no_signal", peak_rms: 4.0,
+            floor_rms: 2.0, speech_headroom: 2.0, noisy: false,
+            message: "the stream opened but the driver delivered no audio frames" };
+      emit("mic_status", { device: name, verdict: r.verdict, peak: r.peak_rms });
+      return r;
+    },
+    async mic_diag() {
+      return { device_present: true, selected_device: "Microphone (Realtek Audio)",
+        capture: "working", signal: "detected",
+        permission: { supported: true, allowed: true, master: "allowed",
+                      store_apps: "allowed", desktop_apps: "allowed" },
+        levels: { peak_rms: 2604.0, floor_rms: 318.0, speech_headroom: 8.2, noisy: false },
+        problems: [], fixes: [], verdict: "ok", message: "" };
+    },
+    async mic_open_windows_settings() { return { ok: true }; },
+    async mic_refresh() { return { ok: true, count: 3, devices: await api.mic_devices() }; },
     async perf_get() { return perf; },
 
     // ── computer control (demo) ────────────────────────────────────────────

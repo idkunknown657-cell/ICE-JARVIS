@@ -2,6 +2,119 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — Self-training that checks its own homework
+
+The self-training loop could drill and remember all day, but it never once
+asked whether the rules it wrote **worked** — so the playbook could only grow,
+and a rule that changed nothing was indistinguishable from one that fixed the
+problem. It now closes the loop: OBSERVE → DIAGNOSE → DRILL → REMEMBER →
+**VERIFY**.
+
+- **Every rule is graded against real evidence.** Each self-written rule stores
+  the win rate it was written at plus how many outcomes had been recorded; the
+  next rounds score it against the outcomes that arrived *after* it was written
+  and tag it **helped / no change / worse**. A rule with no new evidence behind
+  it reads *measuring…* — the loop will not grade a rule on evidence it does not
+  have, because a verdict is a claim about the world.
+- **A capability that is falling is practised before one that is merely weak.**
+  "Weakest" used to mean lowest win rate, which quietly ignored the trend it
+  already computed: something at 80% that just fell from 95% is a regression the
+  next round can still stop, while something parked at 70% is a standing
+  limitation. The regression penalty is half the drop, so this re-orders
+  near-ties rather than chasing a noisy window.
+- **Practice that stalls escalates instead of repeating itself.** Rounds whose
+  rules did not move the record — or that produced no new rule at all — are
+  counted against the capability; the next round on it runs on the *smarter*
+  model and is told plainly, in the prompt, that the previous habits are not
+  working and that rewording them is worthless.
+- **The playbook is visible as an asset, not a pile.** Competency rows show
+  which capability is falling right now, the Home card reports how many rules
+  paid off and how many made things worse, and Settings lists every rule with
+  its verdict, its measured effect and a one-click forget.
+- **The conversation digest prefers proven rules.** What JARVIS carries into a
+  real conversation is now sorted so instructions that measurably helped come
+  first, unproven ones next, and rules that failed to move the record are
+  labelled "do not rely on these" — leaning on an instruction that did not help
+  would be worse than having no digest at all.
+
+## Unreleased — A core that moves like something alive
+
+Talking to a drawing that never moved felt like talking to a *program*, not to
+something present. The centre of the HUD — canvas face, glow halo and the 3D
+body — now drifts, breathes and pulses every frame, and it moves with the voice
+rather than on a fixed loop.
+
+- **Springs, not keyframes.** Five channels (left/right, up/down,
+  forward/back, tilt, pulse) are critically-damped springs integrating a target
+  that itself travels along layered incommensurate sines. The target is smooth
+  but never repeats, so the core wanders unpredictably without a single jump;
+  the damping lets it glide, lean and settle — never oscillate, never snap.
+- **Speech drives it.** Voice level and viseme openness scale every channel:
+  quiet speech keeps the core almost still, normal speech gives it a natural
+  sway, excited speech widens the drift and quickens the pulse. Tilt and the
+  vertical bob ride the live waveform, so the movement lands on the syllables
+  instead of on a timer.
+- **Each state has its own body language.** Listening: near-still, slightly
+  leaned-in attention. Thinking: slow, small, deliberate wander — ambient
+  rather than idle. Idle: a soft breathing/orbit cycle. Speaking: rides the real
+  audio.
+- **Hard-bounded and self-healing.** Every channel is clamped (≤9% of the core
+  radius sideways, ≤7% vertically, ≤6% forward/back, ≤3.4° tilt, −2%…+9%
+  scale), so the core can never travel far from the centre. Non-finite values
+  are caught and reset to rest before they are integrated, so a poisoned
+  channel recovers by itself instead of throwing every frame.
+- **Three layers move as one body.** The canvas face, the HUD halo and the 3D
+  body all read the same spring state; the halo rides the shipped CSS vars
+  (`--mx`, `--my`, `--mz`, `--mrot`, `--mswell`) on individual
+  `translate`/`rotate`/`scale` properties, so the drift composes with its own
+  centring and breathing animation instead of fighting them.
+
+## Unreleased — Microphone that actually works on desktops
+
+The laptop path was fine; on desktop PCs an external, headset or USB
+microphone could open successfully and still deliver **no audio**, so JARVIS
+appeared deaf while every settings dropdown looked correct. Root cause and fix:
+
+- **Fixed-rate devices were rejected, not broken.** Capture opened every
+  microphone at 16 kHz; WASAPI in shared mode resamples, but USB interfaces,
+  webcams and Bluetooth HFP endpoints are fixed-rate and fail outright. The
+  capture layer now probes the device's own rate (16 k → 48 k → 44.1 k → 96 k →
+  …, cached per device) and opens there — PortAudio resamples into exactly the
+  16 kHz int16 the pipeline expects, so the desktop path is fixed without
+  touching the laptop path, which still opens at 16 kHz first.
+- **A device that opens is not a device that works.** New
+  `core/mic_diagnostics.py` measures a real capture (peak RMS, noise floor,
+  speech headroom) and answers four separate questions — device present,
+  Windows permission, capture working, *signal detected* — instead of
+  mistaking a successful open for a working microphone. Thresholds sit in the
+  gaps between room-silence, hiss and speech; a hot-but-working mic is credited
+  for its floor rather than failed by it.
+- **Windows privacy gates are read, not guessed** (`ConsentStore\microphone`,
+  master + NonPackaged): a denied master switch or "desktop apps" toggle is
+  named exactly, with a one-tap button that opens `ms-settings:privacy-microphone`.
+  Keys absent on older builds report *unknown*, never *denied*.
+- **Error text a person can act on**: PortAudio failures map to plain causes —
+  device unavailable, held exclusively by another app, exclusive-mode format
+  rejection, access denied.
+- **Settings → Voice & Language rebuilt around the microphone**: one picker
+  listing every recording endpoint (each host API shown separately, because
+  "works on WASAPI, dead on DirectSound" is exactly the desktop failure),
+  marked with the Windows default and default *communication* device; status
+  line naming which device the capture loop **actually** opened; a live input
+  meter fed by the same callback the recognizer uses; **Test** that measures
+  ~0.9 s of audio and verdicts plainly ("Microphone detected — signal is
+  live." / "No microphone input detected."), and on any failure the full chain
+  diagnosis with fixes.
+- **Device changes recover without losing the conversation**: replug / default
+  switches clear the per-device rate cache and re-resolve; the existing
+  keep-context reconnect path re-opens the streams. `main.py` now remembers
+  which microphone the capture loop actually opened so Settings can show the
+  truth when the saved device was unavailable and the default took over.
+- New bridge endpoints (`mic_devices`, `mic_test`, `mic_diag`,
+  `mic_open_windows_settings`, `mic_refresh`) — all off-thread; 20 new unit
+  tests cover the permission gates, the measured verdicts and the rate
+  fallback without ever opening a real stream.
+
 ## Unreleased — Self-training: JARVIS practises while you are quiet
 
 Everything else learns *from the user*. This learns from what JARVIS actually
