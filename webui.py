@@ -282,6 +282,9 @@ class JarvisAPI:
             "screen": {"active": _safe(get_screen_awareness, False), "caption": ""},
             "memory_enabled": _safe(get_memory_enabled, True),
             "avatar": self._avatar_cfg(),
+            # Whether the first-run tour has been shown. Read here rather than
+            # inferred in the UI so a restart mid-tour does not start it over.
+            "guide_seen": bool(cfg.get("guide_seen", False)),
         }
 
     def _avatar_cfg(self) -> dict:
@@ -395,6 +398,14 @@ class JarvisAPI:
         except Exception:
             pass
         try:
+            # What it is in the mood for and what it is doing with the time.
+            # Read live from core/initiative.py so the HUD never has to guess
+            # or hold its own copy of a state that changes on its own.
+            from core import initiative
+            out["initiative"] = initiative.status()
+        except Exception:
+            pass
+        try:
             from core import pc_engine
             st = pc_engine.state()
             out["state"] = {
@@ -409,6 +420,22 @@ class JarvisAPI:
         except Exception:
             pass
         return out
+
+    def initiative_forget(self) -> dict:
+        """Throw away what it found and what it had unfinished.
+
+        The companion to the training reset: a user control that makes "start
+        from scratch" possible without hunting for a file. The mood resets too,
+        because keeping a BORED afternoon after clearing the reason for it
+        would be remembering the wrong thing.
+        """
+        try:
+            from core import initiative
+            initiative.forget()
+        except Exception:
+            pass
+        _PUMP.push("control", self.pc_status())
+        return {"ok": True}
 
     def pc_feed_clear(self) -> dict:
         try:
@@ -631,6 +658,8 @@ class JarvisAPI:
                 _PUMP.push("config", {"accent": str(value)})
             elif key == "compact":
                 _write_config_key("compact", bool(value))
+            elif key == "guide_seen":
+                _write_config_key("guide_seen", bool(value))
             elif key.startswith("avatar_"):
                 _write_config_key(key, value)
                 _PUMP.push("avatar", self._avatar_cfg())

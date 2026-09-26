@@ -440,6 +440,21 @@ def _autonomy_rules() -> str:
             "always.")
 
 
+def _initiative_note(event: str, weight: float = 1.0) -> None:
+    """Tell the mood engine something happened — safe on a hot path.
+
+    Called from the audio receive loop, so it is written to be free when
+    nothing needs to happen: the import is inside the guard, the engine itself
+    throttles repeats, and a failure is swallowed. A mood is not worth a stall
+    in the loop that transcribes the user, hence no exception ever escapes.
+    """
+    try:
+        from core import initiative
+        initiative.note(event, weight)
+    except Exception:
+        pass
+
+
 def _training_rules() -> str:
     """How the model may use its own practice drill.
 
@@ -2141,6 +2156,7 @@ class JarvisLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+                                _initiative_note("directed", 1.0)
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -2981,12 +2997,21 @@ class JarvisLive:
                     # that normally forbid tool calls are lifted for it.
                     allow_tools   = autonomous_tick,
                 )
+                move = None
                 if autonomous_tick:
+                    # Asked BEFORE the agenda text is added, because the move
+                    # decides what the agenda is about this time.
+                    move = self._initiative_move(
+                        idle_now=idle_now, activity=screen or "",
+                        recent=recent_turns)
                     prompt += "\n\n" + self._autonomy.idle_agenda(
                         activity=screen or "",
                         idle_seconds=idle_now,
                         recent=" | ".join(recent_turns[-3:]) if recent_turns else "",
                         autonomous=True)
+                    block = self._initiative_block(move)
+                    if block:
+                        prompt += "\n\n" + block
                 parts = [{"text": prompt}]
                 if frame_part:
                     import base64 as _b64
@@ -3007,6 +3032,47 @@ class JarvisLive:
                 print("[JARVIS] Proactive check-in.")
             except Exception as e:
                 print(f"[Proactive] ⚠️ {e}")
+
+    def _initiative_move(self, *, idle_now: float, activity: str, recent: list):
+        """What JARVIS should do with the handed-over PC, or None.
+
+        None is returned both when nothing clears the bar and when the engine
+        is unavailable. The caller treats those identically on purpose: an
+        engine that failed to import must never mean "improvise something to
+        look busy", because that is precisely the behaviour this replaces.
+
+        The previous move is graded first, from the control feed rather than
+        from the model's account of how it went — the machine's own record is
+        the only evidence that can be trusted to move a mood.
+        """
+        try:
+            from core import initiative
+            initiative.grade_in_flight(self._autonomy.feed_recent(40))
+            move = initiative.next_move(
+                idle_seconds=idle_now,
+                user_activity=activity or "",
+                topics=list(recent or [])[-4:],
+            )
+            if move is not None and self._idle_governor is not None:
+                # A real mission was chosen, so reset the gap between
+                # contributions. Without this the governor's cooldown and the
+                # director's quiet both apply and it drifts to three times
+                # slower than configured.
+                self._idle_governor.mark(f"initiative: {move.key}",
+                                         now=time.monotonic())
+            return move
+        except Exception as e:
+            print(f"[Initiative] skipped: {e}")
+            return None
+
+    def _initiative_block(self, move) -> str:
+        """The prompt block describing the mood and the chosen mission."""
+        try:
+            from core import initiative
+            return initiative.prompt_block(move, autonomous=True,
+                                           status=initiative.status())
+        except Exception:
+            return ""
 
     # ── Phone audio relay ────────────────────────────────────────────────────────
 
@@ -3057,6 +3123,10 @@ class JarvisLive:
                         break
                     await asyncio.sleep(0.1)
                 if self.session:
+                    # A typed command is the user driving, so the mood goes
+                    # sharp rather than staying wherever the last idle hour
+                    # left it.
+                    _initiative_note("directed", 1.0)
                     # A remote command is deliberate control and the phone user
                     # has no desktop WAKE button — so it wakes JARVIS if asleep.
                     if self._wake_enabled and not self._awake:

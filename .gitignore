@@ -33,6 +33,10 @@ config/usage_counts.json
 # The self-training ledger: how well each capability has actually performed on
 # this machine, plus the rules it wrote itself. Local behaviour, local file.
 config/self_training.json
+# What autonomous mode did with the time it was given: the mood it is in, the
+# interests it gathered and the findings it kept. Personal to this machine —
+# the same reason the training ledger is not repo content.
+config/initiative.json
 
 # Trading journal, paper account, alerts, and risk settings — personal
 # financial data (positions, P/L, account size, limits). Never repo content.
