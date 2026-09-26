@@ -936,6 +936,7 @@ class JarvisLive:
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
         self._learned_marker       = 0              # how much of _session_log learning has consumed
+        self._active_mic           = ""             # what the capture loop actually opened (diagnostics)
         self._last_learn_ts        = 0.0            # first monotonic time of the last actual model-learn
         self._last_usage_flush     = time.monotonic()  # usage counter persisted on a schedule
         self._recent_failures = collections.deque(maxlen=8)  # (tool, snippet) of last failures
@@ -1144,7 +1145,18 @@ class JarvisLive:
         session TaskGroup, so they can only be re-opened by rebuilding it —
         but the conversation is kept, which is the whole reason resumption
         landed before this feature did."""
+        try:
+            from core import audio_devices as _ad
+            _ad.clear_rate_cache()      # old endpoints' rates mean nothing now
+        except Exception:
+            pass
         self.request_reconnect(keep_context=True, reason="audio device")
+
+    def active_mic_name(self) -> str:
+        """The microphone the capture loop is actually listening to, for the
+        Settings page — the saved setting and the truth can differ when the
+        saved device was unavailable and the default took over."""
+        return getattr(self, "_active_mic", "") or (get_input_device() or "")
 
     async def _watch_reconnect(self):
         """Session-scoped task: when a voluntary reconnect is requested, raise a
@@ -1959,9 +1971,9 @@ class JarvisLive:
                     pass
 
         try:
-            def _open_mic(dev):
+            def _open_mic(dev, rate=None):
                 return sd.InputStream(
-                    samplerate=SEND_SAMPLE_RATE,
+                    samplerate=rate or SEND_SAMPLE_RATE,
                     channels=CHANNELS,
                     dtype="int16",
                     blocksize=CHUNK_SIZE,
@@ -1977,8 +1989,33 @@ class JarvisLive:
             _mic_dev  = audio_devices.resolve(_mic_name, "input")
             if _mic_dev is not None:
                 print(f"[JARVIS] 🎤 Input device: {_mic_name}")
+
+            # Fixed-rate desktop microphones (USB interfaces, webcams,
+            # Bluetooth HFP) reject 16 kHz outright. Opening at the device's
+            # own rate lets PortAudio resample into exactly the 16 kHz int16
+            # the pipeline expects — so the desktop failure mode disappears
+            # without touching the laptop path, which opens at 16 kHz as
+            # before. `_mic_rate` is None (→ SEND_SAMPLE_RATE) for the default
+            # device and for anything that already accepted 16 kHz.
+            _mic_rate = None
+            if _mic_dev is not None:
+                _mic_rate = audio_devices.input_open_rate(_mic_dev)
+                if _mic_rate and _mic_rate != SEND_SAMPLE_RATE:
+                    print(f"[JARVIS] 🎤 Device is fixed-rate — capturing at "
+                          f"{_mic_rate} Hz and resampling to "
+                          f"{SEND_SAMPLE_RATE} Hz")
+            elif _mic_dev is None and not _mic_name:
+                # System default can ALSO be a fixed-rate endpoint (a desktop
+                # whose default is a USB interface). Find its rate without
+                # naming it.
+                try:
+                    import sounddevice as _sd
+                    _mic_rate = audio_devices.input_open_rate(_sd.default.device[0])
+                except Exception:
+                    _mic_rate = None
+
             try:
-                _mic_stream = _open_mic(_mic_dev)
+                _mic_stream = _open_mic(_mic_dev, _mic_rate)
             except Exception as _e:
                 # A device the picker listed but the driver will not open right
                 # now — exclusive mode, a webcam already in use, a virtual mic
@@ -1993,6 +2030,8 @@ class JarvisLive:
                 _mic_stream = _open_mic(None)
 
             with _mic_stream:
+                self._active_mic = (_mic_name if _mic_dev is not None
+                                    else "System default")
                 print("[JARVIS] 🎤 Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)

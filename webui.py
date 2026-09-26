@@ -1129,6 +1129,90 @@ class JarvisAPI:
         except Exception:
             return {"input": [], "output": []}
 
+    # ── microphone: real diagnosis, not a device list ───────────────────────
+    # "The mic shows in the list" was being mistaken for "the mic works". These
+    # endpoints separate existence, permission, capture and signal, and the
+    # test MEASURES audio instead of trusting a successful open. Everything
+    # here runs on pywebview's worker thread, so the UI never blocks while a
+    # probe listens.
+    def mic_devices(self, refresh: bool = False) -> dict:
+        """Every recording endpoint with its live status, plus the permission
+        gates and which row JARVIS is actually using."""
+        try:
+            from core import mic_diagnostics as md
+            rows = md.devices(refresh=bool(refresh))
+        except Exception:
+            rows = []
+        return {"devices": rows,
+                "permission": _safe(md.windows_permission,
+                                    {"supported": False, "allowed": True,
+                                     "master": "unknown",
+                                     "store_apps": "unknown",
+                                     "desktop_apps": "unknown"}),
+                "selected": _safe(lambda: (get_input_device() or ""), ""),
+                "active": self._active_mic_name()}
+
+    def mic_test(self, name: str) -> dict:
+        """Open one microphone and MEASURE ~0.9 s of real audio. Returns the
+        measured verdict — never a success inferred from the device existing."""
+        try:
+            from core import mic_diagnostics as md
+            idx = audio_devices.resolve(str(name or ""), "input")
+            result = md.test_device(idx)
+            # A measured pass is worth telling the whole app about.
+            if result.get("verdict") == "ok":
+                _PUMP.push("mic_status", {"device": name,
+                                          "verdict": "ok",
+                                          "peak": result.get("peak_rms", 0)})
+            return result
+        except Exception as e:
+            return {"opened": False, "delivered": False, "verdict": "failed",
+                    "message": str(e)[:200], "peak_rms": 0.0, "floor_rms": 0.0,
+                    "speech_headroom": 0.0, "noisy": False}
+
+    def mic_diag(self) -> dict:
+        """The whole chain in one call: device → permission → capture → signal,
+        with plain-language problems and fixes."""
+        try:
+            from core import mic_diagnostics as md
+            idx = audio_devices.resolve(get_input_device(), "input")
+            return md.diagnose(idx)
+        except Exception as e:
+            return {"device_present": False, "selected_device": "",
+                    "capture": "failed", "signal": "no signal",
+                    "permission": {"supported": False, "allowed": True},
+                    "problems": [f"diagnostics failed: {e}"], "fixes": [],
+                    "verdict": "failed", "levels": {}, "message": ""}
+
+    def mic_open_windows_settings(self) -> dict:
+        try:
+            from core import mic_diagnostics as md
+            return {"ok": bool(md.open_mic_settings())}
+        except Exception:
+            return {"ok": False}
+
+    def mic_refresh(self) -> dict:
+        """Devices changed (plug/unplug/default switch): forget every cached
+        answer and re-enumerate."""
+        try:
+            audio_devices.clear_rate_cache()
+        except Exception:
+            pass
+        try:
+            rows = audio_devices.list_devices("input", refresh=True)
+        except Exception:
+            rows = []
+        return {"ok": True, "count": len(rows),
+                "devices": self.mic_devices()}
+
+    def _active_mic_name(self) -> str:
+        try:
+            ui = self.ui
+            getter = getattr(ui, "active_mic_name", None)
+            return str(getter()) if callable(getter) else ""
+        except Exception:
+            return ""
+
     def perf_get(self) -> dict:
         with self._perf_lock:
             return dict(self._perf)

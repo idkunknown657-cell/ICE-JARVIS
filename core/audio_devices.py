@@ -193,6 +193,14 @@ def _display_name(name: str, devices) -> str:
 # and silently reintroduce the bug above.
 _RATES = {"input": 16000, "output": 24000}
 
+# Input rates tried in order when opening a microphone. WASAPI in shared mode
+# resamples, but several desktop drivers (USB interfaces, some webcams,
+# Bluetooth HFP endpoints) are fixed-rate and reject 16 kHz outright — the
+# device was never broken, 16 kHz was. PortAudio resamples transparently when
+# the device is opened at ITS rate, so the capture layer always receives the
+# 16 kHz the pipeline expects while the hardware runs natively.
+_INPUT_RATE_FALLBACKS = (16000, 48000, 44100, 96000, 24000, 32000, 8000, 11025)
+
 
 def configure(input_rate: int, output_rate: int) -> None:
     """Tell this module the sample rates the audio streams will use, so the
@@ -208,24 +216,37 @@ def configure(input_rate: int, output_rate: int) -> None:
 
 
 def _usable(idx: int, kind: str) -> bool:
-    """Can this device actually be opened at the rate we need?
+    """Can this device actually be opened at a rate we can work with?
 
     Deliberately opens a real stream rather than asking
     `check_output_settings`, because that function lies: it passed for an MME
     endpoint that then failed to open with "The specified format is not
     supported or cannot be translated" [MME error 32]. Opening and immediately
-    closing costs milliseconds and is the only answer that holds."""
+    closing costs milliseconds and is the only answer that holds.
+
+    Input tries each fallback rate before declaring the device unusable — a
+    fixed-rate desktop mic that rejects 16 kHz is usable, not dead. Output
+    keeps the single-rate behaviour: an output device that will not take the
+    playback rate cannot be worked around here."""
     st = None
     try:
         import sounddevice as sd
-        rate = _RATES.get(kind, 16000)
         if kind == "input":
-            st = sd.InputStream(samplerate=rate, channels=1, dtype="int16",
-                                blocksize=1024, device=idx,
-                                callback=lambda *_a: None)
-        else:
-            st = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
-                                    blocksize=1024, device=idx)
+            for rate in _input_rates():
+                try:
+                    st = sd.InputStream(samplerate=rate, channels=1,
+                                        dtype="int16", blocksize=1024,
+                                        device=idx,
+                                        callback=lambda *_a: None)
+                    st.start()
+                    return True
+                except Exception:
+                    st = None
+                    continue
+            return False
+        rate = _RATES.get("output", 24000)
+        st = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
+                                blocksize=1024, device=idx)
         st.start()
         return True
     except Exception:
@@ -236,6 +257,55 @@ def _usable(idx: int, kind: str) -> bool:
                 st.stop(); st.close()
             except Exception:
                 pass
+
+
+_RATE_CACHE: dict[tuple, int | None] = {}
+
+def _input_rates():
+    return _INPUT_RATE_FALLBACKS
+
+
+def input_open_rate(idx: int):
+    """The rate a microphone actually opened at, tried once and cached.
+
+    Returns the int rate, or None when no rate worked — the device is
+    genuinely unusable. resolve() and the capture layer use this so a fixed-
+    rate desktop mic opens at its own rate instead of never opening at all."""
+    key = ("input", idx)
+    if key in _RATE_CACHE:
+        return _RATE_CACHE[key]
+    rate = None
+    st = None
+    try:
+        import sounddevice as sd
+        for r in _input_rates():
+            try:
+                st = sd.InputStream(samplerate=r, channels=1, dtype="int16",
+                                    blocksize=1024, device=idx,
+                                    callback=lambda *_a: None)
+                st.start()
+                rate = r
+                break
+            except Exception:
+                st = None
+                continue
+    except Exception:
+        rate = None
+    finally:
+        if st is not None:
+            try:
+                st.stop(); st.close()
+            except Exception:
+                pass
+    _RATE_CACHE[key] = rate
+    return rate
+
+
+def clear_rate_cache() -> None:
+    """Forget which device opened at which rate. Called when the device list
+    changes (a headset plugged in, a USB port switched): the answer for the
+    old endpoints means nothing for the new ones."""
+    _RATE_CACHE.clear()
 
 # Aliases for "the default device" and internal routing endpoints. Matched
 # case-insensitively as substrings against the device name.
@@ -394,11 +464,13 @@ def resolve(name: str, kind: str):
             + [a for a in _PREFERRED_APIS.get(platform.system(), ()) if a != chosen] \
             + [None]
 
-        # A candidate only counts if it can be opened at the rate this side runs
-        # at. The prefix match matters because the API that carries the audio is
-        # not always the one that can spell: MME truncates names to 31 characters
-        # while DirectSound and WASAPI do not, so the name shown in the picker
-        # can be longer than the name of the endpoint it actually opens.
+        # A candidate only counts if it can be opened at a rate this side can
+        # work with (input falls back through the device's own rates — see
+        # _usable). The prefix match matters because the API that carries the
+        # audio is not always the one that can spell: MME truncates names to 31
+        # characters while DirectSound and WASAPI do not, so the name shown in
+        # the picker can be longer than the name of the endpoint it actually
+        # opens.
         for api_filter in orders:
             partial = None
             for idx, dev_name in _candidates(api_filter):
