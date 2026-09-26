@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-917%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1011%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
@@ -178,7 +178,7 @@ python -m unittest discover -s tests -p "test_[a-u]*.py"
 python -m unittest discover -s tests -p "test_[v-z]*.py"
 ```
 
-Both halves pass — 917 tests total.
+Both halves pass — 1011 tests total.
 
 ---
 
@@ -199,7 +199,7 @@ ICE-JARVIS/
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
 ├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
-└── tests/             # 917 unit tests
+└── tests/             # 1011 unit tests
 ```
 
 ---

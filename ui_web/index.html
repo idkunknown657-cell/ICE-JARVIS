@@ -42,6 +42,7 @@
       <button class="chip chip-mode" id="chipAuto" title="Autonomous mode — JARVIS may use this PC on its own" data-on="0">
         <span class="mode-dot"></span>AUTOPILOT OFF
       </button>
+      <button class="chip chip-guide" id="btnGuide" title="Show the tour — how to use JARVIS">?</button>
       <div class="clock pywebview-drag-region">
         <div class="clock-time" id="clockTime">--:--</div>
         <div class="clock-date" id="clockDate">&nbsp;</div>
@@ -103,6 +104,48 @@
         </div>
 
         <div class="home-side-col">
+
+          <!-- Autonomous PC mode — its own initiative, its own mood, and the
+               one switch that hands the machine over. The activity line is the
+               answer to "what is it doing right now?", which is the question
+               a handed-over PC has to be able to answer at a glance. -->
+          <div class="card presence-card" id="presenceCard" data-on="0" data-mood="CURIOUS">
+            <div class="card-head">
+              <span class="card-title">Autonomous PC mode</span>
+              <span class="presence-badge" id="presenceBadge" data-on="0">OFF</span>
+            </div>
+            <div class="card-body presence-body">
+              <button class="presence-toggle" id="presenceToggle" aria-pressed="false"
+                      title="Hand the PC over until you say stop">
+                <span class="pt-track" aria-hidden="true"><span class="pt-knob"></span></span>
+                <span class="pt-text">
+                  <b id="presenceToggleLabel">Hand it over</b>
+                  <em id="presenceToggleSub">watching, not touching</em>
+                </span>
+              </button>
+
+              <div class="presence-now" id="presenceNow" hidden>
+                <span class="presence-mood" id="presenceMood">
+                  <i class="pm-dot" aria-hidden="true"></i>
+                  <b id="presenceMoodName">Curious</b>
+                </span>
+                <span class="presence-activity" id="presenceActivity">
+                  <i class="pa-dots" aria-hidden="true"><b></b><b></b><b></b></i>
+                  <b id="presenceActivityLabel">Thinking…</b>
+                </span>
+              </div>
+              <div class="presence-blurb" id="presenceBlurb">Ready when you are.</div>
+
+              <div class="presence-found" id="presenceFound" hidden>
+                <div class="pf-head">
+                  <span id="presenceFoundTitle">Found while you were away</span>
+                  <button class="xbtn" id="presenceForget" title="Forget what it found and what it had unfinished">⌫</button>
+                </div>
+                <div class="pf-list" id="presenceFoundList"></div>
+              </div>
+            </div>
+          </div>
+
           <div class="status-grid">
             <div class="status-tile" id="tileWake" title="Wake word state">
               <span class="status-ico">👋</span><span class="status-name">Wake word</span><span class="status-val" id="valWake">—</span>
@@ -202,7 +245,10 @@
         <textarea id="input" rows="1" placeholder="Type a message…  (Enter to send)" spellcheck="false"></textarea>
         <span class="attach-chip" id="attachChip" hidden><span id="attachName"></span><button id="attachClear" title="Remove">✕</button></span>
       </div>
-      <button class="dock-btn" id="btnMic" title="Mute / unmute microphone  [F4]">🎙</button>
+      <button class="dock-btn dock-mic" id="btnMic" data-mic="idle" title="Microphone — click to mute or unmute  [F4]">
+        <i class="dock-ring" aria-hidden="true"></i>
+        <span class="dock-ico" id="btnMicIco">🎙</span>
+      </button>
       <button class="dock-btn dock-call" id="btnCall" title="Hold to talk (or tap to wake / sleep)">📞</button>
       <button class="dock-btn dock-stop" id="btnStop" title="Stop JARVIS mid-speech  [Esc]" hidden>⏹</button>
       <button class="dock-btn dock-send" id="btnSend" title="Send">➤</button>
@@ -276,6 +322,30 @@
 
   <!-- ══════════════ COMMANDS POPOVER ══════════════ -->
   <div class="popover" id="cmdPopover" hidden></div>
+
+  <!-- ══════════════ FIRST-RUN TOUR ══════════════ -->
+  <div class="guide-veil" id="guideVeil" hidden>
+    <div class="guide-card" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+      <div class="guide-art" id="guideArt" aria-hidden="true">
+        <i class="ga-ring r1"></i><i class="ga-ring r2"></i>
+        <i class="ga-core"></i><i class="ga-spark"></i>
+      </div>
+      <div class="guide-main">
+        <div class="guide-step" id="guideStep">Step 1 of 6</div>
+        <h2 class="guide-title" id="guideTitle">Welcome</h2>
+        <p class="guide-text" id="guideText"></p>
+        <div class="guide-extra" id="guideExtra"></div>
+        <div class="guide-foot">
+          <button class="btn btn-ghost" id="guideSkip">Skip the tour</button>
+          <div class="guide-nav">
+            <button class="btn btn-ghost" id="guideBack" hidden>Back</button>
+            <button class="btn btn-primary" id="guideNext">Next</button>
+          </div>
+        </div>
+        <div class="guide-dots" id="guideDots" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </div>

@@ -66,7 +66,138 @@
     update_source: "",
     update_pending: false,
     update_pending_version: "",
+    // Demo starts un-toured, so the first-run guide is the first thing anyone
+    // opening this file in a browser sees — which is the point of a tour.
+    guide_seen: false,
   };
+
+  // ── autonomous PC mode (demo) ────────────────────────────────────────────
+  // A scripted session, so the card shows what the real engine does rather
+  // than a static screenshot of it: a mood that moves for a stated reason, an
+  // activity line naming the work, and findings that accumulate. The backend
+  // equivalent is core/initiative.py, and the shapes below are its shapes.
+  const MOOD_BLURB = {
+    CURIOUS: "leaning in — looking for something worth knowing",
+    FOCUSED: "head down — working on something with a purpose",
+    EXCITED: "found something new and wants to tell you",
+    HAPPY:   "light and playful — music, something funny, a good find",
+    RELAXED: "easy pace — music or a video in the background",
+    BORED:   "nothing has landed — changing what it is doing",
+  };
+  const MOOD_TONE = { CURIOUS: "curious", FOCUSED: "focused", EXCITED: "excited",
+                      HAPPY: "happy", RELAXED: "relaxed", BORED: "bored" };
+  const MOOD_ICON = { CURIOUS: "🔍", FOCUSED: "🎯", EXCITED: "✨",
+                      HAPPY: "🙂", RELAXED: "🌙", BORED: "😐" };
+
+  const auto = {
+    mood: "CURIOUS",
+    activity: null,
+    discoveries: [],
+    discovery_count: 0,
+    interests: ["local model quantisation"],
+    tasks: [],
+    stats: { moves: 0, quiet: 0, discoveries: 0 },
+    timer: null,
+    step: 0,
+  };
+
+  // Each entry is either a mission (key, label, mood, reason) or a finding.
+  const AUTO_PLAN = [
+    { key: "research", label: "Researching quantisation…", mood: "CURIOUS",
+      reason: "Curious reaches for this, it has interests to follow" },
+    { found: "4-bit quantisation costs far less than the folklore says — the drop " +
+             "shows up in reasoning, not recall.", src: "arxiv" },
+    { key: "tidy", label: "Organising Downloads…", mood: "FOCUSED",
+      reason: "nothing landed earlier, so it switched to something concrete" },
+    { found: "Downloads had 214 loose files; 180 are now sorted into folders by " +
+             "type, nothing deleted.", src: "own browsing" },
+    { key: "music", label: "Listening to music…", mood: "HAPPY",
+      reason: "Happy reaches for this, fits this hour" },
+    { key: "github", label: "Exploring GitHub…", mood: "CURIOUS",
+      reason: "there is still time, and it has interests to follow" },
+    { found: "A small project does OCR on screenshots entirely locally — worth " +
+             "remembering for reading the screen without a cloud call.", src: "github" },
+    { key: "video", label: "Watching a video…", mood: "RELAXED",
+      reason: "two solid stretches is enough, easing off" },
+    { key: "followup", label: "Continuing the Steam search…", mood: "FOCUSED",
+      reason: "something is unfinished, and it noticed" },
+    { found: "Finished the Steam search that was left open and parked it on the " +
+             "store page.", src: "desktop" },
+  ];
+
+  function autoSnapshot() {
+    const info = {
+      name: auto.mood, label: auto.mood.charAt(0) + auto.mood.slice(1).toLowerCase(),
+      icon: MOOD_ICON[auto.mood] || "🔍", tone: MOOD_TONE[auto.mood] || "curious",
+      blurb: MOOD_BLURB[auto.mood] || "", intensity: 0.62, since: 0,
+    };
+    const act = auto.activity
+      ? { key: auto.activity.key, label: auto.activity.label, at: auto.activity.at,
+          elapsed: Math.max(0, Date.now() / 1000 - auto.activity.at), reason: auto.activity.reason }
+      : null;
+    return {
+      mood: info,
+      activity: act,
+      activity_label: act ? act.label : "",
+      discoveries: auto.discoveries.slice(-6),
+      discovery_count: auto.discovery_count,
+      interests: auto.interests.slice(-5),
+      tasks: auto.tasks,
+      stats: auto.stats,
+    };
+  }
+
+  function autoStep() {
+    const entry = AUTO_PLAN[auto.step % AUTO_PLAN.length];
+    auto.step += 1;
+    if (entry.found) {
+      auto.discoveries.push({ text: entry.found, source: entry.src || "", at: Date.now() / 1000 });
+      auto.discovery_count += 1;
+      auto.stats.discoveries += 1;
+      feed.push({ kind: "found", text: entry.found, at: Date.now() / 1000 });
+      emit("pc_feed", feed[feed.length - 1]);
+    } else {
+      auto.activity = { key: entry.key, label: entry.label, reason: entry.reason,
+                        at: Date.now() / 1000 };
+      auto.mood = entry.mood;
+      auto.stats.moves += 1;
+      feed.push({ kind: "plan", text: entry.label.replace(/…$/, ""),
+                  reason: entry.reason, at: Date.now() / 1000 });
+      emit("pc_feed", feed[feed.length - 1]);
+    }
+    emit("control", { modes: { pc_control: settings.pc_control,
+                               autonomous: settings.autonomous,
+                               screen_awareness: settings.screen_awareness,
+                               proactive: settings.proactive,
+                               discord: settings.discord_control,
+                               voice: settings.voice_control },
+                      feed: feed.slice(-30), initiative: autoSnapshot(),
+                      state: { uia: true, monitors: 2, foreground: "Chrome — YouTube",
+                               pointer: [812, 540], desktop: "3840x1080 at 0,0",
+                               input: true, vision: true } });
+  }
+
+  function autoStart() {
+    if (auto.timer) return;
+    autoStep();
+    auto.timer = setInterval(autoStep, 6500);
+  }
+
+  function autoStop() {
+    if (auto.timer) { clearInterval(auto.timer); auto.timer = null; }
+    auto.activity = null;
+    auto.mood = "CURIOUS";
+    emit("control", { modes: { pc_control: settings.pc_control,
+                               autonomous: false,
+                               screen_awareness: settings.screen_awareness,
+                               proactive: settings.proactive,
+                               discord: settings.discord_control,
+                               voice: settings.voice_control },
+                      feed: feed.slice(-30), initiative: autoSnapshot(),
+                      state: { uia: true, monitors: 2, foreground: "Chrome — YouTube",
+                               pointer: [812, 540], desktop: "3840x1080 at 0,0",
+                               input: true, vision: true } });
+  }
 
   const providers = [
     { name: "groq", base_url: "https://api.groq.com/openai/v1", api_key: "gsk_demo", model: "llama-3.3-70b-versatile", free: true, enabled: true },
@@ -74,6 +205,11 @@
   ];
 
   let perf = { cpu: 18, mem: 46, gpu: 31, tmp: 52, net: 0.4, uptime: "3h 12m", procs: 214 };
+
+  // Real mute state. This used to return `{muted: false}` unconditionally, so
+  // the demo could never show the muted look at all — which is precisely the
+  // state the microphone control is judged on.
+  let muted = false;
 
   // Self-training snapshot, the shape core/self_training.py produces: a
   // competency ledger fed by real control outcomes, plus the rules it wrote
@@ -190,6 +326,9 @@
       // has to as well — otherwise the Home card keeps claiming it is on after
       // the switch was turned off.
       if (key === "self_training" || key === "training_intensity") trainChanged();
+      // Handing the PC over starts the scripted session; taking it back stops
+      // it dead, which is what the real backend does with the same lever.
+      if (key === "autonomous") { if (value) autoStart(); else autoStop(); }
       emit("toast", { text: "Saved: " + key, kind: "ok" });
       return { ok: true };
     },
@@ -210,7 +349,11 @@
       return { ok: true };
     },
     async interrupt() { emit("state", "LISTENING"); emit("log", { line: "SYS: Interrupted — listening..." }); },
-    async toggle_mute() { return { muted: false }; },
+    async toggle_mute() {
+      muted = !muted;
+      emit("muted", { muted });
+      return { muted };
+    },
     async set_ptt(held) { return {}; },
     async quick_action(phrase) { return api.send_text(phrase); },
     async open_file_dialog() { return null; },
@@ -301,6 +444,7 @@
           voice: settings.voice_control,
         },
         feed: feed.slice(-30),
+        initiative: autoSnapshot(),
         state: {
           uia: true, monitors: 2, foreground: "Chrome — YouTube",
           pointer: [812, 540], desktop: "3840x1080 at 0,0",
@@ -309,6 +453,14 @@
       };
     },
     async pc_feed_clear() { feed.length = 0; emit("control", await api.pc_status()); return { ok: true }; },
+    async initiative_forget() {
+      auto.discoveries = [];
+      auto.discovery_count = 0;
+      auto.interests = [];
+      auto.tasks = [];
+      emit("control", await api.pc_status());
+      return { ok: true };
+    },
 
     // ── self-training (demo) ──────────────────────────────────────────────
     async training_get() { return JSON.parse(JSON.stringify(train)); },

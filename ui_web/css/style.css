@@ -1681,3 +1681,354 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
 }
 .mic-diag-line { color: var(--text-med); margin: 2px 0; }
 .mic-diag-fix { color: var(--green); font-size: 11.5px; margin: 2px 0 2px 10px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAYER 3 — AUTONOMOUS PC MODE, THE TOUR, AND A MICROPHONE THAT EXPLAINS
+   ITSELF
+
+   Three things were true of the interface before this layer: handing the PC
+   over was a switch with nothing to look at afterwards, a new user had no way
+   in but the settings tree, and the microphone button turned red when you
+   muted it — which is not an error, and made a deliberate choice look like a
+   fault. Each block below fixes one of those, in that order.
+
+   Everything is built from the tokens at the top of this file, so the accent
+   colour the user picks still drives the whole surface.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── autonomous PC mode: mood, activity, and what came of it ──────────────
+   The mood is the card's identity, so it owns one variable and every accent
+   inside the card reads from it. Adding a mood means adding one line here —
+   the alternative (a colour per element per state) is how a palette rots. */
+.presence-card {
+  --mood: 56, 189, 248;                    /* CURIOUS, the resting state */
+  position: relative; overflow: hidden;
+}
+.presence-card[data-mood="CURIOUS"] { --mood: 56, 189, 248; }
+.presence-card[data-mood="FOCUSED"] { --mood: 139, 109, 245; }
+.presence-card[data-mood="EXCITED"] { --mood: 255, 209, 102; }
+.presence-card[data-mood="HAPPY"]   { --mood: 49, 217, 174; }
+.presence-card[data-mood="RELAXED"] { --mood: 127, 180, 255; }
+.presence-card[data-mood="BORED"]   { --mood: 132, 153, 189; }
+
+.presence-card[data-on="1"] {
+  border-color: rgba(var(--mood), 0.30);
+  box-shadow: 0 0 0 1px rgba(var(--mood), 0.06), var(--shadow-1);
+}
+/* A slow sweep along the top edge while it has the machine — the card is the
+   one thing on screen that is different when authority has been handed over. */
+.presence-card[data-on="1"]::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1.5px;
+  background: linear-gradient(90deg, transparent,
+              rgba(var(--mood), 0.85), transparent);
+  animation: presenceSweep 3.6s ease-in-out infinite;
+}
+@keyframes presenceSweep {
+  0%, 100% { opacity: 0.25; transform: translateX(-30%); }
+  50%      { opacity: 1;    transform: translateX(30%); }
+}
+
+.presence-badge {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 1.1px;
+  padding: 2px 7px; border-radius: var(--r-full);
+  color: var(--text-dim); border: 1px solid var(--border);
+}
+.presence-badge[data-on="1"] {
+  color: rgb(var(--mood)); border-color: rgba(var(--mood), 0.4);
+  background: rgba(var(--mood), 0.10);
+}
+
+.presence-body { display: flex; flex-direction: column; gap: 10px; padding: 11px 13px 13px; }
+
+.presence-toggle {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 9px 11px; border-radius: 12px; text-align: left;
+  border: 1px solid var(--border); background: rgba(10, 16, 30, 0.5);
+  transition: border-color .22s var(--out, ease), background .22s ease,
+              transform .16s cubic-bezier(.34, 1.56, .64, 1);
+}
+.presence-toggle:hover { border-color: rgba(var(--mood), 0.38); background: rgba(var(--mood), 0.07); }
+.presence-toggle:active { transform: scale(.985); }
+.presence-toggle[aria-pressed="true"] {
+  border-color: rgba(var(--mood), 0.42); background: rgba(var(--mood), 0.10);
+}
+
+.pt-track {
+  position: relative; flex: 0 0 auto; width: 40px; height: 21px;
+  border-radius: var(--r-full); background: rgba(148, 184, 255, 0.10);
+  border: 1px solid var(--border-2); transition: background .24s ease, border-color .24s ease;
+}
+.pt-knob {
+  position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+  border-radius: 50%; background: var(--text-med);
+  transition: transform .3s cubic-bezier(.34, 1.56, .64, 1), background .24s ease,
+              box-shadow .24s ease;
+}
+.presence-toggle[aria-pressed="true"] .pt-track {
+  background: rgba(var(--mood), 0.22); border-color: rgba(var(--mood), 0.5);
+}
+.presence-toggle[aria-pressed="true"] .pt-knob {
+  transform: translateX(19px); background: rgb(var(--mood));
+  box-shadow: 0 0 10px rgba(var(--mood), 0.75);
+}
+
+.pt-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pt-text b { font-size: 12.5px; font-weight: 600; color: var(--white); }
+.pt-text em { font-style: normal; font-size: 10.5px; color: var(--text-dim); }
+
+.presence-now { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.presence-mood, .presence-activity {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: var(--r-full); font-size: 11.5px;
+  border: 1px solid rgba(var(--mood), 0.32); background: rgba(var(--mood), 0.09);
+  color: rgb(var(--mood)); max-width: 100%;
+}
+.presence-mood b, .presence-activity b { font-weight: 600; letter-spacing: .3px; }
+.presence-activity { border-color: var(--border-2); background: rgba(148, 184, 255, 0.06); color: var(--text); }
+.presence-activity b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pm-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--mood));
+  animation: moodBreathe 3.2s ease-in-out infinite;
+}
+@keyframes moodBreathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--mood), 0.5); opacity: 0.85; }
+  50%      { box-shadow: 0 0 0 5px rgba(var(--mood), 0); opacity: 1; }
+}
+
+/* the activity dots are the smallest honest "working" indicator there is:
+   they move while a mission is in flight and stop when nothing is running */
+.pa-dots { display: inline-flex; gap: 2.5px; }
+.pa-dots b {
+  width: 3.5px; height: 3.5px; border-radius: 50%;
+  background: var(--pri); opacity: 0.3; animation: paDot 1.25s ease-in-out infinite;
+}
+.pa-dots b:nth-child(2) { animation-delay: .18s; }
+.pa-dots b:nth-child(3) { animation-delay: .36s; }
+@keyframes paDot {
+  0%, 100% { opacity: 0.25; transform: translateY(0); }
+  40%      { opacity: 1;    transform: translateY(-2px); }
+}
+
+.presence-blurb { font-size: 11.5px; line-height: 1.55; color: var(--text-med); }
+
+.presence-found { border-top: 1px dashed var(--border); padding-top: 9px; }
+.pf-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 10px; letter-spacing: .9px; text-transform: uppercase;
+  color: var(--text-dim); margin-bottom: 4px;
+}
+.pf-row { display: flex; align-items: flex-start; gap: 7px; padding: 3.5px 0; font-size: 11.5px; }
+.pf-dot {
+  flex: 0 0 auto; width: 5px; height: 5px; margin-top: 5px; border-radius: 50%;
+  background: rgba(var(--mood), 0.8);
+}
+.pf-text { flex: 1 1 auto; color: var(--text); line-height: 1.5; user-select: text; }
+.pf-src {
+  flex: 0 0 auto; font-size: 9.5px; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: var(--r-full); padding: 1px 6px;
+  white-space: nowrap;
+}
+.pf-empty, .pf-more { font-size: 10.5px; color: var(--text-dim); line-height: 1.6; }
+
+/* ── the tour ────────────────────────────────────────────────────────────
+   z-index 68: above the confirm and camera modals (60), below the setup veil
+   (70) and the toasts (65, raised on the next line) so a toast about a real
+   event is never hidden by a tutorial. */
+.guide-veil {
+  position: fixed; inset: 0; z-index: 68;
+  display: grid; place-items: center; padding: 22px;
+  background: rgba(2, 4, 9, 0.74); backdrop-filter: blur(9px);
+  animation: guideVeil .26s ease both;
+}
+@keyframes guideVeil { from { opacity: 0; } to { opacity: 1; } }
+
+.guide-card {
+  width: min(780px, 94vw); max-height: 88vh;
+  display: grid; grid-template-columns: 232px 1fr;
+  background: linear-gradient(160deg, #0a1120, #060a14 60%);
+  border: 1px solid var(--border-2); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); overflow: hidden;
+  animation: guideCard .4s cubic-bezier(.16, 1, .3, 1) both;
+}
+@keyframes guideCard {
+  from { opacity: 0; transform: translateY(14px) scale(.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+.guide-art {
+  position: relative; overflow: hidden; min-height: 100%;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(56, 189, 248, 0.16), transparent 62%),
+    linear-gradient(180deg, #070d18, #04070e);
+  border-right: 1px solid var(--border);
+}
+.ga-ring {
+  position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%);
+  border: 1px solid rgba(56, 189, 248, 0.22); border-radius: 50%;
+}
+.ga-ring.r1 { width: 150px; height: 150px; animation: gaSpin 22s linear infinite; }
+.ga-ring.r2 { width: 96px;  height: 96px;  border-style: dashed;
+              border-color: rgba(139, 109, 245, 0.28); animation: gaSpin 15s linear infinite reverse; }
+@keyframes gaSpin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+.ga-core {
+  position: absolute; left: 50%; top: 44%; width: 54px; height: 54px;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, #ffffff, var(--pri) 46%, rgba(56, 189, 248, 0) 74%);
+  animation: gaCore 4.2s ease-in-out infinite;
+}
+@keyframes gaCore {
+  0%, 100% { transform: translate(-50%, -50%) scale(1);     opacity: 0.9; }
+  50%      { transform: translate(-50%, -50%) scale(1.08);  opacity: 1; }
+}
+.ga-spark {
+  position: absolute; left: 50%; top: 44%; width: 190px; height: 190px;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.10), transparent 68%);
+}
+
+.guide-main { padding: 22px 24px 16px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.guide-step {
+  font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--pri); margin-bottom: 6px;
+}
+.guide-title { font-size: 19.5px; font-weight: 650; color: var(--white); line-height: 1.25; margin-bottom: 9px; }
+.guide-text { font-size: 12.8px; line-height: 1.68; color: var(--text); margin-bottom: 12px; }
+.guide-sub {
+  font-size: 11.5px; line-height: 1.6; color: var(--text-med);
+  border-left: 2px solid var(--pri-dim); padding-left: 10px; margin-bottom: 10px;
+}
+.guide-note {
+  font-size: 11.5px; line-height: 1.6; color: var(--text-med);
+  background: rgba(56, 189, 248, 0.06); border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: var(--r-sm); padding: 8px 11px; margin-bottom: 10px;
+}
+.guide-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+.guide-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.guide-nav { display: flex; gap: 8px; }
+.guide-dots { display: flex; gap: 5px; margin-top: 11px; justify-content: center; }
+.guide-dots i {
+  width: 6px; height: 6px; border-radius: var(--r-full);
+  background: rgba(148, 184, 255, 0.18); cursor: default;
+  transition: width .22s ease, background .22s ease;
+}
+.guide-dots i.done { background: var(--pri-dim); }
+.guide-dots i.on   { width: 17px; background: var(--pri); }
+
+/* the app steps back while the tour is up, so the tour reads as being in front
+   of a window rather than pasted over it */
+body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996); }
+#app { transition: filter .3s ease, transform .3s ease; }
+
+/* ── microphone ──────────────────────────────────────────────────────────
+   Three states, three treatments, and only one of them is alarming:
+     live   — a ring that moves with the voice (proof it is hearing you)
+     muted  — calm amber, a slash, and no alarm: the user did this on purpose
+     error  — red, only when a probe found a device that is not delivering */
+.dock-mic { position: relative; }
+.dock-mic .dock-ico { position: relative; z-index: 1; }
+.dock-mic .dock-ring {
+  position: absolute; inset: 1px; border-radius: var(--r-full);
+  border: 1.5px solid rgba(49, 217, 174, 0); pointer-events: none;
+  transform: scale(calc(1 + var(--lv, 0) * 0.22));
+  box-shadow: 0 0 calc(3px + var(--lv, 0) * 16px) rgba(49, 217, 174, calc(0.06 + var(--lv, 0) * 0.55));
+  transition: transform .1s linear, box-shadow .1s linear, border-color .2s ease;
+}
+.dock-mic[data-hearing="1"] .dock-ring { border-color: rgba(49, 217, 174, 0.45); }
+.dock-mic[data-mic="muted"] { color: var(--amber); }
+.dock-mic[data-mic="muted"] .dock-ring { border-color: rgba(245, 180, 92, 0.30); box-shadow: none; transform: none; }
+.dock-mic[data-mic="muted"]::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 24px; height: 1.6px; border-radius: 2px; background: var(--amber);
+  transform: translate(-50%, -50%) rotate(-45deg);
+  animation: muteSlash .22s cubic-bezier(.34, 1.56, .64, 1) both;
+}
+@keyframes muteSlash {
+  from { transform: translate(-50%, -50%) rotate(-45deg) scaleX(0); }
+  to   { transform: translate(-50%, -50%) rotate(-45deg) scaleX(1); }
+}
+
+/* the microphone tile mirrors the dock button, so the two can never disagree */
+.status-tile[data-mic="muted"] .status-val { color: var(--amber); }
+.status-tile[data-mic="muted"]::after { background: linear-gradient(90deg, transparent, var(--amber), transparent) !important; }
+.status-tile[data-mic="live"] .status-val { color: var(--green); }
+
+/* verdict banners: one shape, four tones — "listening", "heard you",
+   "too quiet", "nothing arrived" */
+.mic-result {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 11px 13px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--panel);
+  font-size: 12px; line-height: 1.6; user-select: text;
+  transition: border-color .25s ease, background .25s ease;
+}
+.mic-result[data-tone="wait"] { border-color: rgba(56, 189, 248, 0.22); background: rgba(56, 189, 248, 0.05); }
+.mic-result[data-tone="ok"]   { border-color: rgba(49, 217, 174, 0.4);  background: rgba(49, 217, 174, 0.07); }
+.mic-result[data-tone="warn"] { border-color: rgba(245, 180, 92, 0.4);  background: rgba(245, 180, 92, 0.07); }
+.mic-result[data-tone="bad"]  { border-color: rgba(255, 92, 122, 0.34); background: rgba(255, 92, 122, 0.06); }
+.mv-head { display: flex; align-items: center; gap: 8px; }
+.mv-ico {
+  flex: 0 0 auto; width: 21px; height: 21px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700;
+}
+.mic-result[data-tone="wait"] .mv-ico { color: var(--pri);   background: rgba(56, 189, 248, 0.14); }
+.mic-result[data-tone="ok"]   .mv-ico { color: var(--green); background: rgba(49, 217, 174, 0.16); }
+.mic-result[data-tone="warn"] .mv-ico { color: var(--amber); background: rgba(245, 180, 92, 0.16); }
+.mic-result[data-tone="bad"]  .mv-ico { color: var(--red);   background: rgba(255, 92, 122, 0.16); }
+.mv-title { font-size: 12.8px; font-weight: 600; color: var(--white); }
+.mv-text { color: var(--text-med); }
+.mv-meta { font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
+
+/* ── a polish pass over the shared components ─────────────────────────────
+   Deliberately small and additive: the point is that every interactive thing
+   responds the same way, not that anything looks new. */
+:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.75); outline-offset: 2px;
+}
+.btn, .btn-sm, .dock-btn, .auto-sw, .status-tile, .presence-toggle, .nav-btn {
+  -webkit-tap-highlight-color: transparent;
+}
+.card { box-shadow: var(--shadow-1); }
+.card-head { gap: 8px; }
+.pc-empty, .pf-empty, .chat-empty-sub, .settings-placeholder { line-height: 1.65; }
+
+/* scrollbars, so a long log does not look like a browser default */
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 184, 255, 0.14); border-radius: var(--r-full);
+  border: 2px solid transparent; background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(148, 184, 255, 0.28); background-clip: content-box; }
+
+/* numbers that change every second must not reflow their neighbours */
+.status-val, .clock-time, .chip, .pc-time, .mv-meta { font-variant-numeric: tabular-nums; }
+
+/* the guide, on a small window: the art column is the first thing to go */
+@media (max-width: 720px) {
+  .guide-card { grid-template-columns: 1fr; }
+  .guide-art { display: none; }
+}
+
+/* the home grid stacks earlier than it used to: below ~1180px the side column
+   was scrolling inside a 300px slot, which hid the presence card entirely */
+@media (max-width: 1180px) and (min-width: 981px) {
+  .home-grid { grid-template-columns: 1fr; }
+  .home-side-col { overflow-y: visible; }
+}
+
+/* reduced motion: the guide and the mood still *change*, they just stop
+   moving while they do it — a tour that cannot be dismissed by waiting is a
+   bug, so nothing essential is animated in the first place */
+@media (prefers-reduced-motion: reduce) {
+  .presence-card[data-on="1"]::before,
+  .pm-dot, .pa-dots b, .ga-ring, .ga-core, .dock-mic::after {
+    animation: none !important;
+  }
+  .guide-card, .guide-veil { animation: none !important; }
+  .dock-mic .dock-ring { transition: none; transform: none; }
+  body.guiding #app { filter: none; transform: none; }
+}

@@ -432,16 +432,45 @@
   }
   function applyMuted(m) {
     S.muted = m;
-    $("btnMic").textContent = m ? "🔇" : "🎙";
-    $("btnMic").style.color = m ? "var(--red)" : "";
+    const mb = $("btnMic");
+    const mico = $("btnMicIco");
+    if (mico) mico.textContent = m ? "🔇" : "🎙";
+    if (mb) {
+      // `data-mic`, not an inline red colour. Muting is a state the user chose,
+      // so it gets the calm treatment; painting it red made a deliberate mute
+      // look like a fault, which is exactly what made this control feel bad.
+      // Red is reserved for a device that genuinely is not delivering audio.
+      mb.dataset.mic = m ? "muted" : "live";
+      mb.title = m
+        ? "Microphone is muted — click to unmute  [F4]"
+        : "Microphone is live — click to mute  [F4]";
+    }
     const av = window.JarvisAvatar;
     if (av) av.muted = m;
     if (m && S.state !== "SLEEPING") { $("statePill").dataset.state = "MUTED"; $("statePill").textContent = "MUTED"; }
     else { $("statePill").dataset.state = S.state; $("statePill").textContent = S.state; }
     $("valMic").textContent = m ? "Muted" : "Live";
     $("tileMic").classList.toggle("off", m);
+    const tt = $("tileMic");
+    tt.dataset.mic = m ? "muted" : "live";
+    tt.title = m ? "Microphone muted — click to unmute (F4)"
+                 : "Microphone live — click to mute (F4)";
   }
   $("btnMic").addEventListener("click", toggleMute);
+
+  // The dock mic button carries a live level ring. It is a diagnostic, not
+  // decoration: "is my microphone actually hearing me?" is answered by the ring
+  // moving before you say a word — and by its stillness when nothing arrives,
+  // which is the difference between a mute you chose and a device that died.
+  let micLv = 0;
+  function micGlow(level) {
+    const b = $("btnMic");
+    if (!b) return;
+    const lv = Math.max(0, Math.min(1, Number(level) || 0));
+    micLv = lv >= micLv ? lv : micLv * 0.72 + lv * 0.28;
+    b.style.setProperty("--lv", micLv.toFixed(3));
+    b.dataset.hearing = micLv > 0.025 ? "1" : "0";
+  }
 
   // call button — hold to talk, tap wakes/sleeps
   (function callBtn() {
@@ -646,7 +675,7 @@
     ["screen", "👁", "Screen Awareness"], ["pc", "🖱", "PC Control"], ["integrations", "🧩", "Integrations"],
     ["steam", "🎮", "Steam"], ["appearance", "🎨", "Appearance"], ["startup", "🚀", "Startup & Background"],
     ["privacy", "🔒", "Privacy"], ["performance", "📈", "Performance"], ["advanced", "🛠", "Advanced"],
-    ["about", "ℹ", "About"],
+    ["guide", "❔", "Tour & Help"], ["about", "ℹ", "About"],
   ];
 
   (function buildNav() {
@@ -899,7 +928,7 @@
     ["voice",            "🎙", "Voice",       "mic is live"],
   ];
 
-  S.pc = { modes: {}, feed: [], state: {} };
+  S.pc = { modes: {}, feed: [], state: {}, initiative: null };
 
   function buildRail() {
     const wrap = $("autoSwitches");
@@ -943,7 +972,13 @@
     const auto = !!modes.autonomous;
     document.body.dataset.autopilot = auto ? "1" : "0";   // hooks the HUD readout CSS
     const hudAuto = $("hudAuto");
-    if (hudAuto) hudAuto.innerHTML = "AUTO · <b>" + (auto ? "ENGAGED" : "OFF") + "</b>";
+    if (hudAuto) {
+      // The mood rides the HUD readout, because on a handed-over PC the most
+      // informative thing that fits beside "AUTO" is what it is being.
+      const mname = auto ? moodOf().name : "";
+      hudAuto.innerHTML = "AUTO · <b>" + (auto ? "ENGAGED" : "OFF") + "</b>"
+        + (mname ? " · " + esc(mname) : "");
+    }
     const chip = $("chipAuto");
     chip.dataset.on = auto ? "1" : "0";
     chip.title = auto
@@ -1042,11 +1077,327 @@
       if (!st) return;
       S.pc.modes = st.modes || S.pc.modes;
       S.pc.state = st.state || {};
+      if (st.initiative) S.pc.initiative = st.initiative;
       paintRail();
+      paintPresence();
       setFeed(st.feed || []);
       paintPcFoot(S.pc.state);
     } catch (e) { /* headless or old backend */ }
   }
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  AUTONOMOUS PC MODE — the card that says what it is doing, and why
+  //
+  //  The rail answers "may it touch the machine?". This answers the two
+  //  questions a handed-over PC creates: what is it doing right now (a mood and
+  //  a live activity line, pushed from core/initiative.py — never invented
+  //  here), and what did it get out of the time (the findings list). One switch
+  //  turns it on, and the same switch turns it off mid-step, because the
+  //  backend cancels the running action the moment the lever lands.
+  // ════════════════════════════════════════════════════════════════════════
+
+  function moodOf() {
+    const i = S.pc.initiative || {};
+    return i.mood || { name: "CURIOUS", label: "Curious", icon: "🔍",
+                       tone: "curious", blurb: "", intensity: 0.5 };
+  }
+
+  function elapsedText(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    if (s < 90) return "just started";
+    if (s < 3600) return Math.round(s / 60) + " min in";
+    return Math.round(s / 360) / 10 + " h in";
+  }
+
+  function paintPresence() {
+    const card = $("presenceCard");
+    if (!card) return;
+    const on = !!(S.pc.modes || {}).autonomous;
+    const init = S.pc.initiative || {};
+    const mood = moodOf();
+    const act = init.activity || null;
+
+    card.dataset.on = on ? "1" : "0";
+    card.dataset.mood = mood.name || "CURIOUS";
+    $("presenceBadge").dataset.on = on ? "1" : "0";
+    $("presenceBadge").textContent = on ? "ON" : "OFF";
+    $("presenceToggle").setAttribute("aria-pressed", on ? "true" : "false");
+    $("presenceToggleLabel").textContent = on ? "Take back control"
+                                              : "Hand it over";
+    $("presenceToggleSub").textContent = on
+      ? (S.pc.modes.pc_control ? "say “stop” any time" : "PC control is off — it can only look")
+      : "watching, not touching";
+
+    const now = $("presenceNow");
+    now.hidden = !on;
+    if (on) {
+      $("presenceMoodName").textContent = mood.label || mood.name;
+      const label = $("presenceActivityLabel");
+      if (act && (act.label || act.key)) {
+        label.textContent = act.label || act.key;
+        const el2 = act.elapsed != null ? act.elapsed : (act.at ? (Date.now() / 1000 - act.at) : 0);
+        label.dataset.elapsed = elapsedText(el2);
+      } else {
+        label.textContent = "Waiting for a quiet moment…";
+        label.dataset.elapsed = "";
+      }
+    }
+
+    const blurb = $("presenceBlurb");
+    blurb.textContent = on
+      ? (mood.blurb || "") || "Working quietly."
+      : "Nothing runs until you hand it over. Money, deletion, shutdown, " +
+        "installs and messages still ask first — always.";
+
+    // Findings: the payoff of the time it was given, and the only part of this
+    // card the user can act on after the fact.
+    const found = $("presenceFound");
+    const list = $("presenceFoundList");
+    const rows = (init.discoveries || []).slice(-4).reverse();
+    const total = init.discovery_count || rows.length;
+    list.textContent = "";
+    if (!rows.length) {
+      list.appendChild(el("div", "pf-empty",
+        total ? "Nothing kept yet from this session."
+              : "Nothing yet. It fills up when JARVIS finds something worth keeping."));
+      $("presenceFound").hidden = !on && !total;
+    } else {
+      rows.forEach(r => {
+        const row = el("div", "pf-row");
+        row.appendChild(el("span", "pf-dot"));
+        row.appendChild(el("span", "pf-text", r.text || ""));
+        if (r.source) row.appendChild(el("span", "pf-src", r.source));
+        row.title = (r.text || "") + (r.url ? "\n" + r.url : "");
+        list.appendChild(row);
+      });
+      const more = total > rows.length
+        ? el("div", "pf-more", "+" + (total - rows.length) + " more kept earlier") : null;
+      if (more) list.appendChild(more);
+      found.hidden = false;
+    }
+  }
+
+  $("presenceToggle").addEventListener("click", () => {
+    const on = !!(S.pc.modes || {}).autonomous;
+    if (!on && !S.pc.modes.pc_control) {
+      toast("Turn PC Control on first — it is the lever above", "err");
+      return;
+    }
+    // Optimistic paint, then the real round trip — a hand-over switch that
+    // lags feels broken even when it is working.
+    S.pc.modes.autonomous = !on;
+    paintRail();
+    paintPresence();
+    save("autonomous", !on, true).catch(() => {});
+    toast(!on ? "Autonomous PC mode ON — it has the machine until you stop it"
+              : "Autonomous PC mode OFF — control is yours", !on ? "ok" : undefined);
+  });
+
+  $("presenceForget").addEventListener("click", () => {
+    api.initiative_forget().then(() => {
+      if (S.pc.initiative) {
+        S.pc.initiative.discoveries = [];
+        S.pc.initiative.discovery_count = 0;
+        S.pc.initiative.tasks = [];
+      }
+      paintPresence();
+      toast("Cleared what JARVIS had been up to", "ok");
+    }).catch(() => toast("Could not clear that", "err"));
+  });
+
+  // Elapsed time only needs to be right to the minute, so one slow ticker for
+  // the whole card beats a per-second repaint of the list beside it.
+  setInterval(() => {
+    const label = $("presenceActivityLabel");
+    if (!label || !label.dataset.elapsed) return;
+    if (!document.body.dataset.autopilot || document.body.dataset.autopilot === "0") return;
+    const act = (S.pc.initiative || {}).activity;
+    if (!act) return;
+    const el2 = act.at ? (Date.now() / 1000 - act.at) : 0;
+    const txt = elapsedText(el2);
+    if (txt !== label.dataset.elapsed) {
+      label.dataset.elapsed = txt;
+      label.textContent = (act.label || act.key) + " · " + txt;
+    }
+  }, 15000);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════════════
+  //  THE TOUR — six screens, once, for someone who has never seen this
+  //
+  //  A new user's real questions are not in the settings tree: which button do
+  //  I press to talk, is my microphone actually working, what happens if I let
+  //  it use the PC, and how do I make it stop. Each step answers one, and the
+  //  tour is re-openable from the ? in the title bar and from Settings → Tour.
+  // ════════════════════════════════════════════════════════════════════════
+  let guideAt = 0;
+
+  const GUIDE = [
+    {
+      title: "Hello — I'm here when you need me",
+      text: "I live on your desktop: I can talk, listen, look at your screen " +
+            "when you allow it, and use your PC when you hand it over. You can " +
+            "talk to me out loud or just type in the box at the bottom. " +
+            "Nothing is sent anywhere except what you ask me to send.",
+      sub: "Six short screens and you will know everything that matters.",
+    },
+    {
+      title: "Talking comes first",
+      text: "Say the wake word and I start listening. Hold the phone button " +
+            "for push-to-talk, or press F4 to mute and unmute the microphone. " +
+            "Press Esc at any time to cut me off mid-sentence.",
+      sub: "Typing works exactly the same — nothing needs your voice.",
+      extra: (host) => {
+        const row = el("div", "guide-row");
+        row.appendChild(btnSm("Open voice settings", () => {
+          closeGuide();
+          showView("settings");
+          loadSettings().then(() => gotoSettingsPage("voice"));
+        }));
+        row.appendChild(btnSm("Show me the hotkeys", () => {
+          closeGuide();
+          api.quick_action("what keyboard shortcuts do you have?").catch(() => {});
+        }));
+        host.appendChild(row);
+      },
+    },
+    {
+      title: "Make sure I can hear you",
+      text: "A microphone that quietly hears nothing is the worst failure this " +
+            "app can have, so it is not left to chance. Open the voice page and " +
+            "press Check — I record a second of real audio and tell you plainly " +
+            "whether it arrived. The ring around the microphone button at the " +
+            "bottom moves when I am hearing you.",
+      sub: "Muting is not an error — a muted microphone shows calm amber, never red.",
+      extra: (host) => {
+        const row = el("div", "guide-row");
+        row.appendChild(btnSm("Check my microphone", () => {
+          closeGuide();
+          showView("settings");
+          loadSettings().then(() => {
+            gotoSettingsPage("voice");
+            setTimeout(() => {
+              const t = [...document.querySelectorAll("#settingsBody button")]
+                .find(b => /check|test/i.test(b.textContent || ""));
+              if (t) t.click();
+            }, 400);
+          });
+        }));
+        host.appendChild(row);
+      },
+    },
+    {
+      title: "Let me use your PC — if you want",
+      text: "Hand the machine over and I stop asking permission for ordinary " +
+            "things: looking around, reading, music, a video, organising, " +
+            "picking up something you left unfinished. I have my own mood and " +
+            "my own short list of what is worth doing, and I keep what I find " +
+            "so you can see it afterwards.",
+      sub: "Money, deletion, shutdown, installs, security and sending messages " +
+           "always stop and ask — even after you hand over.",
+      extra: (host) => {
+        host.appendChild(el("div", "guide-note",
+          "Say “stop” — or press the STOP button — and control is yours " +
+          "immediately, mid-step."));
+      },
+    },
+    {
+      title: "While you are away, I practise",
+      text: "Quiet time is not wasted: I check how well my own clicks, keys " +
+            "and screen reads land, practise the weakest one, and write down " +
+            "what works. You can watch that happen on the home screen, and " +
+            "throw the whole ledger away from Settings → Self-training.",
+      sub: "It never runs while you are talking, and switching memory off stops it.",
+    },
+    {
+      title: "Your machine, your levers",
+      text: "The switches along the top of the home screen decide everything: " +
+            "mouse and keyboard, seeing the screen, speaking first, Discord, " +
+            "the microphone. Each one takes effect on the next action rather " +
+            "than the next restart, and switching one off stops whatever it was " +
+            "doing at that instant.",
+      extra: (host) => {
+        const row = el("div", "guide-row");
+        row.appendChild(btnSm("Open the privacy page", () => {
+          closeGuide();
+          showView("settings");
+          loadSettings().then(() => gotoSettingsPage("privacy"));
+        }));
+        host.appendChild(row);
+      },
+    },
+  ];
+
+  function openGuide(at, force) {
+    guideAt = Math.max(0, Math.min(GUIDE.length - 1, Number(at) || 0));
+    $("guideVeil").hidden = false;
+    document.body.classList.add("guiding");
+    paintGuide();
+    const n = $("guideNext");
+    if (n) n.focus({ preventScroll: true });
+    // Opening the tour is the same fact as having seen it: someone who closes
+    // it on the first screen has still been shown it, and being asked again on
+    // the next boot is the behaviour that makes a guide annoying.
+    api.save_setting("guide_seen", true).catch(() => {});
+    return force !== undefined;
+  }
+
+  function closeGuide() {
+    $("guideVeil").hidden = true;
+    document.body.classList.remove("guiding");
+  }
+
+  function paintGuide() {
+    const step = GUIDE[guideAt];
+    if (!step) return;
+    $("guideStep").textContent = "Step " + (guideAt + 1) + " of " + GUIDE.length;
+    $("guideTitle").textContent = step.title;
+    $("guideText").textContent = step.text;
+    const extra = $("guideExtra");
+    extra.textContent = "";
+    const sub = el("div", "guide-sub", step.sub || "");
+    sub.hidden = !step.sub;
+    extra.appendChild(sub);
+    if (typeof step.extra === "function") {
+      try { step.extra(extra); } catch (e) { /* a broken step must not trap the user */ }
+    }
+    $("guideBack").hidden = guideAt === 0;
+    $("guideNext").textContent = guideAt === GUIDE.length - 1 ? "Start using it" : "Next";
+    const dots = $("guideDots");
+    dots.textContent = "";
+    GUIDE.forEach((s, i) => {
+      const dot = el("i");
+      dot.className = i === guideAt ? "on" : (i < guideAt ? "done" : "");
+      dot.title = s.title;
+      dots.appendChild(dot);
+    });
+  }
+
+  $("guideNext").addEventListener("click", () => {
+    if (guideAt >= GUIDE.length - 1) { closeGuide(); return; }
+    guideAt += 1;
+    paintGuide();
+  });
+  $("guideBack").addEventListener("click", () => {
+    guideAt = Math.max(0, guideAt - 1);
+    paintGuide();
+  });
+  $("guideSkip").addEventListener("click", closeGuide);
+  $("btnGuide").addEventListener("click", () => openGuide(0));
+  $("guideVeil").addEventListener("click", ev => {
+    if (ev.target === $("guideVeil")) closeGuide();   // click the dark area to leave
+  });
+  document.addEventListener("keydown", ev => {
+    if ($("guideVeil").hidden) return;
+    if (ev.key === "Escape") { closeGuide(); }
+    else if (ev.key === "ArrowRight" || ev.key === "Enter") {
+      if (guideAt >= GUIDE.length - 1) closeGuide();
+      else { guideAt += 1; paintGuide(); }
+    } else if (ev.key === "ArrowLeft") {
+      guideAt = Math.max(0, guideAt - 1);
+      paintGuide();
+    }
+  });
 
   // ════════════════════════════════════════════════════════════════════════
   //  SELF-TRAINING — what it practises while nobody is talking
@@ -1309,11 +1660,33 @@
   // Verdict → [colour, plain-language sentence]. A device that merely exists
   // is never "working": the colour comes from measured audio, not from a
   // successful open.
+  // A verdict is a headline, an explanation and a tone — not a colour and a
+  // sentence. The old version painted a whole line red, which read as "your
+  // microphone is broken" for problems that are usually a Windows permission
+  // or another app holding the device, and gave nowhere to go next.
   const MIC_VERDICT = {
-    ok:        ["var(--green)", "Microphone detected — signal is live."],
-    faint:     ["var(--amber)", "Weak signal — speak up, or raise the input level in Windows sound settings."],
-    no_signal: ["var(--red)", "No microphone input detected — the device opens but no audio arrives."],
-    failed:    ["var(--red)", "Could not capture from this device."],
+    ok: {
+      tone: "ok", icon: "✓", title: "I can hear you",
+      text: "Real audio arrived from this device, so this is the microphone " +
+            "I will listen to.",
+    },
+    faint: {
+      tone: "warn", icon: "◔", title: "I can just about hear you",
+      text: "Audio is arriving, but very quietly: a quiet input level, a mute " +
+            "switch on the microphone itself, or distance from it. Raise the " +
+            "input level in Windows sound settings, or move closer.",
+    },
+    no_signal: {
+      tone: "bad", icon: "✕", title: "Nothing is reaching me",
+      text: "The device opens but no sound arrives — this is almost always " +
+            "Windows permission, another app holding the microphone, or a " +
+            "hardware mute switch. The fixes below are in order of likelihood.",
+    },
+    failed: {
+      tone: "bad", icon: "✕", title: "I could not open that device",
+      text: "The device refused to open for a test. Pick another device and " +
+            "check again, or refresh the list after replugging it.",
+    },
   };
 
   const renderers = {
@@ -1416,6 +1789,49 @@
       return p;
     },
 
+  guide() {
+    const p = page("Tour & help", "The short version of everything, whenever you want it again.");
+    p.appendChild(card("The tour",
+      "Six screens: how to talk to it, whether your microphone really works, " +
+      "handing over the PC, and how to stop it dead.",
+      btnSm("Show the tour", () => openGuide(0))));
+    p.appendChild(cardCol("Where things are",
+      "Three screens, and the switches that matter are always on the first.", (() => {
+        const box = el("div", "set-col");
+        const rows = [
+          ["Home", "The face, the six control switches, what it is doing, and what " +
+                   "it has found. Tiles under the switches open tightly-related pages."],
+          ["Chat", "Everything that was said, in order, with what JARVIS showed you."],
+          ["Settings", "Providers and keys, microphone and voice, self-training, " +
+                       "screen awareness, PC control, privacy and performance."],
+        ];
+        rows.forEach(([name, text]) => {
+          const r = el("div", "guide-map-row");
+          r.appendChild(el("b", null, name));
+          r.appendChild(el("span", "dim", text));
+          box.appendChild(r);
+        });
+        return box;
+      })()));
+    p.appendChild(cardCol("Stopping it",
+      "Every lever is a brake, not a setting.", (() => {
+        const box = el("div", "set-col");
+        [
+          ["Say “stop”", "or “stop taking over”, “come back”, “give me control”."],
+          ["Press STOP", "the button above the switches turns from TAKE OVER to STOP while it has the machine."],
+          ["Switch a lever off", "the running action is cancelled mid-step, not at the end of it."],
+          ["Press Esc", "cuts off speech immediately."],
+        ].forEach(([name, text]) => {
+          const r = el("div", "guide-map-row");
+          r.appendChild(el("b", null, name));
+          r.appendChild(el("span", "dim", text));
+          box.appendChild(r);
+        });
+        return box;
+      })()));
+    return p;
+  },
+
   micPanel(d) {
     const wrap = el("div", "set-col");
 
@@ -1423,7 +1839,9 @@
     const sel = el("select", "text-input");
     const row = el("div", "set-row2");
     row.appendChild(sel);
-    const testBtn = btnSm("Test", () => runMicTest(sel.value));
+    const testBtn = btnSm("Check", () => runMicTest(sel.value));
+    testBtn.classList.add("mic-check");
+    testBtn.title = "Record about a second of real audio and report what arrived";
     row.appendChild(testBtn);
     row.appendChild(btnSm("Refresh", () => reloadMicDevices(true)));
     wrap.appendChild(row);
@@ -1502,19 +1920,21 @@
     async function runMicTest(name) {
       testBtn.disabled = true;
       result.hidden = false;
-      result.style.color = "";
-      result.textContent = "Listening to " + (name || "the system default") + " for about a second…";
+      renderMicResult({ tone: "wait", icon: "◌", title: "Listening…",
+        text: "Recording about a second of real audio from " +
+              (name || "the system default") + "." });
       diag.hidden = true;
       let r = null;
       try { r = await api.mic_test(name); }
       catch (e) { r = { verdict: "failed", message: String(e) }; }
-      const [color, text] = MIC_VERDICT[r.verdict] || MIC_VERDICT.failed;
-      result.style.color = color;
-      result.textContent = text + (r.message && r.verdict !== "ok" ? "  (" + r.message + ")" : "");
-      if (r.verdict === "ok" || r.verdict === "faint") {
-        result.textContent += "  Peak level " + Math.round((r.peak_rms || 0)) +
-          (r.noisy ? " · noisy input" : "");
-      }
+      const v = MIC_VERDICT[r.verdict] || MIC_VERDICT.failed;
+      renderMicResult({
+        tone: v.tone, icon: v.icon, title: v.title,
+        text: v.text + (r.message && r.verdict !== "ok" ? "  (" + r.message + ")" : ""),
+        meta: (r.verdict === "ok" || r.verdict === "faint")
+          ? "Peak level " + Math.round(r.peak_rms || 0) + (r.noisy ? " · noisy input" : "")
+          : "",
+      });
       // On any failure pull the full chain diagnosis: device → permission →
       // capture → signal, with fixes.
       if (r.verdict !== "ok") {
@@ -1530,11 +1950,29 @@
             diag.appendChild(el("div", "mic-diag-fix", "→ " + fx));
           });
           if (dg.permission && dg.permission.supported && !dg.permission.allowed) fixBtn.hidden = false;
+          // Nothing to say is better than an empty amber box: a diagnosis with
+          // no findings should collapse rather than sit there looking broken.
+          if (!diag.textContent.trim()) diag.hidden = true;
+          else if (!(dg.problems || []).length && !(dg.fixes || []).length) diag.hidden = true;
         } catch (e) { diag.hidden = true; }
       } else {
         diag.hidden = true;
       }
       testBtn.disabled = false;
+    }
+
+    // One renderer for every outcome, so "listening", "heard you" and "nothing
+    // arrived" are the same shape of answer with a different tone — instead of
+    // a line of grey text that sometimes turns red.
+    function renderMicResult(v) {
+      result.dataset.tone = v.tone || "wait";
+      result.textContent = "";
+      const head = el("div", "mv-head");
+      head.appendChild(el("span", "mv-ico", v.icon || "•"));
+      head.appendChild(el("span", "mv-title", v.title || ""));
+      result.appendChild(head);
+      if (v.text) result.appendChild(el("div", "mv-text", v.text));
+      if (v.meta) result.appendChild(el("div", "mv-meta", v.meta));
     }
 
     // Live meter: the backend pushes audio_level from the capture callback;
@@ -2359,6 +2797,9 @@
         msg.className = "setup-msg good"; msg.textContent = "Ready. Starting JARVIS…";
       }
       setTimeout(() => { $("setupVeil").hidden = true; }, 700);
+      // The tour lands right after the key screen, which is the only moment a
+      // new user is guaranteed to be looking at the window.
+      setTimeout(() => openGuide(0), 1400);
     } else {
       msg.className = "setup-msg bad"; msg.textContent = (r && r.msg) || "Could not save.";
     }
@@ -2419,6 +2860,7 @@
   Bus.on("audio_level", a => {
     const av = window.JarvisAvatar; if (av) av.level = a.level;
     feedAvatar3D("audio_level", a);
+    micGlow(a && a.level);
   });
   Bus.on("viseme_now", v => {
     const av = window.JarvisAvatar;
@@ -2451,7 +2893,9 @@
   Bus.on("control", c => {
     S.pc.modes = c.modes || S.pc.modes;
     S.pc.state = c.state || S.pc.state;
+    if (c.initiative) S.pc.initiative = c.initiative;
     paintRail();
+    paintPresence();
     setFeed(c.feed || []);
     paintPcFoot(S.pc.state);
     if (S.settingsLoaded && S.settingsPage === "pc") renderSettingsPage("pc");
@@ -2649,6 +3093,10 @@
     api.window("announce_ready").catch(() => {});
     if (!S.configured) {
       $("setupVeil").hidden = false;
+    } else if (!init.guide_seen) {
+      // First run with a working key: the tour, once, and never again unless
+      // the user asks for it from the ? in the title bar.
+      setTimeout(() => openGuide(0), 1200);
     }
 
     // Quiet update checks are scheduled in silentUpdateCheck() (60 s after

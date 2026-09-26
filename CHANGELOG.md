@@ -2,6 +2,83 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — Autonomous PC mode: initiative, moods, and a way to say stop
+
+Handing the PC over used to mean "JARVIS is allowed to act unasked". It did not
+mean JARVIS had any idea what to do next — so an idle hour was the model
+improvising, with no memory of what it had already tried, no way to notice it
+was repeating itself, and no notion of being bored. It now has a mood engine and
+a director, both cheap enough to run all day.
+
+**It has its own short list of what is worth doing.** `core/initiative.py` holds
+a catalogue — follow up on your unfinished work, prepare something you will
+plausibly want, research, read, learn, GitHub, news, a video, music, something
+funny, tidy Downloads, try an application — and scores each row against the
+current mood, the hour, what it has already done and what the user was last up
+to. The recommendation is one move or, importantly, **none**: "nothing here
+clears the bar" is a first-class answer, because an assistant that fills silence
+with movement is worse than one that does nothing.
+
+**Six moods that move for a reason.** CURIOUS, FOCUSED, EXCITED, HAPPY,
+RELAXED, BORED are held as smoothed scores rather than a mode flag: each event
+nudges several at once, every score decays toward its baseline on a half-life,
+and the winner only takes over when it is clearly ahead — so the mood changes
+without flickering. Boredom is a *quantity* that rises when nothing lands, which
+is what makes "change what you are doing when you get bored" implementable
+rather than decorative.
+
+**It never repeats the same kind of thing, and it returns to useful work.**
+Every activity has a cooldown, the previous row is penalised, and boredom after
+two media moves pushes it back toward work and knowledge. A long session cannot
+collapse into the same three actions — there is a test that runs twelve moves
+and asserts no two in a row are the same.
+
+**Outcomes are graded from the machine, not from its own account.** How a move
+went is read from the control feed the executor itself writes (`ok`/`fail`),
+when the next autonomous moment arrives — no timers, nothing to tear down on
+stop. The model saying "done" while the feed shows three failures is scored as a
+stall, because that is what the machine recorded.
+
+**It keeps what it found.** The `explore_log` tool appends a finding or an
+unfinished step to a capped list, which is both what the HUD shows under the
+mood chip and the interest pool that makes tomorrow's choices better. A session
+where nothing was found writes nothing, which is the honest result.
+
+**The interface says what it is doing and why.** Home gains an *Autonomous PC
+mode* card: an ON/OFF hand-over switch, the live mood, the activity line
+("Researching something new…"), how long it has been at it, and every finding
+it decided was worth keeping, each with a one-click forget. The HUD readout
+carries the mood beside `AUTO`, so what it is being is visible from across the
+room.
+
+**Stopping it is unchanged and immediate.** "Stop", "come back", "give me
+control", the STOP button or switching any lever off all cancel the running
+action mid-step — there is no timer to wait out. Money, permanent deletion,
+shutdown, installs, security changes and messages still stop and ask, every
+time, even after the hand-over.
+
+### A first-run tour, and a microphone that explains itself
+
+- **Six screens on first launch**, reachable later from the `?` in the title bar
+  or Settings → Tour & Help: how to talk to it, whether the microphone really
+  works, what handing the PC over actually authorises, self-training, and how to
+  stop everything. It saves that it was seen, so it never ambushes a returning
+  user; from then on it is opt-in.
+- **Muting the microphone is no longer an error state.** The button turned red
+  on mute, which made a deliberate choice look like a fault. It now shows a calm
+  amber slash, and a live ring that moves with your voice — so "is my
+  microphone hearing me?" is answered before you say a word. Red is reserved for
+  a device that genuinely is not delivering audio.
+- **The microphone check reports in plain language.** Instead of a coloured
+  sentence, a measured verdict is a banner: **I can hear you** / *I can just
+  about hear you* / **Nothing is reaching me** / *I could not open that device*,
+  each with what it means and which fix to try first. An empty diagnosis
+  collapses instead of sitting there looking broken.
+- **Polish pass** over the shared components: consistent focus rings, one
+  press-feedback behaviour for every control, tabular numbers where values tick,
+  styled scrollbars, and the new animations all switchable off with
+  `prefers-reduced-motion`.
+
 ## Unreleased — Self-training that checks its own homework
 
 The self-training loop could drill and remember all day, but it never once
