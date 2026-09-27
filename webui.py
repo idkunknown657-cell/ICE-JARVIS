@@ -262,6 +262,7 @@ class JarvisAPI:
         self._last_net_t = time.time()
         self._update_busy = False        # one update download at a time
         self._training_busy = False      # one self-training round at a time
+        self._mail_signin = None         # the live mail sign-in, if any
         threading.Thread(target=self._perf_loop, daemon=True).start()
 
     # ── boot / initial state ────────────────────────────────────────────────
@@ -1229,8 +1230,152 @@ class JarvisAPI:
             presets = {k: dict(v) for k, v in cm.MAIL_PRESETS.items()}
         except Exception:
             cfg, presets = {}, {}
-        return {"configured": bool(cfg.get("address") and cfg.get("password")),
-                "account": cfg, "presets": presets}
+        signed_in = cfg.get("auth") == "oauth"
+        # A signed-in account has no password, so "configured" cannot mean "has
+        # a password" — that test would report a working Google sign-in as
+        # not set up.
+        configured = bool(cfg.get("address")) and (signed_in or bool(cfg.get("password")))
+        return {"configured": configured, "signed_in": signed_in,
+                "account": cfg, "presets": presets,
+                "signin_providers": self._signin_provider_ui()}
+
+    @staticmethod
+    def _signin_provider_ui() -> dict:
+        """The sign-in providers, minus anything the UI does not need."""
+        try:
+            from core import mail_auth
+            out = {}
+            for key, p in mail_auth.PROVIDERS.items():
+                out[key] = {k: p[k] for k in
+                            ("label", "console", "console_hint", "imap_host")}
+            return out
+        except Exception:
+            return {}
+
+    # The sign-in lives in a thread on the bridge because the user is in another
+    # window (their browser), possibly for a minute. The endpoints below let the
+    # UI start it, watch it and cancel it without ever blocking a call.
+    def mail_signin_start(self, data: dict) -> dict:
+        """Open the provider's sign-in page and wait for the redirect.
+
+        The page opens in the SYSTEM BROWSER, not in an ICE window. That is not
+        a shortcut: Google blocks OAuth sign-in from embedded webviews by
+        policy, so an in-app popup would fail on the provider most people use.
+        Everything else about the flow is in-app — the state panel here tracks it
+        and the account connects the moment the browser finishes.
+        """
+        data = data or {}
+        provider = str(data.get("provider") or "").strip().lower()
+        client_id = str(data.get("client_id") or "").strip()
+        hint = str(data.get("address") or "").strip()
+        try:
+            from core import mail_auth
+        except Exception as e:
+            return {"ok": False, "msg": f"Sign-in is unavailable: {e}"}
+        if provider not in mail_auth.PROVIDERS:
+            return {"ok": False, "msg": "Choose which provider to sign in to."}
+        # Starting a second flow while one is live would leave the first
+        # loopback listening for a code that can no longer arrive.
+        self._cancel_mail_signin()
+        signin = mail_auth.SignIn(provider, client_id, hint)
+        self._mail_signin = signin
+
+        def on_open(url: str) -> None:
+            self._open_signin_page(url)
+
+        first = signin.start(on_open=on_open)
+        if first.get("phase") == "failed":
+            self._mail_signin = None
+            return {"ok": False, "msg": first.get("message") or "Sign-in failed."}
+        self._pump_mail_signin(signin)
+        return {"ok": True, "msg": first.get("message") or "Sign-in started.",
+                "state": first}
+
+    def _open_signin_page(self, url: str) -> None:
+        """Open the provider's page in the user's browser, tolerantly."""
+        opened = False
+        try:
+            import webbrowser
+            opened = bool(webbrowser.open(url, new=2))
+        except Exception:
+            opened = False
+        if not opened:
+            # A browser that will not open is not a failed sign-in — the user can
+            # click the link the panel shows. Say so rather than pretending.
+            try:
+                _PUMP.push("mail_signin", {"phase": "waiting",
+                                           "note": "no browser opened",
+                                           "url": url})
+            except Exception:
+                pass
+
+    def _pump_mail_signin(self, signin) -> None:
+        """Report the outcome to the UI when the flow finishes."""
+        def watch():
+            thread = getattr(signin, "_thread", None)
+            if thread is not None:
+                try:
+                    thread.join(timeout=360)
+                except Exception:
+                    pass
+            snap = signin.snapshot()
+            try:
+                _PUMP.push("mail_signin", snap)
+                _PUMP.push("mail_changed", self.mail_get())
+            except Exception:
+                pass
+            if self._mail_signin is signin:
+                self._mail_signin = None
+
+        threading.Thread(target=watch, daemon=True,
+                         name="mail-signin-watch").start()
+
+    def mail_signin_status(self) -> dict:
+        """Where the sign-in has got to, for a UI that polls rather than waits."""
+        signin = getattr(self, "_mail_signin", None)
+        if signin is None and self.mail_get().get("signed_in"):
+            # Nothing running, but an account is on file: re-opening Settings
+            # must not show "not signed in" for a working account.
+            return {"active": False, "phase": "connected",
+                    "message": "", "account": self.mail_get()}
+        if signin is None:
+            return {"active": False, "phase": "idle", "account": self.mail_get()}
+        snap = signin.snapshot()
+        snap["active"] = snap.get("phase") in ("preparing", "waiting", "exchanging")
+        snap["account"] = self.mail_get()
+        return snap
+
+    def mail_signin_cancel(self) -> dict:
+        """Stop waiting. The loopback listener closes with the flow."""
+        cancelled = self._cancel_mail_signin()
+        return {"ok": True, "cancelled": cancelled,
+                "msg": "Sign-in cancelled." if cancelled else "No sign-in running."}
+
+    def _cancel_mail_signin(self) -> bool:
+        signin = getattr(self, "_mail_signin", None)
+        if signin is None:
+            return False
+        try:
+            signin.cancel()
+        except Exception:
+            pass
+        self._mail_signin = None
+        return True
+
+    def mail_signin_forget(self) -> dict:
+        """Sign out: drop the tokens, keeping the account block consistent."""
+        try:
+            from memory import config_manager as cm
+            raw = cm.load_api_keys().get("mail")
+            if isinstance(raw, dict) and isinstance(raw.get("oauth"), dict):
+                block = dict(raw)
+                block.pop("oauth", None)
+                block["auth"] = "password"
+                cm._patch_config(mail=block)
+        except Exception as e:
+            return {"ok": False, "msg": f"Could not sign out: {e}"}
+        return {"ok": True, "msg": "Signed out of the mail account.",
+                "account": self.mail_get()}
 
     def mail_save(self, data: dict) -> dict:
         """Store the account. An empty password keeps the saved one."""
@@ -1253,6 +1398,7 @@ class JarvisAPI:
 
     def mail_clear(self) -> dict:
         try:
+            self._cancel_mail_signin()
             from memory import config_manager as cm
             cm.clear_mail_config()
         except Exception as e:

@@ -27,12 +27,20 @@
   --pri-ghost: rgba(var(--pri-rgb), 0.10);
   --acc:       #8b6df5;          /* THINKING keeps its own colour, so state is
                                     never carried by green alone            */
-  --green:     #2bd4c8;          /* semantic OK/live — deliberately teal, not
+  --green:     #31d9ae;          /* semantic OK/live — deliberately teal, not
                                     the identity green, so "working" and
-                                    "listening" never read as the same thing */
+                                    "listening" never read as the same thing.
+                                    The value is the one the whole sheet already
+                                    used as a literal; the token was the
+                                    outlier, so a tinted border and its solid
+                                    text differed by three RGB points. */
   --green-dim: #17786f;
+  --green-rgb: 49, 217, 174;     /* …as channels, so a status tint can stop
+                                    being a stale literal of the colour it
+                                    used to be */
   --red:       #ff5c7a;
   --amber:     #f5b45c;
+  --amber-rgb: 245, 180, 92;
 
   /* text */
   --white:     #f2f9ff;
@@ -833,12 +841,51 @@ select.text-input option { background: #0a1120; color: var(--text); }
    the answer rather than decorated — the same posture as the microphone verdict */
 .mail-status {
   padding: 10px 13px; border-radius: var(--r-sm); font-size: 12px;
-  background: rgba(49, 217, 174, 0.06); border: 1px solid rgba(49, 217, 174, 0.3);
+  background: rgba(var(--green-rgb), 0.06);
+  border: 1px solid rgba(var(--green-rgb), 0.3);
   color: var(--text-med); line-height: 1.5; user-select: text;
   transition: border-color .4s var(--out), background .4s var(--out);
 }
 .mail-status.warn {
-  background: rgba(245, 180, 92, 0.06); border-color: rgba(245, 180, 92, 0.32);
+  background: rgba(var(--amber-rgb), 0.06);
+  border-color: rgba(var(--amber-rgb), 0.32);
+}
+
+/* Mail sign-in — the state of a flow that is happening in another window.
+   The dot is the only moving part: it says "still waiting" without a spinner
+   that would keep the compositor busy for a minute at a time. */
+.signin-line { display: flex; align-items: flex-start; gap: 9px; }
+.signin-line .mail-status { flex: 1; }
+.spin {
+  width: 9px; height: 9px; margin-top: 11px; flex: none; border-radius: 50%;
+  background: var(--text-dim);
+  transition: background var(--dur) var(--out), box-shadow var(--dur) var(--out);
+}
+.spin.busy {
+  background: var(--pri);
+  box-shadow: 0 0 0 0 rgba(var(--pri-rgb), 0.5);
+  animation: spin-pulse 1.5s var(--out) infinite;
+}
+.spin.ok { background: var(--green); box-shadow: 0 0 8px rgba(var(--green-rgb), 0.5); }
+@keyframes spin-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(var(--pri-rgb), 0.45); }
+  70%  { box-shadow: 0 0 0 7px rgba(var(--pri-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--pri-rgb), 0); }
+}
+.signin-btn {
+  border-color: rgba(var(--pri-rgb), 0.34);
+  background: rgba(var(--pri-rgb), 0.07);
+}
+.signin-btn:hover { background: rgba(var(--pri-rgb), 0.14); }
+.signin-console { gap: 7px; }
+.signin-url {
+  font-size: 10px; line-height: 1.5; color: var(--text-dim);
+  word-break: break-all; user-select: text; opacity: .8;
+}
+/* Motion is decoration; the state is the colour and the text, so a user who
+   has asked for less motion loses nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .spin.busy { animation: none; }
 }
 
 /* perf tiles */

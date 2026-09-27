@@ -9,6 +9,7 @@ pywebview itself is NOT started here — no window, no event loop.
 import json
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,6 +18,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 import webui  # noqa: E402
+from memory import config_manager as cm  # noqa: E402
 
 
 class _FakeApi:
@@ -560,6 +562,163 @@ class TestMailEndpoints(unittest.TestCase):
             self.api.mail_clear()
             r = self.api.mail_test()
         self.assertFalse(r["ok"])
+
+
+class TestMailSignInBridge(unittest.TestCase):
+    """The sign-in endpoints, driven without a browser or a provider.
+
+    These are the endpoints the Settings card calls, so the contract that
+    matters is: a closed account still reads as configured, no call ever blocks,
+    and nothing raises when the network or the user is absent.
+    """
+
+    def setUp(self):
+        self.api = _fresh_ui()._api
+
+    def test_an_account_with_no_password_reads_as_configured_when_signed_in(self):
+        """Requiring a password would report a working Google sign-in as not set
+        up, and the UI would send the user to a form that cannot help them."""
+        with _ConfigGuard():
+            cm.save_mail_oauth(provider="gmail", client_id="cid",
+                               refresh_token="rt", access_token="at",
+                               expires_at=time.time() + 3600,
+                               address="me@example.com")
+            r = self.api.mail_get()
+        self.assertTrue(r["configured"])
+        self.assertTrue(r["signed_in"])
+
+    def test_the_sign_in_providers_reach_the_ui_with_their_setup_hint(self):
+        with _ConfigGuard():
+            r = self.api.mail_get()
+        self.assertIn("gmail", r["signin_providers"])
+        hint = r["signin_providers"]["gmail"]
+        self.assertTrue(hint["label"])
+        self.assertIn("console.cloud.google.com", hint["console"])
+
+    def test_mail_get_never_leaks_a_token_to_the_front_end(self):
+        """The account block is rendered in a form. A long-lived token must not
+        be in it, because the front end is the part of this app most likely to
+        be inspected — and a refresh token in a DOM tree is a refresh token in
+        a screenshot."""
+        with _ConfigGuard():
+            cm.save_mail_oauth(provider="gmail", client_id="client-secret-ish",
+                               refresh_token="refresh-should-not-appear",
+                               access_token="access-should-not-appear",
+                               expires_at=time.time() + 3600,
+                               address="me@example.com")
+            blob = json.dumps(self.api.mail_get())
+        self.assertNotIn("refresh-should-not-appear", blob)
+        self.assertNotIn("access-should-not-appear", blob)
+
+    def test_starting_a_sign_in_without_a_client_id_fails_immediately(self):
+        """The UI must not be left waiting on a flow that never began."""
+        with _ConfigGuard():
+            r = self.api.mail_signin_start({"provider": "gmail", "client_id": ""})
+        self.assertFalse(r["ok"])
+        self.assertIn("client ID", r["msg"])
+        self.assertFalse(self.api.mail_signin_status()["active"])
+
+    def test_an_unknown_provider_is_refused(self):
+        with _ConfigGuard():
+            r = self.api.mail_signin_start({"provider": "aol", "client_id": "cid"})
+        self.assertFalse(r["ok"])
+
+    def test_starting_a_sign_in_returns_a_url_without_blocking(self):
+        """The handler must hand back the page to show straight away, because
+        the user is about to spend a minute in another window."""
+        with _ConfigGuard(), \
+             mock.patch("webbrowser.open", return_value=True):
+            started = time.time()
+            r = self.api.mail_signin_start({"provider": "gmail",
+                                            "client_id": "cid.apps.googleusercontent.com"})
+            elapsed = time.time() - started
+            self.api.mail_signin_cancel()
+        self.assertTrue(r["ok"])
+        self.assertLess(elapsed, 3.0, "the call blocked on the user")
+        self.assertIn("accounts.google.com", r["state"]["url"])
+
+    def test_a_second_start_cancels_the_first_rather_than_stacking_them(self):
+        """Two live flows would leave the first loopback listening for a code
+        that can never arrive."""
+        with _ConfigGuard(), mock.patch("webbrowser.open", return_value=True):
+            self.api.mail_signin_start({"provider": "gmail", "client_id": "c1.apps.googleusercontent.com"})
+            first = self.api._mail_signin
+            self.api.mail_signin_start({"provider": "outlook", "client_id": "c2"})
+            second = self.api._mail_signin
+            self.api.mail_signin_cancel()
+        self.assertIsNot(first, second)
+        self.assertTrue(first._cancel.is_set())
+
+    def test_status_reports_connected_for_a_saved_sign_in(self):
+        """Re-opening Settings mid-session must not show "not signed in" for an
+        account that is working."""
+        with _ConfigGuard():
+            cm.save_mail_oauth(provider="gmail", client_id="cid",
+                               refresh_token="rt", access_token="at",
+                               expires_at=time.time() + 3600,
+                               address="me@example.com")
+            s = self.api.mail_signin_status()
+        self.assertEqual(s["phase"], "connected")
+        self.assertFalse(s["active"])
+
+    def test_status_is_idle_and_answered_when_nothing_is_happening(self):
+        with _ConfigGuard():
+            self.api.mail_clear()
+            s = self.api.mail_signin_status()
+        self.assertEqual(s["phase"], "idle")
+        self.assertFalse(s["active"])
+        self.assertIsInstance(s, dict)
+
+    def test_cancelling_when_nothing_is_running_is_a_plain_answer(self):
+        with _ConfigGuard():
+            r = self.api.mail_signin_cancel()
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["cancelled"])
+
+    def test_signing_out_keeps_an_app_password_working(self):
+        """Sign out is not "remove account". Breaking a working account by
+        pressing the wrong one of two buttons is a real hazard."""
+        with _ConfigGuard():
+            cm.save_mail_config(provider="gmail", address="me@example.com",
+                                password="pw")
+            cm.save_mail_oauth(provider="gmail", client_id="cid",
+                               refresh_token="rt", access_token="at",
+                               expires_at=time.time() + 3600,
+                               address="me@example.com")
+            r = self.api.mail_signin_forget()
+        self.assertTrue(r["ok"])
+        with _ConfigGuard():
+            pass
+        self.assertFalse(r["account"]["signed_in"])
+        self.assertTrue(r["account"]["configured"])
+        self.assertEqual(r["account"]["account"]["auth"], "password")
+
+    def test_clearing_the_account_also_ends_a_sign_in(self):
+        """Remove account has to remove the token too, or a "cleared" account is
+        one that still has access."""
+        with _ConfigGuard():
+            cm.save_mail_oauth(provider="gmail", client_id="cid",
+                               refresh_token="rt", access_token="at",
+                               expires_at=time.time() + 3600,
+                               address="me@example.com")
+            r = self.api.mail_clear()
+        self.assertFalse(r["account"]["configured"])
+        self.assertFalse(r["account"]["signed_in"])
+        self.assertEqual(cm.get_mail_config(), {})
+        self.assertEqual(cm.get_mail_oauth(), {})
+
+    def test_a_browser_that_will_not_open_is_reported_not_swallowed(self):
+        """A user with no default browser has to be told to click the link,
+        rather than watching a spinner that will never resolve on its own."""
+        with _ConfigGuard(), mock.patch("webbrowser.open", return_value=False):
+            pushed = []
+            with mock.patch.object(webui._PUMP, "push",
+                                   side_effect=lambda n, p=None: pushed.append((n, p))):
+                self.api.mail_signin_start({"provider": "gmail",
+                                            "client_id": "cid.apps.googleusercontent.com"})
+            self.api.mail_signin_cancel()
+        notes = [p for n, p in pushed if n == "mail_signin" and p]
+        self.assertTrue(any("no browser" in str(p.get("note", "")) for p in notes))
 
 
 if __name__ == "__main__":

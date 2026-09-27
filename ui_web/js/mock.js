@@ -23,6 +23,11 @@
   }
   window.__mockEmit = emit;
 
+  // Demo mail state. The offline preview has no provider to talk to, so the
+  // sign-in is simulated — and it is simulated with a delay, because the
+  // waiting state is the part a user actually has to look at.
+  const mail = { signedIn: true, phase: "idle", message: "", url: "" };
+
   const settings = {
     configured: true,
     assistant_name: "JARVIS",
@@ -358,7 +363,7 @@
     async quick_action(phrase) { return api.send_text(phrase); },
     async open_file_dialog() { return null; },
     async clear_attach() { return {}; },
-    async remote_pair() { return null; },
+
     async api_keys_get() {
       return { gemini: { key: "AIzaSy…demo", valid: null, msg: "" }, providers, primary: "gemini" };
     },
@@ -429,21 +434,60 @@
         problems: [], fixes: [], verdict: "ok", message: "" };
     },
     // ── mail (demo account, so the Settings page renders offline) ──────────
+    // Signed IN, not app-password, so the demo shows the flow this build leads
+    // with. The form's other path is still reachable by signing out below.
     async mail_get() {
-      return { configured: true,
-        account: { provider: "gmail", address: "you@example.com",
-                   password: "demo-only-not-a-real-secret",
-                   imap_host: "imap.gmail.com", imap_port: 993,
-                   smtp_host: "smtp.gmail.com", smtp_port: 587 },
+      const acct = mail.signedIn
+        ? { provider: "gmail", auth: "oauth", address: "you@example.com",
+            password: "", imap_host: "imap.gmail.com", imap_port: 993,
+            smtp_host: "smtp.gmail.com", smtp_port: 587 }
+        : { provider: "gmail", address: "", password: "",
+            imap_host: "imap.gmail.com", imap_port: 993,
+            smtp_host: "smtp.gmail.com", smtp_port: 587 };
+      return { configured: mail.signedIn, signed_in: mail.signedIn, account: acct,
+        signin_providers: {
+          gmail: { label: "Google / Gmail", imap_host: "imap.gmail.com",
+                   console: "https://console.cloud.google.com/apis/credentials",
+                   console_hint: "Create OAuth client ID → Desktop app." },
+          outlook: { label: "Microsoft / Outlook", imap_host: "outlook.office365.com",
+                     console: "https://entra.microsoft.com/",
+                     console_hint: "New registration → Mobile and desktop apps." },
+        },
         presets: { gmail: { label: "Gmail", imap_host: "imap.gmail.com", imap_port: 993,
                             smtp_host: "smtp.gmail.com", smtp_port: 587,
                             hint: "Needs an App Password, not your normal Google password." } } };
     },
     async mail_save(d) { return { ok: true, msg: "Mail account saved.", account: await api.mail_get() }; },
-    async mail_clear() { return { ok: true, msg: "Mail account removed.", account: { configured: false, account: {}, presets: (await api.mail_get()).presets } }; },
+    async mail_clear() {
+      mail.signedIn = false;
+      return { ok: true, msg: "Mail account removed.", account: await api.mail_get() };
+    },
     async mail_test() {
       await new Promise(r => setTimeout(r, 600));
-      return { ok: true, msg: "Mail is connected as you@example.com. 3 unread in the inbox, newest: Ada Lovelace — Quarterly numbers." };
+      if (!mail.signedIn) return { ok: false, msg: "No account is signed in yet." };
+      return { ok: true, msg: "Mail is connected as you@example.com (signed in). 3 unread in the inbox, newest: Ada Lovelace — Quarterly numbers." };
+    },
+    // A sign-in that takes a moment, like the real one, so the waiting state is
+    // visible in the demo rather than being skipped past.
+    async mail_signin_start(d) {
+      mail.phase = "waiting";
+      mail.message = "Waiting for you to finish signing in. ICE will connect the moment you do.";
+      mail.url = "https://accounts.google.com/o/oauth2/v2/auth?client_id=…&code_challenge=…";
+      setTimeout(() => { mail.signedIn = true; mail.phase = "connected"; }, 2600);
+      return { ok: true, msg: mail.message, state: await api.mail_signin_status() };
+    },
+    async mail_signin_status() {
+      return { active: mail.phase === "waiting", phase: mail.phase,
+               message: mail.message, url: mail.url, provider: "gmail",
+               configured: mail.signedIn, account: await api.mail_get() };
+    },
+    async mail_signin_cancel() {
+      mail.phase = "cancelled";
+      return { ok: true, cancelled: true, msg: "Sign-in cancelled." };
+    },
+    async mail_signin_forget() {
+      mail.signedIn = false; mail.phase = "idle";
+      return { ok: true, msg: "Signed out of the mail account.", account: await api.mail_get() };
     },
     async mic_open_windows_settings() { return { ok: true }; },
     async mic_refresh() { return { ok: true, count: 3, devices: await api.mic_devices() }; },
@@ -503,7 +547,7 @@
     async undo_last() { emit("toast", { text: "Undone", kind: "ok" }); return { ok: true }; },
     async setup_save(data) { settings.configured = true; return { ok: true }; },
     async setup_test_key(key) { await new Promise(r => setTimeout(r, 800)); return { ok: !!key, msg: key ? "valid" : "no key" }; },
-    async toggle_autostart() { settings.autostart = !settings.autostart; return settings.autostart; },
+
     async create_shortcut() { emit("toast", { text: "Shortcut created", kind: "ok" }); return {}; },
     async enter_background() { return {}; },
     async window(op) { return {}; },

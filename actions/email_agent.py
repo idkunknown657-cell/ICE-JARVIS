@@ -52,6 +52,24 @@ except Exception:                                       # pragma: no cover
     def get_mail_config() -> dict:                      # type: ignore
         return {}
 
+try:
+    from core.mail_auth import access_token as _access_token
+    from core.mail_auth import scrub as _scrub_secrets
+    from core.mail_auth import secrets_in_config as _mail_secrets
+    from core.mail_auth import xoauth2_string as _xoauth2_string
+except Exception:                                      # pragma: no cover
+    def _access_token(force: bool = False):             # type: ignore
+        return "", "sign-in support is unavailable"
+
+    def _scrub_secrets(text: str) -> str:               # type: ignore
+        return str(text or "")
+
+    def _mail_secrets() -> list:                        # type: ignore
+        return []
+
+    def _xoauth2_string(user: str, access: str) -> str:  # type: ignore
+        return f"user={user}\x01auth=Bearer {access}\x01\x01"
+
 # Bounds. A voice assistant reads these aloud, so the cap is about what a person
 # can listen to, not about what the mailbox holds.
 _MAX_ROWS = 15
@@ -75,14 +93,16 @@ def _log(message: str, player=None) -> None:
 
 
 def _scrub(text: str) -> str:
-    """Remove the account password from anything about to leave this module.
+    """Remove every stored mail secret from anything leaving this module.
 
     Every failure path funnels through here. An IMAP or SMTP library is free to
     include the command it failed on in its exception text, and quoting that
-    verbatim into a log line or a spoken sentence is exactly how a password ends
-    up in a file the user later shares.
+    verbatim into a log line or a spoken sentence is exactly how a credential
+    ends up in a file the user later shares. The token now arrives from
+    mail_auth, which also removes it from its own error strings, so a secret that
+    passes through either module is masked in both.
     """
-    out = str(text or "")
+    out = _scrub_secrets(str(text or ""))
     try:
         pw = str((get_mail_config() or {}).get("password") or "")
     except Exception:
@@ -99,16 +119,34 @@ def _sentence(text: str) -> str:
 # ── account ──────────────────────────────────────────────────────────────────
 
 def _account() -> tuple[dict, str]:
-    """The configured account, or a sentence explaining what is missing."""
+    """The configured account, or a sentence explaining what is missing.
+
+    A signed-in account has no password at all, so the requirement is on the
+    credential that account actually uses rather than on the field named
+    "password". Checking the wrong one would tell a user who just signed in with
+    Google that their account is missing a password.
+    """
     try:
         cfg = get_mail_config() or {}
     except Exception:
         cfg = {}
-    if not cfg.get("address"):
-        return {}, ("No mail account is set up yet. Open Settings → Mail and enter "
-                    "your address and an app password — for Gmail that is an App "
-                    "Password, not your normal Google password.")
-    if not cfg.get("password"):
+    signed_in = cfg.get("auth") == "oauth"
+    if signed_in and not cfg.get("address"):
+        # XOAUTH2 needs the address in the SASL string, so a sign-in that never
+        # learned its own address has to be repaired before it can log in.
+        try:
+            from core.mail_auth import resolve_address
+            found, _why = resolve_address()
+        except Exception:
+            found = ""
+        if found:
+            cfg["address"] = found
+    if not (cfg.get("address") or signed_in):
+        return {}, ("No mail account is set up yet. Open Settings → Mail — you can "
+                    "sign in with Google or Microsoft there, or enter an address "
+                    "and an app password. For Gmail an app password is what "
+                    "works, not your normal Google password.")
+    if not signed_in and not cfg.get("password"):
         return {}, ("The mail account is missing its password. Add it in "
                     "Settings → Mail.")
     if not cfg.get("imap_host"):
@@ -127,13 +165,31 @@ def _imap(cfg: dict):
             f"I could not reach {cfg['imap_host']} on port {cfg['imap_port']}: "
             f"{_explain(e)}")
     try:
-        conn.login(cfg["address"], cfg["password"])
+        if cfg.get("auth") == "oauth":
+            token, err = _access_token()
+            if err:
+                _close(conn)
+                return None, _sentence(
+                    f"The mail sign-in needs renewing ({err}). Open Settings → "
+                    f"Mail and sign in again.")
+            # XOAUTH2 sends the token, never the password: for a signed-in
+            # account there is no password to send.
+            conn.authenticate("XOAUTH2",
+                              lambda _challenge: _xoauth2_string(
+                                  cfg.get("address") or "", token).encode("ascii"))
+        else:
+            conn.login(cfg["address"], cfg["password"])
     except imaplib.IMAP4.error as e:
         try:
             conn.logout()
         except Exception:
             pass
         text = _scrub(str(e)).lower()
+        if cfg.get("auth") == "oauth":
+            return None, _sentence(
+                f"{cfg.get('address') or 'The account'} was refused by the mail "
+                f"server. The sign-in may have been revoked from the account "
+                f"page — open Settings → Mail and sign in again.")
         if "application-specific password" in text or "invalid credentials" in text \
            or "authenticationfailed" in text or "login failed" in text:
             return None, _sentence(
@@ -400,8 +456,12 @@ def _status(params: dict = None, player=None) -> str:
             uids, _ = _search_uids(conn, "UNSEEN", _DEFAULT_ROWS)
             rows = _fetch_headers(conn, uids)
         unread = len(rows)
-        return (f"Mail is connected as {cfg['address']}. "
-                f"{unread} unread in the inbox, newest: "
+        # "signed in" is worth saying out loud: it is the difference between an
+        # account that will keep working unattended and one that will stop when
+        # the app password is rotated.
+        how = "signed in" if cfg.get("auth") == "oauth" else "app password"
+        return (f"Mail is connected as {cfg.get('address') or 'the signed-in account'}"
+                f" ({how}). {unread} unread in the inbox, newest: "
                 f"{(rows[0]['from'] + ' — ' + rows[0]['subject']) if rows else 'nothing waiting'}.")
     finally:
         _close(conn)
@@ -705,9 +765,25 @@ def _deliver_now(cfg: dict, to: str, subject: str, body: str,
     except Exception as e:
         return _sentence(f"I could not reach {host} to send it: {_explain(e)}")
     try:
-        server.login(cfg["address"], cfg["password"])
+        if cfg.get("auth") == "oauth":
+            token, err = _access_token()
+            if err:
+                return _sentence(
+                    f"Nothing was sent — the mail sign-in needs renewing ({err}). "
+                    f"Sign in again from Settings → Mail.")
+            # smtplib builds `AUTH XOAUTH2 <base64>` from the initial response
+            # this returns, which is the mechanism both providers expect.
+            server.auth("XOAUTH2",
+                        lambda: _xoauth2_string(cfg.get("address") or "",
+                                                token))
+        else:
+            server.login(cfg["address"], cfg["password"])
         server.send_message(msg)
     except smtplib.SMTPAuthenticationError:
+        if cfg.get("auth") == "oauth":
+            return _sentence(
+                f"The server refused the sign-in, so nothing was sent. Open "
+                f"Settings → Mail and sign in again.")
         return _sentence(
             f"The server refused the login, so nothing was sent. Most providers "
             f"need an app password rather than the account password.")

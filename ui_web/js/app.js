@@ -801,6 +801,15 @@
   let updProgressSink = null;   // wired to the live card while Advanced is open
   Bus.on("update_progress", ev => { if (updProgressSink) updProgressSink(ev); });
 
+  // ── mail sign-in ────────────────────────────────────────────────────────
+  // The flow runs in the backend, so it is the backend that knows when the
+  // browser finished. It pushes `mail_signin` on every change AND answers
+  // mail_signin_status(), and the card below uses both: the push arrives the
+  // instant the account connects, the poll covers a re-render mid-flow.
+  let mailSigninSink = null;
+  Bus.on("mail_signin", ev => { if (mailSigninSink) mailSigninSink(ev || {}); });
+  Bus.on("mail_changed", () => { if (mailSigninSink) mailSigninSink({ refresh: true }); });
+
   function buildUpdateCard(d) {
     const us = S.updateState;
     if (us.phase === "idle" && d.update_pending) {
@@ -2302,9 +2311,15 @@
 
     // ── Mail ────────────────────────────────────────────────────────────
     // A real account, so that "check my mail" is a read of the mailbox rather
-    // than JARVIS driving a browser tab. Two rules shape this form: the password
-    // is only ever round-tripped, never shown, and an empty field keeps the
-    // saved secret — so re-saving the form can never silently wipe it.
+    // than JARVIS driving a browser tab. Signing in comes FIRST, because it is
+    // the path most people should take — no app password to generate, nothing
+    // long-lived to remember, and nothing ICE can leak because it never sees
+    // the password at all. The app-password form is still here underneath, for
+    // providers that offer no sign-in and for anyone who prefers it.
+    //
+    // Two rules shape the form below: the password is only ever round-tripped,
+    // never shown, and an empty field keeps the saved secret — so re-saving the
+    // form can never silently wipe it.
     mail(d) {
       const p = page("Mail", "Let JARVIS read and send your email.");
 
@@ -2334,6 +2349,204 @@
         if (desc) f.appendChild(el("div", "dim", desc));
         return f;
       }
+
+      // ── sign-in ────────────────────────────────────────────────────────
+      let signinProviders = {};
+      let signinBusy = false;
+      let signinPoll = null;
+      let clientShown = "";          // which provider's client-ID step is open
+      let reload = () => {};         // set once the fetcher exists below
+
+      const spin = el("span", "spin");
+      const signinMsg = el("div", "mail-status", "");
+      const signinLine = el("div", "signin-line");
+      const signinLinks = el("div", "set-row2");
+      const clientWrap = el("div", "set-col");
+      const clientId = el("input", "text-input");
+      const consoleHint = el("div", "dim");
+      const signedOut = el("div", "dim",
+        "JARVIS never sees your password. In the browser you can also revoke the access "
+        + "at any time, from your account's own security page.");
+
+      clientId.placeholder = "paste your client ID";
+      clientId.autocomplete = "off";
+      clientWrap.style.display = "none";
+      signinLine.appendChild(spin);
+      signinLine.appendChild(signinMsg);
+
+      function openUrl(url) {
+        if (!url) return;
+        Promise.resolve(api.open_path(url)).catch(() => {});
+      }
+
+      function stopPoll() {
+        if (signinPoll) { clearInterval(signinPoll); signinPoll = null; }
+      }
+
+      function providerButton(key, pr) {
+        const b = btnSm("Sign in with " + (pr.label || key), () => startSignin(key));
+        b.className = "btn btn-sm signin-btn";
+        return b;
+      }
+
+      function showClientStep(provider) {
+        const pr = signinProviders[provider] || {};
+        clientShown = provider;
+        clientWrap.textContent = "";
+        clientWrap.style.display = "";
+        // The field is built here, not once at page-build time. It used to be
+        // appended up front and then wiped by the line above — so pressing a
+        // provider button deleted the very box it had just asked you to fill
+        // in, and the step could never be completed.
+        clientWrap.appendChild(field("Client ID", clientId,
+          "Not a secret — it identifies the app, and it is the one thing a "
+          + "provider cannot issue to a program on your behalf."));
+        consoleHint.textContent = pr.console_hint || "Create a client ID for a desktop app.";
+        const box = el("div", "set-col signin-console");
+        box.appendChild(consoleHint);
+        if (pr.console) {
+          const link = el("button", "btn btn-sm", "Where do I get a client ID?");
+          link.addEventListener("click", () => openUrl(pr.console));
+          box.appendChild(link);
+        }
+        clientWrap.appendChild(box);
+        // The button is inside the step rather than replacing it, so the final
+        // press is always next to the field it is about to submit.
+        const go = el("button", "btn btn-sm signin-btn",
+                       "Continue with " + (pr.label || provider));
+        go.addEventListener("click", () => beginFlow(provider));
+        clientWrap.appendChild(go);
+        signinMsg.textContent = "Paste your client ID above, then press Continue — the "
+          + "sign-in page opens in your browser.";
+        signinMsg.classList.remove("warn");
+        clientId.focus();
+      }
+
+      function paintSignin(cfg) {
+        signinProviders = (cfg && cfg.signin_providers) || {};
+        const acct = (cfg && cfg.account) || {};
+        const signedIn = !!(cfg && cfg.signed_in);
+        signedOut.hidden = signedIn;
+        signinLinks.textContent = "";
+        clientWrap.style.display = "none";
+        if (signedIn) {
+          spin.className = "spin ok";
+          signinMsg.textContent = "Signed in as "
+            + (acct.address || "your account") + ". No password is stored.";
+          signinMsg.classList.remove("warn");
+          signinLinks.appendChild(btnSm("Sign out", async () => {
+            const res = await api.mail_signin_forget();
+            toast((res && res.msg) || "Signed out", "ok");
+            reload();
+          }));
+          signinLinks.appendChild(btnSm("Test connection", async () => {
+            const res = await api.mail_test();
+            toast((res && res.msg) || "No answer", res && res.ok ? "ok" : "bad");
+          }));
+          return;
+        }
+        spin.className = "spin";
+        const keys = Object.keys(signinProviders);
+        if (!keys.length) {
+          signinMsg.textContent = "Sign-in is unavailable in this build. Use an app password below.";
+          signinMsg.classList.add("warn");
+          return;
+        }
+        signinMsg.textContent = "Not signed in. Choose your provider — the sign-in page "
+          + "opens in your browser, and this connects by itself when you are done.";
+        signinMsg.classList.remove("warn");
+        keys.forEach(k => signinLinks.appendChild(providerButton(k, signinProviders[k])));
+      }
+
+      function startSignin(provider) {
+        // A client ID is asked for before the flow starts rather than after it
+        // fails: a refused sign-in with no explanation is the worst version of
+        // this, and the field is the whole reason it would be refused.
+        if (clientShown !== provider || !clientId.value.trim()) {
+          showClientStep(provider);
+          return;
+        }
+        beginFlow(provider);
+      }
+
+      // One watcher for both ways into a live flow: starting one here, and
+      // arriving at a flow that was already running. Two copies of this drifted
+      // apart the moment one of them gained a state the other did not.
+      function watchFlow(url, message) {
+        signinBusy = true;
+        clientWrap.style.display = "none";
+        clientShown = "";
+        signinLinks.textContent = "";
+        spin.className = "spin busy";
+        signinMsg.textContent = (message || "Waiting for you to finish signing in.")
+          + (url ? " If no browser opened, use the link below." : "");
+        signinMsg.classList.remove("warn");
+        if (url) {
+          signinLinks.appendChild(btnSm("Open the sign-in page again", () => openUrl(url)));
+          signinLinks.appendChild(el("div", "mono-val signin-url", url));
+        }
+        signinLinks.appendChild(btnSm("Cancel", async () => {
+          await api.mail_signin_cancel();
+          finishFlow("cancelled", "Sign-in cancelled. Nothing was connected.");
+        }));
+        stopPoll();
+        signinPoll = setInterval(async () => {
+          let s = null;
+          try { s = await api.mail_signin_status(); }
+          catch (e) { return; }
+          if (!s || !s.phase) return;
+          if (s.phase === "connected") finishFlow("connected", s.message);
+          else if (s.phase === "failed" || s.phase === "cancelled") finishFlow(s.phase, s.message);
+          else if (s.message) signinMsg.textContent = s.message;
+        }, 1000);
+      }
+
+      function finishFlow(phase, message) {
+        stopPoll();
+        signinBusy = false;
+        spin.className = phase === "connected" ? "spin ok" : "spin";
+        if (phase === "connected") {
+          toast("Mail account signed in", "ok");
+          reload();
+          return;
+        }
+        signinMsg.textContent = message || "Sign-in did not finish.";
+        signinMsg.classList.add("warn");
+      }
+
+      async function beginFlow(provider) {
+        if (signinBusy) return;
+        const res = await api.mail_signin_start({
+          provider: provider,
+          client_id: clientId.value.trim(),
+          address: addr.value.trim(),
+        });
+        if (!res || !res.ok) {
+          signinMsg.textContent = (res && res.msg) || "Sign-in could not start.";
+          signinMsg.classList.add("warn");
+          return;
+        }
+        watchFlow((res.state && res.state.url) || "", res.msg);
+      }
+
+      // The push arrives the instant the browser finishes; the poll above covers
+      // a push that was missed while the page was rendering. Harmless to get
+      // both, because finishFlow is idempotent.
+      mailSigninSink = ev => {
+        if (ev && ev.refresh) { reload(); return; }
+        if (!ev || !ev.phase) return;
+        if (ev.phase === "connected") { finishFlow("connected", ev.message); return; }
+        if (ev.phase === "failed" || ev.phase === "cancelled") {
+          finishFlow(ev.phase, ev.message);
+          return;
+        }
+        // A note about the flow (no browser opened) while it is still waiting.
+        spin.className = "spin busy";
+        if (ev.url) watchFlow(ev.url, ev.message);
+        else if (ev.message) signinMsg.textContent = ev.message;
+      };
+      // Every re-render of this page replaces the sink, so a flow finishing after
+      // the user navigated elsewhere cannot paint into a card that is gone.
 
       function paint(cfg) {
         presets = (cfg && cfg.presets) || {};
@@ -2430,9 +2643,20 @@
       form.appendChild(row);
       state.appendChild(status);
 
-      p.appendChild(cardCol("Account",
-        "Mail is read over IMAP. Your messages stay on your provider — nothing is "
-        + "uploaded anywhere.", form));
+      // ── the sign-in card, assembled ────────────────────────────────────
+      const signinBody = el("div", "set-col");
+      signinBody.appendChild(signinLine);
+      signinBody.appendChild(signinLinks);
+      signinBody.appendChild(clientWrap);
+      signinBody.appendChild(signedOut);
+
+      p.appendChild(cardCol("Sign in",
+        "The recommended way. The provider's own page takes your password — "
+        + "JARVIS only ever receives a token it can be told to forget.", signinBody));
+
+      p.appendChild(cardCol("Or use an app password",
+        "For providers that offer no sign-in. Mail is read over IMAP and your "
+        + "messages stay on your provider — nothing is uploaded anywhere.", form));
       p.appendChild(state);
 
       p.appendChild(cardCol("Try it",
@@ -2453,9 +2677,22 @@
         + "message never marks it as read unless you say so.";
       p.appendChild(note);
 
-      api.mail_get().then(paint).catch(() => {
-        status.textContent = "Mail settings are unavailable in this build.";
-      });
+      reload = () => {
+        Promise.resolve(api.mail_get()).then(cfg => {
+          paint(cfg);
+          paintSignin(cfg);
+        }).catch(() => {
+          status.textContent = "Mail settings are unavailable in this build.";
+          signinMsg.textContent = "Mail settings are unavailable in this build.";
+          signinMsg.classList.add("warn");
+        });
+      };
+      reload();
+      // A flow that was already running when this page was re-rendered (opening
+      // Settings again mid-sign-in) resumes in the panel instead of looking idle.
+      Promise.resolve(api.mail_signin_status()).then(s => {
+        if (s && s.active) watchFlow(s.url || "", s.message);
+      }).catch(() => {});
       return p;
     },
 
@@ -2486,8 +2723,12 @@
         });
       }).catch(() => list.appendChild(el("div", "dim", "Plugins unavailable.")));
 
-      p.appendChild(card("Remote dashboard", "Control JARVIS from your phone — QR pairing.",
-        btnSm("Pair phone", pairRemote)));
+      // There was a "Pair phone" button here. No dashboard backend exists in
+      // this build: its handler called a bridge method that was never written,
+      // so pressing it always ended in "Could not reach the dashboard". The
+      // offline preview answered it from a mock, which is exactly why it
+      // looked alive. A control that cannot do its job is not a placeholder,
+      // it is a lie, so it is gone until the dashboard it names is real.
       return p;
     },
 
@@ -2942,23 +3183,6 @@
     wrap.appendChild(n);
   }
 
-  // ── remote pairing ─────────────────────────────────────────────────────
-  function pairRemote() {
-    api.remote_pair().then(r => {
-      const veil = $("remoteVeil");
-      if (!r) {
-        $("remoteQr").hidden = true;
-        $("remoteText").textContent = "Dashboard unavailable — run: pip install fastapi \"uvicorn[standard]\" cryptography";
-      } else {
-        const img = $("remoteQr");
-        if (r.qr_b64) { img.src = "data:image/png;base64," + r.qr_b64; img.hidden = false; }
-        else img.hidden = true;
-        $("remoteText").textContent = "Scan, or open: " + (r.autologin || r.url || "");
-      }
-      veil.hidden = false;
-    }).catch(() => toast("Could not reach the dashboard", "err"));
-  }
-  $("remoteClose").addEventListener("click", () => { $("remoteVeil").hidden = true; });
 
   // ════════════════════════════════════════════════════════════════════════
   //  SETUP (first run / key re-entry)

@@ -267,6 +267,16 @@ def get_mail_config() -> dict:
     if not isinstance(raw, dict):
         return {}
     provider = str(raw.get("provider") or "").strip().lower()
+    # Which credential this account uses. The stored value wins; it is absent
+    # only in a config written before sign-in existed, where a saved password is
+    # the only possibility, or in a hand-edited file, where the presence of a
+    # usable token is the best available evidence.
+    stored_auth = str(raw.get("auth") or "").strip().lower()
+    if stored_auth in ("oauth", "password"):
+        auth = stored_auth
+    else:
+        auth = ("oauth" if str((raw.get("oauth") or {}).get("refresh_token") or "")
+                else "password")
     cfg = {
         "provider": provider if provider in MAIL_PRESETS else "custom",
         "address": str(raw.get("address") or "").strip(),
@@ -275,6 +285,7 @@ def get_mail_config() -> dict:
         "imap_port": _as_port(raw.get("imap_port"), 993),
         "smtp_host": str(raw.get("smtp_host") or "").strip(),
         "smtp_port": _as_port(raw.get("smtp_port"), 587),
+        "auth": auth,
     }
     # "{} means unconfigured" has to be true for every caller that tests with
     # `if not cfg`. A cleared account would otherwise come back as a full dict of
@@ -295,9 +306,9 @@ def save_mail_config(provider: str, address: str, password: str,
         provider = "custom"
     preset = MAIL_PRESETS[provider]
     old = load_api_keys().get("mail")
-    old_pw = str(old.get("password") or "") if isinstance(old, dict) else ""
-
-    _patch_config(mail={
+    old = dict(old) if isinstance(old, dict) else {}
+    old_pw = str(old.get("password") or "")
+    block = {
         "provider": provider,
         "address": str(address or "").strip(),
         "password": str(password) if str(password or "") else old_pw,
@@ -305,12 +316,125 @@ def save_mail_config(provider: str, address: str, password: str,
         "imap_port": _as_port(imap_port, preset["imap_port"]),
         "smtp_host": str(smtp_host or "").strip() or preset["smtp_host"],
         "smtp_port": _as_port(smtp_port, preset["smtp_port"]),
-    })
+        # Saving this form makes the password the credential in use — the user
+        # just chose it — but it must not DESTROY a saved sign-in. Retyping an
+        # address should not silently revoke a token, which is unrecoverable
+        # from this screen and would look like the sign-in had been forgotten.
+        "auth": "password",
+    }
+    if isinstance(old.get("oauth"), dict):
+        block["oauth"] = old["oauth"]
+    _patch_config(mail=block)
 
 
 def clear_mail_config() -> None:
-    """Forget the mail account entirely, password included."""
+    """Forget the mail account entirely — password and tokens alike.
+
+    Clearing by replacing the whole block is what makes "sign out" meaningful: a
+    partial clear that left the refresh token behind would look like a signed-out
+    account that silently still had access.
+    """
     _patch_config(mail={})
+
+
+# ── Mail sign-in (OAuth) ─────────────────────────────────────────────────────
+# The token block lives beside the password, not instead of it, so a user can
+# have an app-password account and a signed-in account saved at the same time
+# and switch between them without re-entering anything.
+
+def get_mail_oauth() -> dict:
+    """The saved sign-in tokens, or {} when nobody has signed in.
+
+    Never raises, for the same reason get_mail_config does not: every caller is
+    on a voice command path where an exception becomes a broken answer.
+    """
+    raw = load_api_keys().get("mail")
+    if not isinstance(raw, dict):
+        return {}
+    block = raw.get("oauth")
+    if not isinstance(block, dict):
+        return {}
+    out = {
+        "provider": str(block.get("provider") or "").strip().lower(),
+        "client_id": str(block.get("client_id") or "").strip(),
+        "refresh_token": str(block.get("refresh_token") or ""),
+        "access_token": str(block.get("access_token") or ""),
+        "address": str(block.get("address") or "").strip(),
+    }
+    try:
+        out["expires_at"] = float(block.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        out["expires_at"] = 0.0
+    # A signed-in account is identified by its refresh token. Without one every
+    # later request would fail at the API and read as "mail is broken" rather
+    # than "not signed in", so an incomplete block reads as signed out.
+    if not (out["refresh_token"] and out["client_id"]):
+        return {}
+    return out
+
+
+def save_mail_oauth(provider: str, client_id: str, refresh_token: str,
+                    access_token: str, expires_at: float, address: str = "",
+                    imap_host: str = "", smtp_host: str = "") -> None:
+    """Store a completed sign-in. Keeps the mail account in step with it so the
+    rest of the app does not need two code paths to find a working account."""
+    raw = load_api_keys().get("mail")
+    block = dict(raw) if isinstance(raw, dict) else {}
+    preset = MAIL_PRESETS.get(str(provider or "").strip().lower()) or {}
+    block.update({
+        "provider": str(provider or "").strip().lower(),
+        "auth": "oauth",
+        "address": str(address or block.get("address") or "").strip(),
+        "imap_host": str(imap_host or preset.get("imap_host") or ""),
+        "imap_port": int(preset.get("imap_port") or 993),
+        "smtp_host": str(smtp_host or preset.get("smtp_host") or ""),
+        "smtp_port": int(preset.get("smtp_port") or 587),
+        "oauth": {
+            "provider": str(provider or "").strip().lower(),
+            "client_id": str(client_id or "").strip(),
+            "refresh_token": str(refresh_token or ""),
+            "access_token": str(access_token or ""),
+            "expires_at": float(expires_at or 0),
+            "address": str(address or "").strip(),
+        },
+    })
+    _patch_config(mail=block)
+
+
+def save_mail_tokens(access_token: str, expires_at: float,
+                     refresh_token: str = "") -> None:
+    """Update the short-lived token after a refresh, leaving everything else be."""
+    raw = load_api_keys().get("mail")
+    if not isinstance(raw, dict):
+        return
+    block = dict(raw)
+    oauth = dict(block.get("oauth") or {}) if isinstance(block.get("oauth"), dict) else {}
+    oauth["access_token"] = str(access_token or "")
+    oauth["expires_at"] = float(expires_at or 0)
+    if refresh_token:
+        oauth["refresh_token"] = str(refresh_token)
+    block["oauth"] = oauth
+    _patch_config(mail=block)
+
+
+def save_mail_address(address: str) -> None:
+    """Record which account a saved sign-in belongs to, once it is known."""
+    raw = load_api_keys().get("mail")
+    if not isinstance(raw, dict):
+        return
+    block = dict(raw)
+    oauth = dict(block.get("oauth") or {}) if isinstance(block.get("oauth"), dict) else {}
+    address = str(address or "").strip()
+    oauth["address"] = address
+    block["oauth"] = oauth
+    if address:
+        block["address"] = address
+    _patch_config(mail=block)
+
+
+def mail_signed_in() -> bool:
+    """Whether a sign-in token is on file, without exposing the token."""
+    return bool(get_mail_oauth())
 
 
 HUD_STYLES = ("face", "core")
