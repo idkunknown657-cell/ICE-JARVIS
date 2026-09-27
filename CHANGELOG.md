@@ -2,6 +2,236 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — it can read and send your actual mail
+
+"Check my mail" used to mean opening Gmail in a browser and clicking around it.
+That is the wrong shape for the request: the user wants to know what is in the
+inbox, and a screen-driving loop answers that by describing a web page.
+
+- **`email_agent`, over IMAP and SMTP.** Inbox, unread, search (sender, subject,
+  words in the message, "since yesterday"), the full text of one message, marking
+  one read, sending a new mail, and replying to one. Stdlib only — `imaplib`,
+  `smtplib`, `email` — so a capability this central costs nothing to install.
+- **Reading never changes your mailbox.** Messages are fetched with BODY.PEEK and
+  folders are selected read-only, so asking what arrived cannot quietly mark the
+  lot as read. Listings fetch headers only, so an inbox of fifteen messages is not
+  fifteen downloads.
+- **Sending is behind the confirmation gate.** Nothing leaves until the user
+  presses CONFIRM on screen, and the gate shows the recipient and the text first.
+  A reply fills in the address and the "Re:" subject from the message it answers.
+- **The password never appears in a sentence.** Every failure path runs through a
+  scrubber, because the surest way to leak a secret is to quote a library's own
+  exception text: an IMAP login error is free to include the command it failed on.
+  Gmail, Yahoo and iCloud all reject an account password from a mail client, so a
+  refused login says so and points at app passwords instead.
+- **⚙ Settings → Mail** is a real form: provider presets (Gmail, Outlook, Yahoo,
+  iCloud, or your own servers), a *Test connection* button that actually logs in,
+  and a status line that says whether the account is usable rather than merely
+  saved. The password field is never pre-filled — it shows `•••••••• (saved)` — and
+  saving with an empty box keeps the stored secret instead of erasing it, which is
+  how a re-saved form silently wipes a password.
+- **Two contract bugs the tests caught, fixed rather than worked around.**
+  `get_mail_config()` promises `{}` when nothing is set and was returning a full
+  dict of empty strings, so a cleared account read as configured-but-broken; and a
+  junk port in a hand-edited config raised instead of falling back, in a function
+  whose whole contract is that it never raises.
+
+## Unreleased — every avatar moves the same way on every machine
+
+The 2D core and the 3D figure each had their own copy of the same three motion
+primitives, and both copies advanced by `value * dt * k` per frame. That looks
+frame-rate independent and is not. Both now share one implementation.
+
+- **Measured, then fixed.** The voice-driven pulse spring settles to 0.9261 after
+  two seconds at 60 fps, 0.8218 at 15 fps and **0.6020 at 8 fps** — so on a slow
+  machine JARVIS moved *less* and *differently*, not merely less smoothly. The
+  spring is now substepped at a fixed 1/60 s and lands on 0.9261 at every one of
+  those rates. Verified end to end through the real avatar code, and pinned by a
+  test that runs the module in node.
+- **The mouth stopped snapping.** Easing was `value + (target-value) * rate * dt`,
+  which clamps at 1: at the mouth's rate of 14 that is 0.23 of the distance in one
+  frame at 60 fps but **1.00 — an instant jump — at 8 fps**. Both avatars now ease
+  exponentially (`1 - e^(-rate·dt)`), which converges by real time and can never
+  overshoot.
+- **A blink is a movement, not a dropped frame.** The 3D figure swapped to a
+  closed-eye texture for a fixed 0.16 s, which at the battery profile's 12 fps is
+  under two frames — one frame closed, then open. The lid now squashes through a
+  raised cosine over at least three frames at any rate, and the closed art only
+  appears near full closure. The 2D core's blink was a straight-line triangle,
+  which no eyelid has ever done; it is now a raised cosine with a flat start, so it
+  cannot snap as it begins.
+- **The draw cadence stopped jittering.** Both loops zeroed their frame accumulator
+  after each draw, which quantises the gap between frames to a whole number of rAF
+  slots, so it alternated between two and three and read as uneven. The remainder
+  is kept.
+- **`transition: all` is gone from the chrome.** Seventeen controls animated every
+  property that changed, including width, padding and offsets — a transition on a
+  layout-affecting property forces a layout pass on the main thread every frame
+  instead of compositing transform and opacity, which is how a button hover makes a
+  whole window feel soft on a weak machine. One named `--t-ui` token replaces it,
+  and a test fails if `transition: all` returns.
+
+## Unreleased — a quiet room is not a broken microphone
+
+"JARVIS can't hear me" was being answered with a red panel reading *Nothing is
+reaching me*. On a real desktop PC the microphone was working the whole time.
+The fault was in how the diagnosis measured it.
+
+- **One short sample cannot classify a microphone.** Three consecutive windows of
+  the *same* working device, same host API, nothing moved, measured RMS 202.8,
+  20.9 and 133.1 — a spread wider than the gap between the silence and speech
+  thresholds the verdict was drawn from. The probe listened for 0.9 s and judged
+  from that one sample, so a healthy mic in a quiet room was reported as dead.
+- **There is now an inconclusive verdict, and it is not a fault.** `quiet` means
+  the stream opened, delivered frames, and carried nothing above its own noise
+  floor — almost always a silent room. It is never added to the problem list; it
+  is phrased as a missing answer with the one action that resolves it (test again
+  and speak). Only `no_signal` — digitally silent on *every* sample, which is the
+  per-device mute or a zero input level — is still reported as broken.
+- **A dead reading gets one retry, a live one does not.** Believing the first
+  digitally-silent sample is exactly the mistake this fixes, so a dead reading is
+  measured again before it is believed; the moment a real waveform appears the
+  probe stops, so a working microphone never makes the user wait twice. The
+  probe also listens for 2.5 s instead of 0.9 s, which is long enough to actually
+  say something into it.
+- **Verified on the PC in question, not on a mock.** The microphone JARVIS opens
+  on this machine measures peak RMS 1809 at 16 kHz and returns `ok` with no
+  problems — so the complaint was the message, never the audio.
+- **The web UI can no longer invent a red panel for a verdict.** `MIC_VERDICT`
+  gained `quiet`, the button now reads *speak while it listens*, and a test pins
+  the table to the verdicts the backend can return and asserts that nothing but
+  `no_signal` is painted as an error.
+
+## Unreleased — the layout stopped collapsing, and hidden views stopped being reachable
+
+Two defects that both showed up in ordinary use rather than in logic.
+
+- **Between 981 px and 1280 px wide the right-hand column collapsed into
+  slivers.** The band keeps the rail beside the face and moves the work feed to a
+  full-width row — but with the inherited `min-height: 0` the second row stayed
+  inside the viewport, so the side column's five cards were flex-shrunk to two
+  pixels each and the whole right-hand side of the app read as a set of stray
+  hairlines, at exactly the window sizes most people run. The rows now size to
+  their content, the view scrolls, and the rail keeps its own internal scroll so
+  the telemetry stays put. Measured at 720/950/1024/1100/1280/1500 px wide: zero
+  crushed panels, no horizontal overflow, nothing sized to zero.
+- **The inactive views were hidden with opacity only,** so they stayed in the tab
+  order and in the accessibility tree: Tab from Home landed on invisible Settings
+  buttons (24 of 25 of them were focusable) and a screen reader announced all
+  three views at once. `visibility: hidden` removes a subtree from both while
+  keeping its layout box, and the router now also states `inert` + `aria-hidden`
+  explicitly so a future rule cannot quietly undo it. Measured after the fix: the
+  active view has 13/13 buttons focusable, the inactive ones have 0.
+
+## Unreleased — JARVIS can look at the Earth
+
+Ask it what is flying overhead, whether the ground moved, what is burning, or
+what is up there in orbit, and it now answers from the public feeds that report
+those things — no account, no API key, no new heavy dependency.
+
+- **`earth_intel`, one tool with five answers.** Aircraft within a radius of a
+  place (adsb.lol), earthquakes from the USGS catalogue with an optional "near
+  me", open natural events (NASA EONET — storms, wildfires, volcanoes), the
+  orbital catalogue (CelesTrak), and `locate`, which resolves a place name and
+  remembers it. Every feed is public and read-only, so none of it asks for
+  confirmation; the tool declares that by being in the safe tier, not by being
+  clever about detecting danger.
+- **A place name is resolved once and remembered.** `locate` geocodes through
+  Photon (OpenStreetMap) and stores the result as a setting in the user's own
+  config — not in long-term memory, because "what is over my head" has to keep
+  working with memory switched off.
+- **It says when it does not know.** A place it cannot find is reported as
+  unfindable, an empty radius is reported as empty, and unreachable feeds are
+  turned into one sentence naming the cause (timeout, no internet, HTTP error,
+  unreadable body). Nothing here invents a coordinate, because a wrong home
+  position quietly makes every later answer about the wrong part of the world —
+  this is the one capability where guessing is worse than admitting.
+- **Orbit figures are arithmetic on the published elements,** not an estimate:
+  period, mean altitude, apogee, perigee and inclination all come from Kepler's
+  third law applied to the TLE. Verified against the real ISS — 92.98 min,
+  428 km, 51.63° — rather than against its own output. *Which* satellite is over
+  your head right now needs propagation, so `sgp4` is now declared as an optional
+  dependency and the answer says plainly that pass prediction needs it instead of
+  returning a plausible-looking wrong elevation.
+- **The privacy section is now true again.** It claimed the only network calls
+  were the configured AI providers and the update manifest. This tool adds five
+  more, so the readme names each one, states what is sent (the coordinates of the
+  question, nothing identifying), and credits [God's Eye View](https://github.com/bilawalsidhu/gods-eye-view)
+  (MIT) as the origin of the idea — its bundled datasets are separately licensed
+  and none of them are used or redistributed.
+
+## Unreleased — A green console: state left, JARVIS centre, conversation right
+
+The home screen used to be two columns — a face and one long scrolling stack of
+cards — which meant "how is my machine doing" and "what did we just say" were
+both answered by scrolling. It is now three columns read in the order you ask
+the questions, and the whole interface is built on green.
+
+- **A system rail on the left, and every number on it is real.** CPU, RAM and
+  network carry their own coloured bar; CPU temperature, GPU, processes and
+  session time sit under them as tiles. All of it comes from the perf payload
+  the backend already pushes every two seconds — no invented readings, and a
+  metric this machine cannot measure stays `--` rather than showing a zero,
+  because a telemetry rail that lies is worse than no rail. The four state
+  tiles (wake word, microphone, screen, memory) moved onto this rail, where they
+  belong: they are machine state too.
+- **A live conversation panel on the right.** The real transcript, mirrored in
+  compact form as messages arrive, so the home screen answers "what did we just
+  say" without a view switch. Not a second chat: nothing exists there that the
+  Chat view does not already hold, it is capped at 40 rows, and the copy button
+  opens the full transcript.
+- **A state light in the dock.** Centred over the input and painted by the same
+  function as the titlebar pill — one source, so the two can never disagree
+  about what JARVIS is doing. It reads as a sentence (*JARVIS ONLINE*) where the
+  pill keeps the code name (STANDBY), and it is a status region rather than a
+  button, because a control that does nothing is worse than a label.
+- **The sections are lit keys, not words.** The nav is a recessed pill with the
+  live tab filled in the identity colour, so the current section is visible from
+  across the room.
+- **The colour picker now repaints the whole interface.** Every translucent tint
+  in the stylesheet is written `rgba(var(--pri-rgb), …)` instead of a literal
+   `rgba(56,189,248,…)`. That was a real bug: choosing an accent used to change
+  the buttons and leave seventy borders, glows and hairlines on the old colour,
+  which made the picker look broken. The default identity is green.
+
+## Unreleased — Three faults that made working features look broken
+
+Each of these was a working feature reported as a broken one, and in all three
+cases the machinery was fine — what was wrong was the thing in front of it.
+
+- **The first-run tour is readable again.** The tour card sat *inside* `#app`,
+  and the rule that pushes the app back while the tour is up is a CSS `filter` —
+  which applies to the element's whole subtree. So the overlay was blurred by
+  the very rule meant to push the app behind it, and the step text came out
+  smudged beyond reading: the one thing a tour must never do. The veil is now a
+  sibling of `#app`, the app still recedes exactly as before, and there is no
+  filtered ancestor above the card at all.
+- **A working microphone is no longer reported as a dead one.** The capture
+  layer already knew that fixed-rate endpoints (USB interfaces, many webcams,
+  Bluetooth HFP) reject 16 kHz and opens them at their own rate instead — but
+  the microphone test walked none of that: it asked every device for 16 kHz and
+  called the failure "nothing is reaching me". The probe and the capture layer
+  now share one rate ladder (`audio_devices.input_rate_ladder`), the diagnosis
+  reports the rate it actually opened at, and the open-error text is reserved
+  for devices that genuinely will not open.
+- **PC control can no longer be frozen by one unresponsive window.** Every
+  accessibility read — `children()`, `rectangle()`, `element_from_point()`,
+  `set_focus()` — is a blocking COM round trip into another process, and Windows
+  puts no timeout on it. A window that was busy, modal or simply not pumping
+  messages parked the call, and the task with it: the state pill sat on
+  EXECUTING while the walk slept in a syscall. Counting elements never helped,
+  because the existing cap bounds how many are read, not how long reading takes.
+  Blocking phases now run under a wall-clock ceiling (`pc_engine.run_bounded`)
+  and abandon to the next strategy — vision, then coordinates — which is what
+  the cascade was always for. The `screen_ai` tool is guarded the same way, and
+  its window picker now tells "nothing matches that title" apart from "the
+  window is there but deaf", because those need different fixes.
+- **The default-device fallback clears the same hurdle it just failed.** When a
+  chosen microphone would not open, the retry went straight to 16 kHz on the
+  system default — which fails the same way whenever that default is itself
+  fixed-rate, taking the whole audio session with it. The fallback now asks the
+  default for its own rate first.
+
 ## Unreleased — Autonomous PC mode: initiative, moods, and a way to say stop
 
 Handing the PC over used to mean "JARVIS is allowed to act unasked". It did not

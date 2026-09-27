@@ -1182,8 +1182,9 @@ class JarvisAPI:
                 "active": self._active_mic_name()}
 
     def mic_test(self, name: str) -> dict:
-        """Open one microphone and MEASURE ~0.9 s of real audio. Returns the
-        measured verdict — never a success inferred from the device existing."""
+        """Open one microphone and MEASURE real audio. Returns the measured
+        verdict — never a success inferred from the device existing, and never
+        a failure inferred from a quiet room (see `quiet` in test_device)."""
         try:
             from core import mic_diagnostics as md
             idx = audio_devices.resolve(str(name or ""), "input")
@@ -1209,9 +1210,67 @@ class JarvisAPI:
         except Exception as e:
             return {"device_present": False, "selected_device": "",
                     "capture": "failed", "signal": "no signal",
+                    "inconclusive": False,
                     "permission": {"supported": False, "allowed": True},
                     "problems": [f"diagnostics failed: {e}"], "fixes": [],
                     "verdict": "failed", "levels": {}, "message": ""}
+
+    # ── mail ────────────────────────────────────────────────────────────────
+    # Mail is its own account block, so it gets its own endpoints rather than
+    # riding save_setting's one-key-one-switch shape: it is five fields and a
+    # secret that must be possible to save without retyping. The password is
+    # returned here for the same reason the provider keys are — the form has to
+    # be able to resubmit it — and the UI renders it as dots, never in clear.
+    def mail_get(self) -> dict:
+        """The saved account plus the provider presets the form offers."""
+        try:
+            from memory import config_manager as cm
+            cfg = cm.get_mail_config()
+            presets = {k: dict(v) for k, v in cm.MAIL_PRESETS.items()}
+        except Exception:
+            cfg, presets = {}, {}
+        return {"configured": bool(cfg.get("address") and cfg.get("password")),
+                "account": cfg, "presets": presets}
+
+    def mail_save(self, data: dict) -> dict:
+        """Store the account. An empty password keeps the saved one."""
+        data = data or {}
+        try:
+            from memory import config_manager as cm
+            cm.save_mail_config(
+                provider=str(data.get("provider") or "custom"),
+                address=str(data.get("address") or ""),
+                password=str(data.get("password") or ""),
+                imap_host=str(data.get("imap_host") or ""),
+                imap_port=data.get("imap_port") or 993,
+                smtp_host=str(data.get("smtp_host") or ""),
+                smtp_port=data.get("smtp_port") or 587,
+            )
+        except Exception as e:
+            return {"ok": False, "msg": f"Could not save the mail settings: {e}"}
+        return {"ok": True, "msg": "Mail account saved.",
+                "account": self.mail_get()}
+
+    def mail_clear(self) -> dict:
+        try:
+            from memory import config_manager as cm
+            cm.clear_mail_config()
+        except Exception as e:
+            return {"ok": False, "msg": f"Could not clear the account: {e}"}
+        return {"ok": True, "msg": "Mail account removed.",
+                "account": self.mail_get()}
+
+    def mail_test(self) -> dict:
+        """Actually connect. A saved account that cannot log in is not
+        configured, and the user should not discover that by asking JARVIS to
+        check their mail."""
+        try:
+            from actions import email_agent as em
+            out = em.email_agent({"action": "status"})
+        except Exception as e:
+            out = f"The mail check failed: {e}"
+        ok = str(out).lower().startswith("mail is connected")
+        return {"ok": ok, "msg": str(out)}
 
     def mic_open_windows_settings(self) -> dict:
         try:

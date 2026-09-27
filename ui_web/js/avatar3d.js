@@ -28,18 +28,27 @@
   };
 
   // ── living-motion helpers (the same feel as the 2D core) ────────────
-  // Layered incommensurate sines: smooth pseudo-noise that never repeats
-  // visibly and never jumps — the cheapest organic drift there is.
-  function drift3(t, a, b, phase) {
-    return 0.62 * Math.sin(t * a + phase) + 0.38 * Math.sin(t * b + phase * 1.7);
-  }
-  // Critically-damped spring step on a { p, v } channel: glides toward the
-  // target, never overshoots into oscillation, never snaps.
+  // These come from motion.js, which the 2D core uses too — one implementation
+  // so the two figures cannot drift apart, and frame-rate independent so the
+  // battery profile's 12 fps draws the same motion, just less often. The copies
+  // that used to live here integrated per frame: measured, the pulse channel
+  // settled to 0.60 at 8 fps against 0.93 at 60 fps, so a throttled machine
+  // moved differently rather than merely less smoothly.
+  const JM = window.JarvisMotion || {
+    drift: (t, a, b, phase) =>
+      0.62 * Math.sin(t * a + phase) + 0.38 * Math.sin(t * b + phase * 1.7),
+    step: function (ch, target, dt, k, d) {
+      ch.p = ch.p + (target - ch.p) * Math.min(1, k * dt);
+      return ch.p;
+    },
+    smooth: (a, b, rate, dt) => a + (b - a) * Math.min(1, rate * dt),
+    blinkScale: (p) => (p > 0 && p < 1 ? Math.max(0.08, Math.abs(1 - p * 2)) : 1),
+    blinkAdvance: (p, dt) => { const n = p + dt * 6.5; return n >= 1 ? 0 : n; },
+  };
+  const drift3 = JM.drift;
+  // Critically-damped, substepped spring on a { p, v } channel.
   function spring3(ch, target, dt, k, d) {
-    ch.v += (target - ch.p) * k * dt;
-    ch.v *= Math.max(0, 1 - d * dt);
-    ch.p += ch.v * dt;
-    return ch.p;
+    return JM.step(ch, target, dt, k, d);
   }
 
   function Jarvis3D() {
@@ -73,7 +82,9 @@
     this.lastRender = 0;
     this.acc = 0;
     this.blinkAt = 2.5;
-    this.blinking = 0;
+    this.blinking = 0;        // published mirror of blinkPhase, for readers
+    this.blinkPhase = 0;      // 0..1 through the blink, eased by motion.js
+    this._eyeStyleOpen = "normal";   // the eye art to return to after a blink
     this._dblBlink = false;
     this.particles = null;          // hologram dust motes
     this.glow = null;               // accent ground glow
@@ -96,7 +107,7 @@
     this.cfg = {
       size: 1.0, x: 0, y: 0,
       anim: 1.0, expr: 1.0,
-      light: "#38bdf8",
+      light: "#2ee87f",
       perf: "balanced",
       visible: true,
     };
@@ -410,7 +421,7 @@
     //    thinking, brightens with her voice. Toggleable via cfg.orbit.
     this.orbit = new THREE.Group();
     const orbMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(this.cfg.light || "#38bdf8"),
+      color: new THREE.Color(this.cfg.light || "#2ee87f"),
       transparent: true, opacity: 0.30, depthWrite: false,
     });
     const ORBITS = [
@@ -430,7 +441,7 @@
         const sat = new THREE.Mesh(
           new THREE.SphereGeometry(0.045, 10, 8),
           new THREE.MeshBasicMaterial({
-            color: new THREE.Color(this.cfg.light || "#38bdf8"),
+            color: new THREE.Color(this.cfg.light || "#2ee87f"),
             transparent: true, opacity: 0.95, depthWrite: false,
           }));
         sat.userData = { ring, a: (s / o.sats) * Math.PI * 2, speed: 0.5 + o.r * 0.18 };
@@ -470,7 +481,7 @@
         size: 0.06, map: moteTex, transparent: true, opacity: 0.5,
         blending: THREE.AdditiveBlending, depthWrite: false,
         sizeAttenuation: true,
-        color: new THREE.Color(this.cfg.light || "#38bdf8"),
+        color: new THREE.Color(this.cfg.light || "#2ee87f"),
       });
       this.particles = new THREE.Points(pg, pm);
       this.particles.userData.baseOpacity = 0.5;
@@ -489,7 +500,7 @@
       new THREE.MeshBasicMaterial({
         map: glowTex, transparent: true, opacity: 0.28,
         blending: THREE.AdditiveBlending, depthWrite: false,
-        color: new THREE.Color(this.cfg.light || "#38bdf8"),
+        color: new THREE.Color(this.cfg.light || "#2ee87f"),
       })
     );
     this.glow.rotation.x = -Math.PI / 2;
@@ -562,7 +573,7 @@
     this.root.position.x = this.cfg.x;
     this.root.position.y = this.cfg.y;
     this.root.visible = this.cfg.visible !== false;
-    const accent = new THREE.Color(this.cfg.light || "#38bdf8");
+    const accent = new THREE.Color(this.cfg.light || "#2ee87f");
     if (this.rimLight) this.rimLight.color = accent;
     if (this.halo) {
       this.halo.children.forEach(r => { r.material.color = accent; });
@@ -633,9 +644,14 @@
     const active = this.state === "SPEAKING" || this.state === "EXECUTING" ||
                    this.expression !== null || this.blinking > 0;
     const target = active ? p.active : p.idle;
+    const interval = 1 / target;
     this.acc += dt;
-    if (this.acc < 1 / target) return;
-    const step = this.acc; this.acc = 0;
+    if (this.acc < interval) return;
+    // Keep the remainder rather than zeroing it: zeroing quantises the draw
+    // cadence to whole rAF slots, so the frame gaps alternate and the motion
+    // reads as uneven even though the animation clock is correct.
+    const step = this.acc;
+    this.acc = Math.max(0, this.acc - interval);
 
     const anim = this.cfg.anim;
     const t = this.t;
@@ -649,8 +665,12 @@
     // Speech intensity scales the amplitudes: quiet voice ≈ still, excited
     // speech visibly (but gently) moves more.
     const lvl3 = Math.max(this.level, this.viseme.level);
-    this._energy += (Math.min(1, lvl3 * 1.15) - this._energy) * Math.min(1, step * 3.2);
-    this._energySlow += (this._energy - this._energySlow) * Math.min(1, step * 1.4);
+    // Exponential rather than `* Math.min(1, step*k)`: the linear form clamps
+    // at 1, so at 12 fps a step of 0.083 already travels 27% of the gap in one
+    // frame against 5% at 60 fps — the presence reacted faster on a slower
+    // machine. These converge by real time at any frame rate.
+    this._energy = JM.smooth(this._energy, Math.min(1, lvl3 * 1.15), 3.2, step);
+    this._energySlow = JM.smooth(this._energySlow, this._energy, 1.4, step);
     const en = this._energy, enSlow = this._energySlow;
     let tx, ty, tz, trot, tpulse;
     if (this.state === "SPEAKING") {
@@ -788,8 +808,8 @@
       this.gaze.nextAt = t + (thinking ? 1.2 : 1.8) + Math.random() * 2.2;
     }
     if (this.state === "LISTENING") { this.gaze.tx *= 0.4; this.gaze.ty *= 0.4; }
-    this.gaze.x += (this.gaze.tx - this.gaze.x) * Math.min(1, step * 6);
-    this.gaze.y += (this.gaze.ty - this.gaze.y) * Math.min(1, step * 6);
+    this.gaze.x = JM.smooth(this.gaze.x, this.gaze.tx, 6, step);
+    this.gaze.y = JM.smooth(this.gaze.y, this.gaze.ty, 6, step);
     if (this.eyeL) {
       this.eyeL.position.x = -0.34 + this.gaze.x;
       this.eyeR.position.x = 0.34 + this.gaze.x;
@@ -797,26 +817,36 @@
       this.eyeR.position.y = 0.05 + this.gaze.y;
     }
 
-    // blinking
+    // blinking — GRADED, and never fewer than three frames at any frame rate.
+    // The previous version swapped straight to a closed-eye texture for a fixed
+    // 0.16 s. At the battery profile's 12 fps that interval is under two frames,
+    // so the blink was one frame closed and then open again: read as a dropped
+    // frame rather than an eyelid. Now the lid squashes through an eased curve
+    // (motion.js), and the closed art only appears near full closure.
     if (t > this.blinkAt && this.state !== "SLEEPING") {
-      this.blinking = 0.16;
+      this.blinkPhase = 0.001;
       this.blinkAt = t + 2.2 + Math.random() * 3.4;
     }
-    if (this.blinking > 0) {
-      this.blinking -= step;
-      this._setEyes("closed");
-      if (this.blinking <= 0) {
+    if (this.blinkPhase > 0) {
+      this.blinkPhase = JM.blinkAdvance(this.blinkPhase, step);
+      const lid = JM.blinkScale(this.blinkPhase);
+      const sy = Math.max(0.06, lid);
+      if (this.eyeL && this.eyeR) { this.eyeL.scale.y = sy; this.eyeR.scale.y = sy; }
+      this._setEyes(lid <= 0.5 ? "closed" : this._eyeStyleOpen);
+      if (this.blinkPhase === 0) {
         // ~1 in 5 blinks is a quick double-blink — very alive, very anime
         if (!this._dblBlink && Math.random() < 0.18) {
           this._dblBlink = true;
-          this.blinking = 0.12;
+          this.blinkPhase = 0.001;
           this.blinkAt = t + 0.3;
         } else {
           this._dblBlink = false;
+          if (this.eyeL && this.eyeR) { this.eyeL.scale.y = 1; this.eyeR.scale.y = 1; }
           this._applyFace(this.expression || "normal");
         }
       }
     }
+    this.blinking = this.blinkPhase;
 
     // speaking mouth — three viseme zones from the live audio analysis:
     // closed-ish smile → rounded "o" → full open, with width shaping
@@ -843,6 +873,9 @@
   };
 
   Jarvis3D.prototype._setEyes = function (style) {
+    // Remember the eye art that belongs to the current expression, so a blink
+    // can hand the eyes back to it instead of always to "normal".
+    if (style !== "closed") this._eyeStyleOpen = style;
     if (this.eyeL.material._style !== style) {
       const mL = this._eyeMat(style), mR = this._eyeMat(style);
       // mirror the sad lid so both eyes droop outward correctly

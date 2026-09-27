@@ -181,6 +181,138 @@ def currency_symbol(code: str = "") -> str:
     return CURRENCY_SYMBOLS.get((code or get_currency_code()).upper(), "$")
 
 
+def get_home_location() -> dict:
+    """The remembered home position, or {} when none has been set.
+
+    Stored as {lat, lon, label}. Kept here rather than in long-term memory
+    because it is a setting — the user sets it once and expects it to be
+    stable — and because "what is flying over me" has to work even when memory
+    is switched off. Never raises: a corrupt value reads as unset.
+    """
+    raw = load_api_keys().get("home_location")
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        lat = float(raw.get("lat"))
+        lon = float(raw.get("lon"))
+    except (TypeError, ValueError):
+        return {}
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return {}
+    return {"lat": lat, "lon": lon, "label": str(raw.get("label") or "").strip()}
+
+
+def save_home_location(lat: float, lon: float, label: str = "") -> None:
+    """Remember where the user is. Rejects out-of-range coordinates rather than
+    storing a position that would make every later answer wrong."""
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        raise ValueError("lat and lon must be numbers")
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        raise ValueError("lat/lon out of range")
+    _save_flag("home_location", {"lat": round(lat, 6), "lon": round(lon, 6),
+                                 "label": str(label or "").strip()[:80]})
+
+
+# ── mail ─────────────────────────────────────────────────────────────────────
+#
+# Host settings for the providers people actually use, so the user supplies an
+# address and an app password instead of four hostnames and two ports. These are
+# public server names, not credentials — the password is the part that must never
+# leave this file.
+MAIL_PRESETS = {
+    "gmail":   {"label": "Gmail",          "imap_host": "imap.gmail.com",
+                "imap_port": 993, "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587, "hint": "Needs an App Password "
+                "(Google Account → Security → 2-Step Verification → App "
+                "passwords), not your normal Google password."},
+    "outlook": {"label": "Outlook / Microsoft 365",
+                "imap_host": "outlook.office365.com",
+                "imap_port": 993, "smtp_host": "smtp.office365.com",
+                "smtp_port": 587, "hint": "Use an app password if your account "
+                "has two-step verification enabled."},
+    "yahoo":   {"label": "Yahoo Mail",    "imap_host": "imap.mail.yahoo.com",
+                "imap_port": 993, "smtp_host": "smtp.mail.yahoo.com",
+                "smtp_port": 587, "hint": "Yahoo requires a generated app "
+                "password for mail clients."},
+    "icloud":  {"label": "iCloud Mail",   "imap_host": "imap.mail.me.com",
+                "imap_port": 993, "smtp_host": "smtp.mail.me.com",
+                "smtp_port": 587, "hint": "An app-specific password is "
+                "required (Apple ID → Sign-In and Security)."},
+    "custom":  {"label": "Other (IMAP/SMTP)", "imap_host": "",
+                "imap_port": 993, "smtp_host": "", "smtp_port": 587,
+                "hint": "Enter your provider's IMAP and SMTP server names."},
+}
+
+
+def _as_port(value, fallback: int) -> int:
+    """A TCP port, or the fallback. Hand-edited configs contain strings, and an
+    int() that raises here would turn "check my mail" into a crash."""
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return n if 1 <= n <= 65535 else fallback
+
+
+def get_mail_config() -> dict:
+    """The saved mail account, or {} when none is set.
+
+    Never raises — that promise is the whole point of the function, because
+    every caller is a voice command path where an exception becomes a broken
+    answer. A hand-edited or corrupt block reads as unconfigured.
+    """
+    raw = load_api_keys().get("mail")
+    if not isinstance(raw, dict):
+        return {}
+    provider = str(raw.get("provider") or "").strip().lower()
+    cfg = {
+        "provider": provider if provider in MAIL_PRESETS else "custom",
+        "address": str(raw.get("address") or "").strip(),
+        "password": str(raw.get("password") or ""),
+        "imap_host": str(raw.get("imap_host") or "").strip(),
+        "imap_port": _as_port(raw.get("imap_port"), 993),
+        "smtp_host": str(raw.get("smtp_host") or "").strip(),
+        "smtp_port": _as_port(raw.get("smtp_port"), 587),
+    }
+    # "{} means unconfigured" has to be true for every caller that tests with
+    # `if not cfg`. A cleared account would otherwise come back as a full dict of
+    # empty strings and read as configured-but-broken instead of absent.
+    if not (cfg["address"] or cfg["password"] or cfg["imap_host"] or cfg["smtp_host"]):
+        return {}
+    return cfg
+
+
+def save_mail_config(provider: str, address: str, password: str,
+                     imap_host: str = "", imap_port: int = 993,
+                     smtp_host: str = "", smtp_port: int = 587) -> None:
+    """Store the mail account. An empty password KEEPS the saved one, so the
+    settings form can be re-saved without the user retyping a secret the UI
+    deliberately shows as dots."""
+    provider = str(provider or "custom").strip().lower()
+    if provider not in MAIL_PRESETS:
+        provider = "custom"
+    preset = MAIL_PRESETS[provider]
+    old = load_api_keys().get("mail")
+    old_pw = str(old.get("password") or "") if isinstance(old, dict) else ""
+
+    _patch_config(mail={
+        "provider": provider,
+        "address": str(address or "").strip(),
+        "password": str(password) if str(password or "") else old_pw,
+        "imap_host": str(imap_host or "").strip() or preset["imap_host"],
+        "imap_port": _as_port(imap_port, preset["imap_port"]),
+        "smtp_host": str(smtp_host or "").strip() or preset["smtp_host"],
+        "smtp_port": _as_port(smtp_port, preset["smtp_port"]),
+    })
+
+
+def clear_mail_config() -> None:
+    """Forget the mail account entirely, password included."""
+    _patch_config(mail={})
+
+
 HUD_STYLES = ("face", "core")
 
 

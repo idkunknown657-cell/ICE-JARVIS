@@ -265,6 +265,18 @@ def _input_rates():
     return _INPUT_RATE_FALLBACKS
 
 
+def input_rate_ladder() -> tuple[int, ...]:
+    """The input rates to try, in order, for a microphone.
+
+    Public because anything that opens a capture stream has to walk the same
+    ladder as the capture layer. The microphone *diagnostic* did not, and asked
+    every device for 16 kHz: a fixed-rate desktop mic that the app records from
+    perfectly was reported as dead, which is the exact 'the voice is not
+    reaching it' message users were shown.
+    """
+    return tuple(_INPUT_RATE_FALLBACKS)
+
+
 def input_open_rate(idx: int):
     """The rate a microphone actually opened at, tried once and cached.
 

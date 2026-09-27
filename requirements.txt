@@ -28,3 +28,7 @@ PyPDF2>=3,<4
 python-docx>=1,<2
 paho-mqtt>=2,<3
 pynvml>=12,<14
+# Orbital propagation for earth_intel's satellite pass prediction. Optional on
+# purpose: the aircraft, earthquake and natural-event lookups all work without
+# it, and the satellite answer says so instead of returning a guess.
+sgp4>=2.23,<3

@@ -164,6 +164,7 @@ class TestJarvisAPI(unittest.TestCase):
         json.dumps(self.api.api_keys_get())
         json.dumps(self.api.memory_get())
         json.dumps(self.api.perf_get())
+        json.dumps(self.api.mail_get())
 
     def test_send_text_reaches_callback(self):
         seen = []
@@ -472,6 +473,93 @@ class TestCoreToUIPush(unittest.TestCase):
         self.assertIn("training", [n for n, _ in webui._PUMP._q])
         for junk in (None, "x", 5, []):
             self.ui.push_training(junk)
+
+
+class TestMailEndpoints(unittest.TestCase):
+    """The mail endpoints the Settings page talks to.
+
+    Every one of these writes to the config file, so every one runs inside
+    _ConfigGuard — a suite that can overwrite the file holding the user's
+    credentials is a suite that gets deleted.
+    """
+
+    def setUp(self):
+        self.ui = _fresh_ui()
+        self.api = self.ui._api
+
+    def test_get_returns_the_presets_the_form_offers(self):
+        with _ConfigGuard():
+            r = self.api.mail_get()
+        self.assertIn("account", r)
+        presets = r.get("presets") or {}
+        for key in ("gmail", "outlook", "yahoo", "icloud", "custom"):
+            self.assertIn(key, presets)
+            self.assertIn("label", presets[key])
+
+    def test_save_then_get_round_trips_without_exposing_a_clear_password(self):
+        with _ConfigGuard():
+            r = self.api.mail_save({"provider": "gmail", "address": "a@b.com",
+                                    "password": "secret-app-pw"})
+            self.assertTrue(r["ok"])
+            acct = self.api.mail_get()["account"]
+        self.assertEqual(acct["address"], "a@b.com")
+        self.assertEqual(acct["imap_host"], "imap.gmail.com")
+        self.assertEqual(acct["password"], "secret-app-pw")
+        # The UI's job is to never put that value in the DOM; the bridge's job is
+        # to report it as configured rather than to leak it into a message.
+        self.assertTrue(r["account"]["configured"] or r["account"]["account"])
+
+    def test_saving_again_with_an_empty_password_keeps_the_saved_one(self):
+        with _ConfigGuard():
+            self.api.mail_save({"provider": "gmail", "address": "a@b.com",
+                                "password": "secret-app-pw"})
+            self.api.mail_save({"provider": "gmail", "address": "a@b.com",
+                                "password": ""})
+            acct = self.api.mail_get()["account"]
+        self.assertEqual(acct["password"], "secret-app-pw")
+
+    def test_configured_flag_follows_the_account(self):
+        with _ConfigGuard():
+            self.api.mail_clear()
+            self.assertFalse(self.api.mail_get()["configured"])
+            self.api.mail_save({"provider": "gmail", "address": "a@b.com",
+                                "password": "pw"})
+            self.assertTrue(self.api.mail_get()["configured"])
+            self.api.mail_clear()
+            self.assertFalse(self.api.mail_get()["configured"])
+
+    def test_clear_removes_the_password_too(self):
+        with _ConfigGuard():
+            self.api.mail_save({"provider": "gmail", "address": "a@b.com",
+                                "password": "secret-app-pw"})
+            self.api.mail_clear()
+            acct = self.api.mail_get()["account"]
+        self.assertEqual(acct, {})
+
+    def test_save_survives_a_hostile_payload(self):
+        with _ConfigGuard():
+            for junk in (None, {}, {"provider": None, "address": None,
+                                    "imap_port": "not a port"},
+                         {"provider": 5, "address": [], "password": {}}):
+                r = self.api.mail_save(junk)
+                self.assertIn("ok", r)
+
+    def test_test_endpoint_reports_a_failure_without_raising(self):
+        with _ConfigGuard():
+            self.api.mail_clear()
+            r = self.api.mail_test()
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["msg"])
+        self.assertIn("settings", r["msg"].lower())
+
+    def test_test_endpoint_never_opens_a_real_connection_when_unconfigured(self):
+        """An unconfigured account must be refused before any socket is opened,
+        so pressing Test on a blank form cannot hang the UI."""
+        with _ConfigGuard(), \
+             mock.patch("imaplib.IMAP4_SSL", side_effect=AssertionError("opened a socket")):
+            self.api.mail_clear()
+            r = self.api.mail_test()
+        self.assertFalse(r["ok"])
 
 
 if __name__ == "__main__":

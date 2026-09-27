@@ -57,9 +57,10 @@ import io
 import platform
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -102,6 +103,68 @@ def _log(msg: str) -> str:
     except Exception:
         pass
     return ""
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  0. THE THING THAT USED TO HANG THE WHOLE TASK
+# ════════════════════════════════════════════════════════════════════════════
+#
+# Accessibility calls are not local function calls. Every `elm.children()`,
+# `elm.rectangle()`, `get_value()` and `element_from_point()` is a blocking COM
+# round trip INTO ANOTHER PROCESS, and Windows puts no timeout on it. When that
+# process is busy, showing a modal, painting a heavy page, or simply not
+# pumping messages, the call does not return — and neither does JARVIS.
+#
+# That is the "PC control is stuck" symptom: the state pill sits on EXECUTING
+# forever while nothing moves, because the accessibility walk is parked inside a
+# syscall and no Python-level deadline can interrupt it. Counting elements (which
+# _collect already did) does not help: the cap is on how many elements are read,
+# not on how long reading them takes, and one unresponsive window can exceed it
+# on the very first child.
+#
+# So each blocking phase gets a wall-clock ceiling and runs on its own thread.
+# The caller stops waiting at the deadline, and the strategy cascade continues to
+# the next source (vision, then coordinates) exactly as it already does when UIA
+# answers with nothing. A hung window then costs one budget instead of the task.
+#
+# run_bounded is public because the legacy screen_ai tool makes the same kind of
+# calls and needs the same ceiling — one unresponsive window must not freeze two
+# different ways of driving the same machine. (actions/web_search.py carries its
+# own tiny version of this for a network call that hangs the same way; the two
+# stay separate because one guards a search request and one guards the desktop.)
+_UIA_WALK_BUDGET_S = 2.5      # one full accessibility tree walk
+_UIA_PROBE_BUDGET_S = 1.2     # a single element / focused-control read
+
+
+def run_bounded(fn: Callable[[], Any], seconds: float, default: Any) -> Any:
+    """Run `fn` with a wall-clock ceiling; return `default` if it overruns.
+
+    The worker is a daemon, so an abandoned COM call can never keep the process
+    alive, and a late result is simply discarded. `fn` must be read-only from the
+    caller's point of view — anything it leaves half-done is thrown away with it.
+    """
+    box: dict = {}
+
+    def _work() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException:
+            # An abandoned thread must not print a traceback on the way out; the
+            # caller has already moved on to another strategy.
+            pass
+
+    try:
+        worker = threading.Thread(target=_work, daemon=True, name="pc-uia")
+        worker.start()
+    except Exception as e:                       # pragma: no cover - thread limit
+        _log(f"[pc_engine] could not start accessibility worker: {e}")
+        return default
+    worker.join(max(0.05, float(seconds)))
+    if worker.is_alive():
+        _log(f"[pc_engine] accessibility call exceeded {float(seconds):.1f}s - "
+             f"abandoning it and trying the next strategy")
+        return default
+    return box.get("value", default)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -525,12 +588,22 @@ def _rect(elm) -> tuple[int, int, int, int]:
         return 0, 0, 0, 0
 
 
-def _collect(elms: Iterable, out: list, depth: int = 0, cap: int = 700) -> None:
-    """Flatten a UIA subtree into dicts. Bounded so a huge window cannot hang."""
+def _collect(elms: Iterable, out: list, depth: int = 0, cap: int = 700,
+             deadline: float | None = None) -> None:
+    """Flatten a UIA subtree into dicts. Bounded in size AND in time.
+
+    `cap` bounds how many elements are read; `deadline` bounds how long the walk
+    may take. Both are needed — see the note above run_bounded. A walk that runs
+    out of time returns what it has, which is strictly better than nothing: a
+    partial tree still answers "is the search box in there" for the caller, and
+    the caller can re-look for anything missing.
+    """
     if depth > 22 or len(out) >= cap:
         return
     for elm in elms or []:
         if len(out) >= cap:
+            return
+        if deadline is not None and time.monotonic() > deadline:
             return
         try:
             ctype = (elm.control_type or "").strip()
@@ -571,19 +644,31 @@ def uia_elements(window: str | None = None, *, cap: int = 700,
     now = time.monotonic()
     if not fresh and _UIA_CACHE["key"] == key and (now - _UIA_CACHE["at"]) < _UIA_TTL:
         return list(_UIA_CACHE["elements"])
-    root = _uia_root(window)
-    if root is None:
-        return []
-    out: list[dict] = []
-    try:
-        _collect(root.children(), out, cap=cap)
-    except Exception:
-        pass
-    if not out:
+    def _walk() -> list[dict]:
+        root = _uia_root(window)
+        if root is None:
+            return []
+        found: list[dict] = []
+        deadline = time.monotonic() + _UIA_WALK_BUDGET_S
         try:
-            _collect([root], out, cap=cap)
+            _collect(root.children(), found, cap=cap, deadline=deadline)
         except Exception:
             pass
+        if not found:
+            try:
+                _collect([root], found, cap=cap, deadline=deadline)
+            except Exception:
+                pass
+        return found
+
+    # Bounded twice over: the walk stops itself at the deadline, and the caller
+    # stops waiting slightly after that if a single COM call inside it never
+    # returns. Either way `uia_elements` answers instead of hanging.
+    out = run_bounded(_walk, _UIA_WALK_BUDGET_S + 0.6, [])
+
+    # An empty answer (deadline, hung window, or genuinely no tree) is cached
+    # like any other. That matters: without it every step of a multi-step task
+    # would pay the full budget again on the same unresponsive window.
     _UIA_CACHE.update({"at": now, "key": key, "elements": out})
     return list(out)
 
@@ -593,18 +678,26 @@ def clear_uia_cache() -> None:
 
 
 def element_at(x: int, y: int) -> dict | None:
-    """The UIA element under a screen point (used to verify a click landed)."""
+    """The UIA element under a screen point (used to verify a click landed).
+
+    This runs after the click, so a hang here would strand a task that has
+    already done its work. Bounded like every other accessibility read.
+    """
     if not uia_available():
         return None
-    try:
-        elm = pywinauto.Desktop(backend="uia").element_from_point(int(x), int(y))
-        left, top, right, bottom = _rect(elm)
-        return {"name": (getattr(elm, "name", "") or "").strip(),
-                "type": (getattr(elm, "control_type", "") or "").strip(),
-                "x": left, "y": top, "w": right - left, "h": bottom - top,
-                "elm": elm}
-    except Exception:
-        return None
+
+    def _look() -> dict | None:
+        try:
+            elm = pywinauto.Desktop(backend="uia").element_from_point(int(x), int(y))
+            left, top, right, bottom = _rect(elm)
+            return {"name": (getattr(elm, "name", "") or "").strip(),
+                    "type": (getattr(elm, "control_type", "") or "").strip(),
+                    "x": left, "y": top, "w": right - left, "h": bottom - top,
+                    "elm": elm}
+        except Exception:
+            return None
+
+    return run_bounded(_look, _UIA_PROBE_BUDGET_S, None)
 
 
 # ── matching (pure, unit-tested) ─────────────────────────────────────────────
@@ -1412,37 +1505,46 @@ def _uia_focused_value() -> str | None:
     """
     if not uia_available():
         return None
-    value = None
-    try:
-        from pywinauto import uia_defines
-        from pywinauto.controls.uiawrapper import UIAWrapper
-        el = uia_defines.IUIA().iuia.GetFocusedElement()
-        if el is None:
-            return None
-        w = UIAWrapper(el)
-        for getter in (lambda: w.get_value(),
-                       lambda: w.iface_value.CurrentValue,
-                       lambda: w.legacy_properties().get("Value")):
-            try:
-                v = getter()
-                if v is not None:
-                    value = str(v)
-                    break
-            except Exception:
-                continue
-        if value is None:
-            try:
-                t = w.control_type()
-            except Exception:
-                t = ""
-            # Only a text-bearing control can be read back as its own content.
-            if t in ("Edit", "ComboBox", "Document", "Spinner"):
+
+    def _read() -> str | None:
+        value = None
+        try:
+            from pywinauto import uia_defines
+            from pywinauto.controls.uiawrapper import UIAWrapper
+            el = uia_defines.IUIA().iuia.GetFocusedElement()
+            if el is None:
+                return None
+            w = UIAWrapper(el)
+            for getter in (lambda: w.get_value(),
+                           lambda: w.iface_value.CurrentValue,
+                           lambda: w.legacy_properties().get("Value")):
                 try:
-                    value = str(w.window_text())
+                    v = getter()
+                    if v is not None:
+                        value = str(v)
+                        break
                 except Exception:
-                    value = None
-    except Exception:
-        return None
+                    continue
+            if value is None:
+                try:
+                    t = w.control_type()
+                except Exception:
+                    t = ""
+                # Only a text-bearing control can be read back as its own content.
+                if t in ("Edit", "ComboBox", "Document", "Spinner"):
+                    try:
+                        value = str(w.window_text())
+                    except Exception:
+                        value = None
+        except Exception:
+            return None
+        return value
+
+    # Bounded: this sits between typing and verifying, and an unresponsive target
+    # here would otherwise stall the caller *after* the keystrokes have landed.
+    # None ("no idea") is the honest answer to a timeout, and the caller already
+    # treats it as "fall back to the clipboard read" — never as a mismatch.
+    value = run_bounded(_read, _UIA_PROBE_BUDGET_S, None)
     if value is None:
         return None
     # A Document's "value" is the whole document — useless as a read-back and
@@ -1682,16 +1784,26 @@ def focus_window(title_fragment: str) -> bool:
     except Exception:
         pass
     if uia_available():
-        try:
-            wins = pywinauto.findwindows.find_windows(
-                title_re=rf".*{re.escape(str(title_fragment))}.*",
-                backend="uia", visible_only=True)
-            if wins:
-                pywinauto.Desktop(backend="uia").window(handle=wins[0]).set_focus()
-                time.sleep(0.15)
-                return True
-        except Exception:
-            pass
+        def _focus_via_uia() -> bool:
+            try:
+                wins = pywinauto.findwindows.find_windows(
+                    title_re=rf".*{re.escape(str(title_fragment))}.*",
+                    backend="uia", visible_only=True)
+                if wins:
+                    pywinauto.Desktop(backend="uia").window(handle=wins[0]).set_focus()
+                    time.sleep(0.15)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # find_windows + set_focus are the worst offenders in the whole engine:
+        # set_focus sends a message to the target and waits for it, so a window
+        # that is not pumping (a splash screen, a hung game, a crashed app's
+        # ghost) blocks this for as long as it likes. Bounded, so wait_for_window
+        # can keep polling its own deadline instead of parking on one attempt.
+        if run_bounded(_focus_via_uia, _UIA_PROBE_BUDGET_S, False):
+            return True
     return False
 
 

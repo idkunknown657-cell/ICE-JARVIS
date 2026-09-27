@@ -251,5 +251,58 @@ class ConfigManagerTest(unittest.TestCase):
         cm.save_emotion_depth("full")
 
 
+class HomeLocationTest(unittest.TestCase):
+    """The remembered location used by the earth_intel tool.
+
+    "What is flying over me" has to work even with memory switched off, so this
+    is a setting rather than a memory entry — and a corrupt or out-of-range
+    value must read as unset, because a wrong home position silently makes every
+    later answer about the wrong part of the world.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        tmp = Path(self._tmp.name)
+        for p in (mock.patch.object(cm, "CONFIG_DIR", tmp),
+                  mock.patch.object(cm, "CONFIG_FILE", tmp / "api_keys.json")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_unset_reads_as_empty(self):
+        self.assertEqual(cm.get_home_location(), {})
+
+    def test_round_trip(self):
+        cm.save_home_location(28.6139, 77.2090, "Delhi, India")
+        got = cm.get_home_location()
+        self.assertAlmostEqual(got["lat"], 28.6139, places=5)
+        self.assertAlmostEqual(got["lon"], 77.2090, places=5)
+        self.assertEqual(got["label"], "Delhi, India")
+
+    def test_out_of_range_is_rejected_not_stored(self):
+        for lat, lon in ((91.0, 0.0), (0.0, 181.0), (-90.1, 0.0)):
+            with self.assertRaises(ValueError):
+                cm.save_home_location(lat, lon)
+        self.assertEqual(cm.get_home_location(), {})
+
+    def test_non_numeric_is_rejected(self):
+        with self.assertRaises(ValueError):
+            cm.save_home_location("north", "west")
+
+    def test_corrupt_stored_value_reads_as_unset(self):
+        cm._save_flag("home_location", {"lat": "not-a-number", "lon": 5})
+        self.assertEqual(cm.get_home_location(), {})
+
+    def test_survives_a_hand_edited_file(self):
+        # Someone editing the JSON by hand must not crash the assistant.
+        cm._save_flag("home_location", "just a string")
+        self.assertEqual(cm.get_home_location(), {})
+
+    def test_does_not_disturb_other_settings(self):
+        cm.save_assistant_config("JARVIS", "Sir")
+        cm.save_home_location(1.0, 2.0, "x")
+        self.assertEqual(cm.get_assistant_name(), "JARVIS")
+        self.assertEqual(cm.get_user_name(), "Sir")
+
+
 if __name__ == "__main__":
     unittest.main()

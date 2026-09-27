@@ -101,6 +101,7 @@ ICE is a full desktop AI assistant — conversational first, capable underneath.
 | **Mouse control** | Moves and clicks the pointer with pixel accuracy |
 | **Screenshots** | Captures the screen whenever you ask |
 | **Desktop shortcut** | Creates an **ICE** icon on your Desktop with one request — it launches in the background, no console window |
+| **Email** | Reads and sends your real mail over IMAP/SMTP — inbox, unread, search, full message text, replies. No browser needed, and sending always waits for your confirmation |
 | **Microphone diagnostics** | Measures real input (not just "device exists"), checks Windows privacy gates, diagnoses the full chain — device → permission → capture → signal — with plain-language fixes |
 | **Self-training** | Keeps score of how its own clicks, keys and reads land, then practises the weakest one while you are quiet |
 | **Memory** | Remembers what matters locally, across sessions |
@@ -225,8 +226,44 @@ ICE-JARVIS/
 - API keys, memory, and conversation history stay in the app folder on your PC.
 - Screen awareness, proactive comments and memory are each one toggle away from
   off (⚙ Settings).
-- The only network calls are the AI providers you configure and the update
-  manifest on GitHub — no telemetry, no analytics.
+- Network calls come from four places, and nowhere else: the AI providers you
+  configure, the update manifest on GitHub, the public data feeds listed below
+  (only when you ask a question about the world), and — only once you have set
+  up an account in ⚙ Settings → Mail — your own mail server. No telemetry, no
+  analytics, and nothing about you or your machine is sent to any of them.
+- Your mail password is stored in your local `config/api_keys.json`, is never
+  spoken, logged, or shown back in the interface, and is sent to no one but your
+  own provider. Reading a message does not mark it as read. Sending anything
+  stops at an on-screen confirmation showing the recipient and the text first.
+- The world lookups need no account and no key. Your saved home location stays
+  in your own `config/api_keys.json`; it is sent to a feed only as the plain
+  coordinates of the question you just asked ("what is overhead right now"),
+  and never as anything identifying you.
+
+## 📡 World data — sources and credit
+
+`earth_intel` answers questions about the real world by reading public feeds
+directly. It calls, keyless and read-only:
+
+| Feed | What it provides |
+|---|---|
+| [Photon](https://photon.komoot.io) (OpenStreetMap) | place name → coordinates |
+| [adsb.lol](https://adsb.lol) | live aircraft transponder positions |
+| [USGS](https://earthquake.usgs.gov) | earthquake catalogue |
+| [NASA EONET](https://eonet.gsfc.nasa.gov) | open natural events |
+| [CelesTrak](https://celestrak.org) | orbital elements (TLE) |
+
+These feeds are owned by their providers and remain under their own terms; ICE
+JARVIS neither bundles nor redistributes their data. Orbit figures (period,
+altitude, inclination) are derived from the published elements in your machine.
+
+**Credit.** The idea of gathering these particular public signals, and the shape
+of the questions worth asking them, comes from **[God's Eye View](https://github.com/bilawalsidhu/gods-eye-view)**
+by Bilawal Sidhu (MIT — © 2026 Bilawal Sidhu), which puts the same public data
+onto a browser globe. This is an independent Python implementation that talks to
+the providers directly; no code, UI, assets or bundled datasets from that project
+are copied or redistributed here. (Note that its bundled datasets carry separate,
+sometimes non-commercial licences — which is one reason none of them are used.)
 
 ## 📄 License
 

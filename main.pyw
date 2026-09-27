@@ -2042,7 +2042,22 @@ class JarvisLive:
                 self.ui.write_log(
                     f"SYS: Microphone '{_mic_name}' unavailable — using system default."
                 )
-                _mic_stream = _open_mic(None)
+                # The fallback has to clear the same hurdle the named device just
+                # hit. A fixed-rate *system default* (a desktop whose default is a
+                # USB interface) rejects 16 kHz exactly like the device above did,
+                # and a blind retry at 16 kHz would then fail too and take the
+                # whole audio session with it. Ask the default for its own rate
+                # first, and only then fall back to the plain 16 kHz attempt.
+                _fb_rate = None
+                try:
+                    import sounddevice as _sd
+                    _fb_rate = audio_devices.input_open_rate(_sd.default.device[0])
+                except Exception:
+                    _fb_rate = None
+                try:
+                    _mic_stream = _open_mic(None, _fb_rate)
+                except Exception:
+                    _mic_stream = _open_mic(None)
 
             with _mic_stream:
                 self._active_mic = (_mic_name if _mic_dev is not None

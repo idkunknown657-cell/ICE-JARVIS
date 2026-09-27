@@ -52,24 +52,31 @@
     // published (clamped) values read by render() and the CSS vars
     cx: 0, cy: 0, cz: 0, rot: 0, swell: 1,
   };
-  // Critically-damped spring: pos += vel*dt; vel += (target-pos)*k*dt - vel*d*dt.
-  // Never overshoots into oscillation, never snaps — the response the brief
-  // calls "fluid, organic, never robotic". Non-finite values self-heal to
+  // Motion primitives live in motion.js and are shared with the 3D avatar, so
+  // the two cannot drift apart. Both are frame-rate independent there: the
+  // spring is substepped and the easing is exponential. Integrating them here
+  // per-frame instead made JARVIS move LESS and differently on a slow machine
+  // (measured: the pulse channel settled to 0.60 at 8 fps against 0.93 at 60),
+  // and made the mouth snap open below 20 fps instead of easing.
+  const JM = window.JarvisMotion || {
+    stepFlat: function (h, n, target, dt, k, d) {
+      h[n] = h[n] + (target - h[n]) * Math.min(1, k * dt);
+      return h[n];
+    },
+    smooth: (a, b, rate, dt) => a + (b - a) * Math.min(1, rate * dt),
+    drift: (t, a, b, phase) =>
+      0.62 * Math.sin(t * a + phase) + 0.38 * Math.sin(t * b + phase * 1.7),
+    blinkScale: (p) => (p > 0 && p < 1 ? Math.max(0.08, Math.abs(1 - p * 2)) : 1),
+    blinkAdvance: (p, dt) => { const n = p + dt * 6.5; return n >= 1 ? 0 : n; },
+  };
+
+  // Critically-damped spring on a {p,v} channel, glided toward the target. Never
+  // overshoots into oscillation, never snaps. Non-finite values self-heal to
   // rest, so a poisoned channel can never stick or throw downstream.
   function spring(ch, target, dt, stiffness, damping) {
-    if (!isFinite(MOTION[ch])) MOTION[ch] = 0;
-    if (!isFinite(MOTION[ch + "v"])) MOTION[ch + "v"] = 0;
-    MOTION[ch + "v"] += (target - MOTION[ch]) * stiffness * dt;
-    MOTION[ch + "v"] *= Math.max(0, 1 - damping * dt);
-    MOTION[ch] += MOTION[ch + "v"] * dt;
-    return MOTION[ch];
+    return JM.stepFlat(MOTION, ch, target, dt, stiffness, damping);
   }
-  // Layered incommensurate sines — the cheapest smooth pseudo-noise that never
-  // repeats visibly. Two frequencies with an irrational-ish ratio per channel
-  // means the sum drifts unpredictably but CONTINUOUSLY (organic, not random).
-  function drift(t, a, b, phase) {
-    return 0.62 * Math.sin(t * a + phase) + 0.38 * Math.sin(t * b + phase * 1.7);
-  }
+  const drift = JM.drift;
   // Speech intensity → motion energy. Quiet voice stays nearly still; normal
   // speech breathes; excited speech leans into the room. Smoothed by the
   // caller (dispLevel is already eased), so this maps, not jumps.
@@ -80,17 +87,20 @@
   let energySlow = 0;          // slower follower — separates swell from sway
 
   const TAU = Math.PI * 2;
-  const ease = (a, b, k) => a + (b - a) * Math.min(1, Math.max(0, k));
+  // `k` is a per-second rate, not a per-frame fraction — motion.js converts it
+  // with 1 - e^(-k·dt), which converges at the same real-time speed at every
+  // frame rate. A per-frame fraction clamps at 1 and teleports once k·dt ≥ 1.
+  const ease = JM.smooth;
 
   // State → colour
   function palette() {
     switch (AV.state) {
-      case "LISTENING": return { main: "#38bdf8", glow: "rgba(56,189,248," };
+      case "LISTENING": return { main: "#2ee87f", glow: "rgba(46,232,127," };
       case "THINKING":  return { main: "#8b6df5", glow: "rgba(139,109,245," };
-      case "SPEAKING":  return { main: "#7dd7fc", glow: "rgba(125,215,252," };
+      case "SPEAKING":  return { main: "#6ff2a8", glow: "rgba(111,242,168," };
       case "SLEEPING":  return { main: "#2c3a55", glow: "rgba(84,110,160," };
       case "MUTED":     return { main: "#8b5a68", glow: "rgba(255,92,122," };
-      default:          return { main: "#38bdf8", glow: "rgba(56,189,248," };
+      default:          return { main: "#2ee87f", glow: "rgba(46,232,127," };
     }
   }
   function exprPalette(p) {
@@ -117,11 +127,15 @@
   AV.pushVisemes = function (frames, hop, at) {
     vFrames = frames; vHop = hop || 0.02; vStart = at;
   };
-  function tickVisemes(nowSec) {
+  function tickVisemes(nowSec, dt) {
     if (!vFrames || !vFrames.length || AV.state !== "SPEAKING") {
-      AV.viseme.level = ease(AV.viseme.level, 0, 0.25);
-      AV.viseme.openness = ease(AV.viseme.openness, 0, 0.25);
-      AV.viseme.width = ease(AV.viseme.width, 0, 0.25);
+      // Rate, not fraction: a fixed 0.25 per frame closed the mouth in 4 frames
+      // at 60 fps and in 2 at 8 fps, so the same silence looked different at
+      // different frame rates. 9/s is the same feel at 63% per 0.11 s, whatever
+      // rate the machine is drawing at.
+      AV.viseme.level    = ease(AV.viseme.level, 0, 9, dt);
+      AV.viseme.openness = ease(AV.viseme.openness, 0, 9, dt);
+      AV.viseme.width    = ease(AV.viseme.width, 0, 9, dt);
       return;
     }
     let idx = Math.floor((nowSec - vStart) / vHop);
@@ -400,7 +414,7 @@
       // blink
       let eyeSquish = 1;
       if (AV.state === "SLEEPING") eyeSquish = 0.08;
-      else if (blinkPhase > 0) eyeSquish = Math.max(0.08, Math.abs(1 - blinkPhase * 2));
+      else if (blinkPhase > 0) eyeSquish = JM.blinkScale(blinkPhase);
 
       // eyes: small glowing dots
       for (const s of [-1, 1]) {
@@ -511,10 +525,10 @@
     // blink timer
     blinkT += dt;
     if (blinkT > nextBlink) { blinkT = 0; nextBlink = 2.2 + Math.random() * 3.4; blinkPhase = 0.001; }
-    if (blinkPhase > 0) {
-      blinkPhase += dt * 6.5;
-      if (blinkPhase >= 1) blinkPhase = 0;
-    }
+    // blinkAdvance guarantees at least three frames per blink, so the fastest
+    // motion the face makes cannot be reduced to a two-frame flash by the
+    // adaptive frame cap below.
+    if (blinkPhase > 0) blinkPhase = JM.blinkAdvance(blinkPhase, dt);
 
     // idle glances
     if (t > nextGlance) {
@@ -617,7 +631,18 @@
     }
 
     acc += dt;
-    if (acc >= 1 / fpsCap()) { acc = 0; tickVisemes(t); render(); }
+    const interval = 1 / fpsCap();
+    if (acc >= interval) {
+      // The elapsed time is handed to the viseme easing and the remainder is
+      // KEPT. Zeroing `acc` (as this did) quantises the draw cadence: the gap
+      // between frames becomes a whole number of rAF slots, so it alternates
+      // between 2 and 3 slots and the movement reads as uneven even though the
+      // animation clock itself is correct.
+      const step = acc;
+      acc = Math.max(0, acc - interval);
+      tickVisemes(t, step);
+      render();
+    }
   }
   requestAnimationFrame(frame);
 

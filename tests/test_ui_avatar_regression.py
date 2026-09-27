@@ -141,14 +141,28 @@ class LivingMotionTest(unittest.TestCase):
                           "kills the frame" % (ch, ch))
 
     def test_a_poisoned_channel_heals_instead_of_freezing_the_frame(self):
+        """The heal moved, the guarantee did not.
+
+        The sanitiser used to be inline in this file's spring(). It now lives in
+        the shared integrator (js/motion.js) that both avatars call, so the
+        assertion follows it there — and this test additionally pins that
+        spring() still routes THROUGH that integrator, because a local copy
+        reappearing is precisely how the guarantee would be lost silently.
+        """
         js = _read(JS_AVATAR)
         body = js[js.index("function spring("):]
         body = body[:body.index("\n  }\n")]
-        self.assertIn("!isFinite(MOTION[ch])", body)
-        self.assertIn('!isFinite(MOTION[ch + "v"])', body)
+        self.assertIn("JM.stepFlat", body,
+                      "the 2D spring must use the shared integrator")
+
+        motion = _read(Path(JS_AVATAR).parent / "motion.js")
+        step = motion[motion.index("M.step = function"):]
+        step = step[:step.index("\n  };")]
+        self.assertIn("!isFinite(ch.p)", step)
+        self.assertIn("!isFinite(ch.v)", step)
         # the sanitising must happen BEFORE anything integrates
-        self.assertLess(body.index("!isFinite(MOTION[ch])"),
-                        body.index("MOTION[ch + \"v\"] +="))
+        self.assertLess(step.index("!isFinite(ch.p)"),
+                        step.index("ch.v +="))
 
     def test_published_motion_stays_near_the_centre(self):
         js = _read(JS_AVATAR)

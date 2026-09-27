@@ -57,7 +57,7 @@
     settingsLoaded: null,
     settingsPage: "general",
     avatar: { mode: "classic", size: 1, x: 0, y: 0, anim: 1, expr: 1,
-              light: "#38bdf8", perf: "balanced", visible: true, orbit: true },
+              light: "#2ee87f", perf: "balanced", visible: true, orbit: true },
     avatar3dLoading: false,
   };
 
@@ -144,8 +144,18 @@
   // ════════════════════════════════════════════════════════════════════════
   function showView(name) {
     S.view = name;
-    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-    $("view-" + name).classList.add("active");
+    // One router owns visibility, and it says so twice: the `active` class
+    // drives the stylesheet, while `inert` + `aria-hidden` are stated
+    // explicitly so the inactive views cannot hold focus or be announced even
+    // if a future rule forgets them. Without this, Tab walked straight into the
+    // invisible Settings and Chat panels.
+    document.querySelectorAll(".view").forEach(v => {
+      const on = v.id === "view-" + name;
+      v.classList.toggle("active", on);
+      v.toggleAttribute("inert", !on);
+      if (on) v.removeAttribute("aria-hidden");
+      else v.setAttribute("aria-hidden", "true");
+    });
     document.querySelectorAll(".nav-btn").forEach(b =>
       b.classList.toggle("active", b.dataset.view === name));
     if (name === "settings" && !S.settingsLoaded) loadSettings();
@@ -158,6 +168,10 @@
   document.querySelectorAll(".nav-btn").forEach(b =>
     b.addEventListener("click", () => showView(b.dataset.view)));
 
+  // the conversation card's expand button is a real navigation, not decoration
+  { const co = $("convOpen");
+    if (co) co.addEventListener("click", () => showView("chat")); }
+
   // ════════════════════════════════════════════════════════════════════════
   //  STATE / FACE / TOPBAR
   // ════════════════════════════════════════════════════════════════════════
@@ -167,14 +181,35 @@
     MUTED: "Microphone muted", ERROR: "Something went wrong",
   };
 
+  // The titlebar pill and the dock light are two windows onto one fact, so one
+  // function paints both. Assigning them separately is exactly how the two
+  // drift apart the first time a new state is added.
+  const DOCK_STATE_LABEL = {
+    BOOTING: "STARTING", STANDBY: "ONLINE", LISTENING: "LISTENING",
+    THINKING: "THINKING", EXECUTING: "WORKING", SPEAKING: "SPEAKING",
+    SLEEPING: "SLEEPING", MUTED: "MIC MUTED", ERROR: "ERROR",
+  };
+  function paintStateLight(state) {
+    const pill = $("statePill");
+    if (pill) { pill.dataset.state = state; pill.textContent = state; }
+    const dock = $("dockState");
+    if (dock) dock.dataset.state = state;
+    const txt = $("dockStateText");
+    if (txt) {
+      // The light reads as a sentence — "JARVIS ONLINE" is checkable at a
+      // glance where "STANDBY" is only a status word.
+      const name = String(S.assistantName || "JARVIS").toUpperCase();
+      txt.textContent = state === "STANDBY" ? name + " ONLINE"
+                     : (DOCK_STATE_LABEL[state] || state);
+    }
+  }
+
   function applyState(state) {
     if (state === S.state && state !== "LISTENING") { /* still refresh UI below */ }
     const wasExecuting = S.state === "EXECUTING";
     S.state = state;
 
-    const pill = $("statePill");
-    pill.dataset.state = state;
-    pill.textContent = state;
+    paintStateLight(state);
     document.body.dataset.state = state;   // state-reactive ambience hooks
     const av = window.JarvisAvatar;
     if (av) {
@@ -238,6 +273,31 @@
     $("scrollLatest").hidden = nearBottom();
   });
   $("scrollLatest").addEventListener("click", () => scrollToEnd(true));
+
+  // ── the conversation mirror on the home screen ─────────────────────────────
+  // The same messages the Chat view renders, in compact form. It is not a
+  // second chat: nothing exists here that the transcript does not already
+  // hold, and the full view is one click away. The point is that the home
+  // screen can answer "what did we just say" without a view switch.
+  const HOME_CONV_MAX = 40;
+  const CONV_WHO = { user: "You", sys: "Sys", err: "Err" };
+
+  function mirrorToHome(role, text) {
+    const host = $("homeConv");
+    if (!host) return;
+    const empty = $("convEmpty");
+    if (empty) empty.remove();
+    const row = el("div", "conv-msg");
+    row.dataset.role = role;
+    row.appendChild(el("span", "conv-who",
+      CONV_WHO[role] || String(S.assistantName || "JARVIS")));
+    row.appendChild(el("span", "conv-text", String(text).trim()));
+    host.appendChild(row);
+    // Bounded, like every other feed here: an all-day conversation must not
+    // grow the home screen without limit.
+    while (host.children.length > HOME_CONV_MAX) host.removeChild(host.firstChild);
+    host.scrollTop = host.scrollHeight;
+  }
 
   function showTyping() {
     if (S.typingEl) return;
@@ -308,6 +368,7 @@
     }
     m.appendChild(bubble);
     chatList.appendChild(m);
+    mirrorToHome(role, text);
     if (stick || role === "user") scrollToEnd(true);
   }
 
@@ -447,8 +508,7 @@
     }
     const av = window.JarvisAvatar;
     if (av) av.muted = m;
-    if (m && S.state !== "SLEEPING") { $("statePill").dataset.state = "MUTED"; $("statePill").textContent = "MUTED"; }
-    else { $("statePill").dataset.state = S.state; $("statePill").textContent = S.state; }
+    paintStateLight(m && S.state !== "SLEEPING" ? "MUTED" : S.state);
     $("valMic").textContent = m ? "Muted" : "Live";
     $("tileMic").classList.toggle("off", m);
     const tt = $("tileMic");
@@ -670,6 +730,7 @@
   // ════════════════════════════════════════════════════════════════════════
   const PAGES = [
     ["general", "⚙", "General"], ["ai", "🧠", "AI & Models"], ["api", "🔑", "API Keys"],
+    ["mail", "✉", "Mail"],
     ["voice", "🎙", "Voice & Language"], ["persona", "🎭", "Personality"], ["memory", "🗂", "Memory"],
     ["training", "🎓", "Self-training"],
     ["screen", "👁", "Screen Awareness"], ["pc", "🖱", "PC Control"], ["integrations", "🧩", "Integrations"],
@@ -1676,11 +1737,19 @@
             "switch on the microphone itself, or distance from it. Raise the " +
             "input level in Windows sound settings, or move closer.",
     },
+    quiet: {
+      tone: "warn", icon: "◌", title: "I heard only silence",
+      text: "The microphone is working — it opened and streamed audio — but " +
+            "nothing above room noise arrived while it listened. That is " +
+            "usually just a quiet room, so it is not a fault. Test again and " +
+            "say anything out loud while it runs.",
+    },
     no_signal: {
       tone: "bad", icon: "✕", title: "Nothing is reaching me",
-      text: "The device opens but no sound arrives — this is almost always " +
-            "Windows permission, another app holding the microphone, or a " +
-            "hardware mute switch. The fixes below are in order of likelihood.",
+      text: "The device opens but is digitally silent on every sample — this " +
+            "is almost always a hardware mute switch, a zero input level, or " +
+            "the wrong device selected. The fixes below are in order of " +
+            "likelihood.",
     },
     failed: {
       tone: "bad", icon: "✕", title: "I could not open that device",
@@ -1839,9 +1908,14 @@
     const sel = el("select", "text-input");
     const row = el("div", "set-row2");
     row.appendChild(sel);
-    const testBtn = btnSm("Check", () => runMicTest(sel.value));
+    // The probe listens for whole seconds, not milliseconds, because a short
+    // sample of a quiet room cannot be told apart from a muted microphone —
+    // and calling that a failure is how a working mic gets reported as broken.
+    const testBtn = btnSm("Test — speak while it listens",
+                          () => runMicTest(sel.value));
     testBtn.classList.add("mic-check");
-    testBtn.title = "Record about a second of real audio and report what arrived";
+    testBtn.title = "Record a few seconds of real audio, measure it, and " +
+                    "report what actually arrived";
     row.appendChild(testBtn);
     row.appendChild(btnSm("Refresh", () => reloadMicDevices(true)));
     wrap.appendChild(row);
@@ -1920,9 +1994,10 @@
     async function runMicTest(name) {
       testBtn.disabled = true;
       result.hidden = false;
-      renderMicResult({ tone: "wait", icon: "◌", title: "Listening…",
-        text: "Recording about a second of real audio from " +
-              (name || "the system default") + "." });
+      renderMicResult({ tone: "wait", icon: "◌", title: "Listening — speak now",
+        text: "Recording a few seconds of real audio from " +
+              (name || "the system default") + ". Say anything out loud " +
+              "while it runs." });
       diag.hidden = true;
       let r = null;
       try { r = await api.mic_test(name); }
@@ -1931,13 +2006,16 @@
       renderMicResult({
         tone: v.tone, icon: v.icon, title: v.title,
         text: v.text + (r.message && r.verdict !== "ok" ? "  (" + r.message + ")" : ""),
-        meta: (r.verdict === "ok" || r.verdict === "faint")
+        meta: (r.verdict === "ok" || r.verdict === "faint" || r.verdict === "quiet")
           ? "Peak level " + Math.round(r.peak_rms || 0) + (r.noisy ? " · noisy input" : "")
           : "",
       });
       // On any failure pull the full chain diagnosis: device → permission →
-      // capture → signal, with fixes.
-      if (r.verdict !== "ok") {
+      // capture → signal, with fixes. A "quiet" reading is excluded on purpose:
+      // the stream opened and carried frames, so permission and capture are
+      // already proven, and re-running the chain would only make the user wait
+      // again to be told what the verdict above already says.
+      if (r.verdict !== "ok" && r.verdict !== "quiet") {
         try {
           const dg = await api.mic_diag();
           diag.hidden = false;
@@ -2222,6 +2300,165 @@
       return p;
     },
 
+    // ── Mail ────────────────────────────────────────────────────────────
+    // A real account, so that "check my mail" is a read of the mailbox rather
+    // than JARVIS driving a browser tab. Two rules shape this form: the password
+    // is only ever round-tripped, never shown, and an empty field keeps the
+    // saved secret — so re-saving the form can never silently wipe it.
+    mail(d) {
+      const p = page("Mail", "Let JARVIS read and send your email.");
+
+      const state = el("div", "set-col");
+      const status = el("div", "mail-status", "Reading account…");
+      const prov = el("select", "text-input");
+      const addr = el("input", "text-input");
+      const pass = el("input", "text-input");
+      const host = el("input", "text-input");
+      const port = el("input", "text-input");
+      const smtp = el("input", "text-input");
+      const smtpPort = el("input", "text-input");
+      const hint = el("div", "dim");
+      const advanced = el("div", "set-col");
+      let presets = {};
+
+      addr.placeholder = "you@example.com";
+      pass.type = "password";
+      pass.autocomplete = "new-password";
+      port.inputMode = "numeric";
+      smtpPort.inputMode = "numeric";
+
+      function field(label, input, desc) {
+        const f = el("div");
+        f.appendChild(el("div", "field-label", label));
+        f.appendChild(input);
+        if (desc) f.appendChild(el("div", "dim", desc));
+        return f;
+      }
+
+      function paint(cfg) {
+        presets = (cfg && cfg.presets) || {};
+        const acct = (cfg && cfg.account) || {};
+        prov.textContent = "";
+        Object.keys(presets).forEach(k => {
+          const o = el("option", null, presets[k].label || k);
+          o.value = k;
+          prov.appendChild(o);
+        });
+        prov.value = acct.provider || "gmail";
+        addr.value = acct.address || "";
+        host.value = acct.imap_host || "";
+        port.value = acct.imap_port || 993;
+        smtp.value = acct.smtp_host || "";
+        smtpPort.value = acct.smtp_port || 587;
+        // Never pre-fill a secret into the DOM. A saved password shows as a
+        // placeholder, and submitting an empty box keeps what is on disk.
+        pass.value = "";
+        pass.placeholder = acct.password ? "•••••••• (saved)" : "app password";
+        applyPreset(false);
+        const ok = !!(cfg && cfg.configured);
+        status.textContent = ok
+          ? "Saved for " + (acct.address || "this address") + ". Press Test to check it can log in."
+          : "No account saved yet. Enter your address and an app password, then Test.";
+        status.classList.toggle("warn", !ok);
+      }
+
+      function applyPreset(overwrite) {
+        const pr = presets[prov.value] || {};
+        hint.textContent = pr.hint || "";
+        if (overwrite || !host.value.trim()) host.value = pr.imap_host || "";
+        if (overwrite || !port.value) port.value = pr.imap_port || 993;
+        if (overwrite || !smtp.value.trim()) smtp.value = pr.smtp_host || "";
+        if (overwrite || !smtpPort.value) smtpPort.value = pr.smtp_port || 587;
+        const custom = prov.value === "custom";
+        advanced.hidden = !custom;
+      }
+
+      prov.addEventListener("change", () => applyPreset(true));
+
+      const row = el("div", "set-row2");
+      const saveBtn = btnSm("Save account", async () => {
+        saveBtn.disabled = true;
+        const res = await api.mail_save({
+          provider: prov.value,
+          address: addr.value.trim(),
+          password: pass.value,
+          imap_host: host.value.trim(),
+          imap_port: port.value,
+          smtp_host: smtp.value.trim(),
+          smtp_port: smtpPort.value,
+        });
+        saveBtn.disabled = false;
+        const r = (res && res.account) || null;
+        if (r) paint(r);
+        toast((res && res.msg) || "Saved", res && res.ok ? "ok" : "bad");
+      });
+      const testBtn = btnSm("Test connection", async () => {
+        testBtn.disabled = true;
+        status.textContent = "Connecting…";
+        status.classList.remove("warn");
+        let res = null;
+        try { res = await api.mail_test(); }
+        catch (e) { res = { ok: false, msg: String(e) }; }
+        testBtn.disabled = false;
+        status.textContent = (res && res.msg) || "No answer from the mail server.";
+        status.classList.toggle("warn", !(res && res.ok));
+      });
+      const clearBtn = btnSm("Remove account", async () => {
+        const res = await api.mail_clear();
+        if (res && res.account) paint(res.account);
+        toast("Mail account removed", "ok");
+      });
+      row.appendChild(saveBtn);
+      row.appendChild(testBtn);
+      row.appendChild(clearBtn);
+
+      advanced.appendChild(field("IMAP server", host, "Reads your mail."));
+      advanced.appendChild(field("IMAP port", port, "993 for TLS — the usual choice."));
+      advanced.appendChild(field("SMTP server", smtp, "Sends your mail."));
+      advanced.appendChild(field("SMTP port", smtpPort, "587, or 465 for implicit TLS."));
+      advanced.hidden = true;
+
+      const form = el("div", "set-col");
+      const two = el("div", "set-row2");
+      two.appendChild(field("Provider", prov));
+      two.appendChild(field("Email address", addr));
+      form.appendChild(two);
+      form.appendChild(field("App password", pass,
+        "Stored in your config file on this machine. JARVIS never speaks it, logs it or shows it."));
+      form.appendChild(hint);
+      form.appendChild(advanced);
+      form.appendChild(row);
+      state.appendChild(status);
+
+      p.appendChild(cardCol("Account",
+        "Mail is read over IMAP. Your messages stay on your provider — nothing is "
+        + "uploaded anywhere.", form));
+      p.appendChild(state);
+
+      p.appendChild(cardCol("Try it",
+        "Ask out loud, or from the input box at the bottom.", (() => {
+          const r = el("div", "set-row2");
+          r.appendChild(btnSm("Any new mail?", () => quick("Check my email and tell me what is new.")));
+          r.appendChild(btnSm("Unread only", () => quick("Any unread emails?")));
+          r.appendChild(btnSm("What arrived today?",
+            () => quick("Search my email for everything since yesterday and summarise it.")));
+          return r;
+        })()));
+
+      const note = el("div", "note");
+      note.textContent = "Some providers refuse a normal account password from a "
+        + "mail client. Gmail, Yahoo and iCloud all require an app password — "
+        + "generate one in your account's security settings and paste it above. "
+        + "Sending always stops for your confirmation on screen, and reading a "
+        + "message never marks it as read unless you say so.";
+      p.appendChild(note);
+
+      api.mail_get().then(paint).catch(() => {
+        status.textContent = "Mail settings are unavailable in this build.";
+      });
+      return p;
+    },
+
     integrations(d) {
       const p = page("Integrations", "Plugins and the remote dashboard.");
       const list = el("div");
@@ -2275,7 +2512,7 @@
       const p = page("Appearance", "Colour, layout and the assistant's face.");
       // accent picker
       const row = el("div", "set-col");
-      const colors = ["#38bdf8", "#31d9ae", "#8b6df5", "#f5b45c", "#ff5c7a", "#94a3b8"];
+      const colors = ["#2ee87f", "#31d9ae", "#8b6df5", "#f5b45c", "#ff5c7a", "#94a3b8"];
       const pw = el("div", "pills");
       colors.forEach(c => {
         const s = el("button", "pill");
@@ -2346,7 +2583,7 @@
           const llbl = el("span", null, "Lighting");
           llbl.style.cssText = "flex:0 0 150px;font-size:12px;color:var(--text-med);";
           const lights = el("div", "pills");
-          ["#38bdf8", "#8b6df5", "#31d9ae", "#f5b45c", "#ff8fa5"].forEach(c => {
+          ["#2ee87f", "#8b6df5", "#31d9ae", "#f5b45c", "#ff8fa5"].forEach(c => {
             const b = el("button", "pill");
             b.style.cssText = "width:24px;height:24px;border-radius:50%;background:" + c + ";";
             b.title = c;
@@ -2830,6 +3067,10 @@
     const [h, s, l] = hexToHsl(hex);
     const r = document.documentElement.style;
     r.setProperty("--pri", hex);
+    // …and its channels, because every translucent tint in the stylesheet is
+    // written rgba(var(--pri-rgb), …). Without this the picker repainted the
+    // buttons and left every border, glow and hairline on the old colour.
+    r.setProperty("--pri-rgb", [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", "));
     r.setProperty("--pri-dim", "hsl(" + h + " " + Math.max(30, s - 18) + "% " + Math.max(24, l - 22) + "%)");
     r.setProperty("--pri-ghost", "hsla(" + h + ", " + s + "%, " + l + "%, 0.10)");
     r.setProperty("--glow-pri", "0 0 18px hsla(" + h + ", " + s + "%, " + l + "%, 0.18)");
@@ -2883,7 +3124,7 @@
   $("camClose").addEventListener("click", () => api.stop_camera().catch(() => {}));
   Bus.on("screen", s => { S.screen = s; refreshHomeTiles(); paintHud(); });
   Bus.on("wake", w => { S.wake = w; refreshHomeTiles(); if (S.settingsLoaded) { S.settingsLoaded.wake_word = w; if (S.settingsPage === "startup") renderSettingsPage("startup"); } });
-  Bus.on("perf", p => { S.perf = p; paintTopPerf(p); });
+  Bus.on("perf", p => { S.perf = p; paintTopPerf(p); paintRail(p); });
   Bus.on("confirm", c => { $("confirmTitle").textContent = c.title; $("confirmDetail").textContent = c.detail; $("confirmVeil").hidden = false; });
   Bus.on("confirm_hide", () => { $("confirmVeil").hidden = true; });
   Bus.on("toast", t => toast(t.text, t.kind));
@@ -2926,6 +3167,48 @@
     const a3 = window.Jarvis3DAvatar && window.Jarvis3DAvatar.instance();
     if (a3) a3.pause(false);
   });
+
+  // ── the left rail: real readings only ─────────────────────────────────────
+  // Everything here comes from the perf payload. A metric this machine cannot
+  // measure (no GPU sensor, no temperature sensor) stays "--" rather than
+  // showing a zero: a rail that invents a reading is worse than one that says
+  // it has none.
+  function railSet(id, barId, value, unit, barPct) {
+    const v = $(id);
+    if (v) {
+      v.textContent = value === null ? "--" : value;
+      if (value !== null) v.appendChild(el("em", null, unit));
+    }
+    const b = barId ? $(barId) : null;
+    if (b) {
+      b.style.width = (barPct === null ? 0
+        : Math.max(0, Math.min(100, barPct))) + "%";
+    }
+  }
+
+  function paintRail(p) {
+    if (!p) return;
+    const num = v => (typeof v === "number" && isFinite(v) ? v : null);
+    const cpu = num(p.cpu), mem = num(p.mem), net = num(p.net);
+
+    railSet("railCpuV", "railCpuBar", cpu === null ? null : Math.round(cpu), "%", cpu);
+    railSet("railRamV", "railRamBar", mem === null ? null : Math.round(mem), "%", mem);
+    railSet("railNetV", "railNetBar",
+            net === null ? null : net.toFixed(net < 10 ? 2 : 1), "MB/s",
+            net === null ? null : net * 10);   // 10 MB/s fills the bar
+
+    // -1 is the backend's "no sensor" sentinel, never a real temperature or
+    // utilisation, so it is reported as unmeasured rather than as -1 or 0.
+    const tmp = num(p.tmp), gpu = num(p.gpu);
+    const tmpEl = $("railTempV");
+    if (tmpEl) tmpEl.textContent = (tmp === null || tmp <= 0) ? "--" : Math.round(tmp) + "°C";
+    const gpuEl = $("railGpuV");
+    if (gpuEl) gpuEl.textContent = (gpu === null || gpu < 0) ? "--" : Math.round(gpu) + "%";
+    const prEl = $("railProcsV");
+    if (prEl) prEl.textContent = p.procs ? String(p.procs) : "--";
+    const upEl = $("railUptimeV");
+    if (upEl) upEl.textContent = p.uptime && p.uptime !== "--" ? p.uptime : "--";
+  }
 
   function paintTopPerf(p) {
     const cpu = $("chipCpu"), mem = $("chipMem");

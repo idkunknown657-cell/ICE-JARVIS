@@ -48,7 +48,7 @@
     input_device: "",
     output_device: "",
     hud_style: "face",
-    accent: "#38bdf8",
+    accent: "#2ee87f",
     compact: false,
     proactive: true,
     // computer-use levers — demo starts hands-off so the rail shows both states
@@ -427,6 +427,23 @@
                       store_apps: "allowed", desktop_apps: "allowed" },
         levels: { peak_rms: 2604.0, floor_rms: 318.0, speech_headroom: 8.2, noisy: false },
         problems: [], fixes: [], verdict: "ok", message: "" };
+    },
+    // ── mail (demo account, so the Settings page renders offline) ──────────
+    async mail_get() {
+      return { configured: true,
+        account: { provider: "gmail", address: "you@example.com",
+                   password: "demo-only-not-a-real-secret",
+                   imap_host: "imap.gmail.com", imap_port: 993,
+                   smtp_host: "smtp.gmail.com", smtp_port: 587 },
+        presets: { gmail: { label: "Gmail", imap_host: "imap.gmail.com", imap_port: 993,
+                            smtp_host: "smtp.gmail.com", smtp_port: 587,
+                            hint: "Needs an App Password, not your normal Google password." } } };
+    },
+    async mail_save(d) { return { ok: true, msg: "Mail account saved.", account: await api.mail_get() }; },
+    async mail_clear() { return { ok: true, msg: "Mail account removed.", account: { configured: false, account: {}, presets: (await api.mail_get()).presets } }; },
+    async mail_test() {
+      await new Promise(r => setTimeout(r, 600));
+      return { ok: true, msg: "Mail is connected as you@example.com. 3 unread in the inbox, newest: Ada Lovelace — Quarterly numbers." };
     },
     async mic_open_windows_settings() { return { ok: true }; },
     async mic_refresh() { return { ok: true, count: 3, devices: await api.mic_devices() }; },

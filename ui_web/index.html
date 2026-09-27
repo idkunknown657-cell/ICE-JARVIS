@@ -29,9 +29,9 @@
     </div>
 
     <nav class="nav" id="mainNav" aria-label="Sections">
-      <button class="nav-btn active" data-view="home" title="Home">Home</button>
-      <button class="nav-btn" data-view="chat"  title="Conversation">Chat</button>
-      <button class="nav-btn" data-view="settings" title="Settings">Settings</button>
+      <button class="nav-btn active" data-view="home" title="Home — face, system and control"><span class="nav-ico">◈</span>Home</button>
+      <button class="nav-btn" data-view="chat"  title="Conversation"><span class="nav-ico">✦</span>Chat</button>
+      <button class="nav-btn" data-view="settings" title="Settings"><span class="nav-ico">⚙</span>Settings</button>
     </nav>
 
     <div class="title-right">
@@ -78,6 +78,70 @@
 
       <div class="home-grid">
 
+        <!-- ── LEFT RAIL: the machine, at a glance ──────────────────────────
+             Every number here is real: it comes from the perf payload the
+             backend pushes every two seconds (cpu, mem, net, uptime, procs,
+             gpu, tmp). Nothing on this rail is a decoration pretending to be
+             telemetry — a rail that lies is worse than no rail. -->
+        <aside class="home-rail" id="homeRail">
+
+          <div class="rail-card">
+            <div class="rail-head">
+              <span class="rail-title">System load</span>
+              <span class="rail-live" id="railLive"><i></i>LIVE</span>
+            </div>
+
+            <div class="rail-metric" data-tone="pri">
+              <div class="rm-top"><span class="rm-k">CPU</span>
+                <span class="rm-v" id="railCpuV">--<em>%</em></span></div>
+              <i class="rm-bar"><b id="railCpuBar"></b></i>
+            </div>
+
+            <div class="rail-metric" data-tone="violet">
+              <div class="rm-top"><span class="rm-k">RAM</span>
+                <span class="rm-v" id="railRamV">--<em>%</em></span></div>
+              <i class="rm-bar"><b id="railRamBar"></b></i>
+            </div>
+
+            <div class="rail-metric" data-tone="pink">
+              <div class="rm-top"><span class="rm-k">Network</span>
+                <span class="rm-v" id="railNetV">--<em>MB/s</em></span></div>
+              <i class="rm-bar"><b id="railNetBar"></b></i>
+            </div>
+          </div>
+
+          <div class="rail-tiles">
+            <div class="rail-tile" data-tone="amber" title="CPU temperature, when the sensor exposes it">
+              <span class="rt-k">CPU temp</span><span class="rt-v" id="railTempV">--</span>
+            </div>
+            <div class="rail-tile" data-tone="violet" title="GPU utilisation, when a sensor exposes it">
+              <span class="rt-k">GPU</span><span class="rt-v" id="railGpuV">--</span>
+            </div>
+            <div class="rail-tile" data-tone="pri" title="Running processes">
+              <span class="rt-k">Processes</span><span class="rt-v" id="railProcsV">--</span>
+            </div>
+            <div class="rail-tile" data-tone="pink" title="How long JARVIS has been running">
+              <span class="rt-k">Uptime</span><span class="rt-v" id="railUptimeV">--</span>
+            </div>
+          </div>
+
+          <div class="status-grid">
+            <div class="status-tile" id="tileWake" title="Wake word state">
+              <span class="status-ico">👋</span><span class="status-name">Wake word</span><span class="status-val" id="valWake">—</span>
+            </div>
+            <div class="status-tile" id="tileMic" title="Microphone (F4 to toggle)">
+              <span class="status-ico">🎙</span><span class="status-name">Microphone</span><span class="status-val" id="valMic">Live</span>
+            </div>
+            <div class="status-tile" id="tileEyes" title="Screen awareness">
+              <span class="status-ico">👁</span><span class="status-name">Screen</span><span class="status-val" id="valEyes">Off</span>
+            </div>
+            <div class="status-tile" id="tileMem" title="Persistent memory">
+              <span class="status-ico">🧠</span><span class="status-name">Memory</span><span class="status-val" id="valMemory">—</span>
+            </div>
+          </div>
+
+        </aside>
+
         <div class="home-face-col">
           <div class="face-stage pywebview-drag-region" id="faceStage">
             <i class="hud-ring r1" aria-hidden="true"></i>
@@ -104,6 +168,24 @@
         </div>
 
         <div class="home-side-col">
+
+          <!-- ── CONVERSATION: the real transcript, mirrored ────────────────
+               Not a second chat widget: the same messages the Chat view
+               renders are appended here as they arrive, so the home screen
+               answers "what did we just say" without a view switch. -->
+          <div class="card conv-card">
+            <div class="card-head">
+              <span class="card-title">Conversation</span>
+              <span class="conv-live" id="convLive" title="Messages arrive here as they are spoken or typed"><i></i>Live</span>
+              <button class="xbtn" id="convOpen" title="Open the full conversation">⤢</button>
+            </div>
+            <div class="card-body conv-body" id="homeConv">
+              <div class="conv-empty" id="convEmpty">
+                <div class="conv-empty-mark">◈</div>
+                <div class="conv-empty-sub">Waiting for conversation to start…</div>
+              </div>
+            </div>
+          </div>
 
           <!-- Autonomous PC mode — its own initiative, its own mood, and the
                one switch that hands the machine over. The activity line is the
@@ -143,21 +225,6 @@
                 </div>
                 <div class="pf-list" id="presenceFoundList"></div>
               </div>
-            </div>
-          </div>
-
-          <div class="status-grid">
-            <div class="status-tile" id="tileWake" title="Wake word state">
-              <span class="status-ico">👋</span><span class="status-name">Wake word</span><span class="status-val" id="valWake">—</span>
-            </div>
-            <div class="status-tile" id="tileMic" title="Microphone (F4 to toggle)">
-              <span class="status-ico">🎙</span><span class="status-name">Microphone</span><span class="status-val" id="valMic">Live</span>
-            </div>
-            <div class="status-tile" id="tileEyes" title="Screen awareness">
-              <span class="status-ico">👁</span><span class="status-name">Screen</span><span class="status-val" id="valEyes">Off</span>
-            </div>
-            <div class="status-tile" id="tileMem" title="Persistent memory">
-              <span class="status-ico">🧠</span><span class="status-name">Memory</span><span class="status-val" id="valMemory">—</span>
             </div>
           </div>
 
@@ -213,7 +280,7 @@
     </section>
 
     <!-- ─────────── CHAT ─────────── -->
-    <section class="view" id="view-chat">
+    <section class="view" id="view-chat" inert aria-hidden="true">
       <div class="chat-wrap">
         <div class="chat-scroll" id="chatScroll">
           <div class="chat-list" id="chatList">
@@ -229,7 +296,7 @@
     </section>
 
     <!-- ─────────── SETTINGS ─────────── -->
-    <section class="view" id="view-settings">
+    <section class="view" id="view-settings" inert aria-hidden="true">
       <aside class="settings-nav" id="settingsNav"></aside>
       <div class="settings-body" id="settingsBody">
         <div class="settings-placeholder">Select a category</div>
@@ -239,6 +306,17 @@
 
   <!-- ══════════════ INPUT DOCK ══════════════ -->
   <footer id="dock">
+    <!-- the state light, centred over the input like a control bar.
+         Mirrors #statePill exactly (both are painted by applyState) so the
+         two can never disagree about what JARVIS is doing. -->
+    <div class="dock-status-row">
+      <span class="dock-state" id="dockState" data-state="BOOTING" role="status"
+            title="What JARVIS is doing right now — LISTENING · THINKING · WORKING · SPEAKING">
+        <i class="ds-dot" aria-hidden="true"></i>
+        <span class="ds-text" id="dockStateText">STANDBY</span>
+      </span>
+    </div>
+
     <div class="input-row">
       <button class="dock-btn" id="btnAttach" title="Attach a file for JARVIS">📎</button>
       <div class="input-shell">
@@ -323,34 +401,40 @@
   <!-- ══════════════ COMMANDS POPOVER ══════════════ -->
   <div class="popover" id="cmdPopover" hidden></div>
 
-  <!-- ══════════════ FIRST-RUN TOUR ══════════════ -->
-  <div class="guide-veil" id="guideVeil" hidden>
-    <div class="guide-card" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
-      <div class="guide-art" id="guideArt" aria-hidden="true">
-        <i class="ga-ring r1"></i><i class="ga-ring r2"></i>
-        <i class="ga-core"></i><i class="ga-spark"></i>
-      </div>
-      <div class="guide-main">
-        <div class="guide-step" id="guideStep">Step 1 of 6</div>
-        <h2 class="guide-title" id="guideTitle">Welcome</h2>
-        <p class="guide-text" id="guideText"></p>
-        <div class="guide-extra" id="guideExtra"></div>
-        <div class="guide-foot">
-          <button class="btn btn-ghost" id="guideSkip">Skip the tour</button>
-          <div class="guide-nav">
-            <button class="btn btn-ghost" id="guideBack" hidden>Back</button>
-            <button class="btn btn-primary" id="guideNext">Next</button>
-          </div>
-        </div>
-        <div class="guide-dots" id="guideDots" aria-hidden="true"></div>
-      </div>
-    </div>
-  </div>
-
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </div>
 
+<!-- ══════════════ FIRST-RUN TOUR ══════════════
+     Deliberately a SIBLING of #app, not a child. `body.guiding #app` applies a
+     filter to push the app back while the tour is up, and a CSS filter blurs
+     the whole subtree it is set on — so an overlay inside #app was blurred
+     along with the app behind it, and the tour's own text became unreadable.
+     Outside that subtree the card stays crisp while the app still recedes. -->
+<div class="guide-veil" id="guideVeil" hidden>
+  <div class="guide-card" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+    <div class="guide-art" id="guideArt" aria-hidden="true">
+      <i class="ga-ring r1"></i><i class="ga-ring r2"></i>
+      <i class="ga-core"></i><i class="ga-spark"></i>
+    </div>
+    <div class="guide-main">
+      <div class="guide-step" id="guideStep">Step 1 of 6</div>
+      <h2 class="guide-title" id="guideTitle">Welcome</h2>
+      <p class="guide-text" id="guideText"></p>
+      <div class="guide-extra" id="guideExtra"></div>
+      <div class="guide-foot">
+        <button class="btn btn-ghost" id="guideSkip">Skip the tour</button>
+        <div class="guide-nav">
+          <button class="btn btn-ghost" id="guideBack" hidden>Back</button>
+          <button class="btn btn-primary" id="guideNext">Next</button>
+        </div>
+      </div>
+      <div class="guide-dots" id="guideDots" aria-hidden="true"></div>
+    </div>
+  </div>
+</div>
+
 <script src="js/markdown.js"></script>
+<script src="js/motion.js"></script>
 <script src="js/avatar.js"></script>
 <script src="js/mock.js"></script>
 <script src="js/app.js"></script>

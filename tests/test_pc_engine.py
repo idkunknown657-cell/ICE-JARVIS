@@ -6,10 +6,54 @@ clipboard or captures the real screen. Everything exercised is pure (coordinate
 maths, matching, parsing) or explicitly mocked, because a test suite that can
 move the user's cursor while it runs is a test suite that gets deleted.
 """
+import threading
+import time
 import unittest
 from unittest import mock
 
 from core import pc_engine as E
+
+
+class RunBoundedTest(unittest.TestCase):
+    """The anti-hang guard.
+
+    Every accessibility read is a blocking COM call into another process and
+    Windows does not time those out, so an unresponsive window used to park the
+    whole task on EXECUTING forever. run_bounded is what makes that cost one
+    budget instead of the session — see the note above it in pc_engine.
+    """
+
+    def test_a_fast_call_returns_its_value_unchanged(self):
+        self.assertEqual(E.run_bounded(lambda: [1, 2], 2.0, []), [1, 2])
+        self.assertIsNone(E.run_bounded(lambda: None, 2.0, "nope"))
+
+    def test_an_overrunning_call_returns_the_default_instead_of_blocking(self):
+        in_call = threading.Event()
+
+        def never_returns():
+            in_call.set()
+            time.sleep(30)          # stands in for a window that is not pumping
+
+        t0 = time.monotonic()
+        got = E.run_bounded(never_returns, 0.2, "default")
+        elapsed = time.monotonic() - t0
+
+        self.assertTrue(in_call.wait(2.0), "the worker never started")
+        self.assertEqual(got, "default")
+        self.assertLess(elapsed, 5.0, "the caller waited for a hung call")
+
+    def test_a_raising_call_returns_the_default_and_does_not_escape(self):
+        def boom():
+            raise RuntimeError("COM exploded")
+
+        # A control action must return a sentence, never a traceback.
+        self.assertEqual(E.run_bounded(boom, 1.0, "default"), "default")
+
+    def test_the_budgets_are_small_enough_to_be_invisible(self):
+        # If these ever creep up, a single hung app starts to feel like a freeze
+        # again; the point of the guard is that it is never noticed.
+        self.assertLessEqual(E._UIA_WALK_BUDGET_S, 4.0)
+        self.assertLessEqual(E._UIA_PROBE_BUDGET_S, 2.0)
 
 
 class ScreenMapTest(unittest.TestCase):

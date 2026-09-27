@@ -1,7 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════════════
    JARVIS — design system
-   Dark · futuristic · clean · rounded · minimal.  Blue/cyan identity.
+   Near-black · futuristic · clean · rounded · minimal.  Green identity.
    Tokens first; every component is built from them.
+
+   TINTS COME FROM --pri-rgb, NEVER FROM A LITERAL. Every translucent tint of
+   the identity colour is written `rgba(var(--pri-rgb), …)` so that changing
+   the accent in Settings actually repaints the whole interface. Literal
+   `rgba(var(--pri-rgb),…)` values were the reason the colour picker used to change
+   the buttons and leave a hundred blue borders, glows and hairlines behind.
    ═══════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -15,12 +21,16 @@
   --border-2:  rgba(148, 184, 255, 0.16);
 
   /* identity */
-  --pri:       #38bdf8;
-  --pri-dim:   #1a7fb0;
-  --pri-ghost: rgba(56, 189, 248, 0.10);
-  --acc:       #8b6df5;
-  --green:     #31d9ae;
-  --green-dim: #1a7f66;
+  --pri:       #2ee87f;          /* the green the whole interface is built on */
+  --pri-rgb:   46, 232, 127;     /* …as channels, for every translucent tint   */
+  --pri-dim:   #17a355;
+  --pri-ghost: rgba(var(--pri-rgb), 0.10);
+  --acc:       #8b6df5;          /* THINKING keeps its own colour, so state is
+                                    never carried by green alone            */
+  --green:     #2bd4c8;          /* semantic OK/live — deliberately teal, not
+                                    the identity green, so "working" and
+                                    "listening" never read as the same thing */
+  --green-dim: #17786f;
   --red:       #ff5c7a;
   --amber:     #f5b45c;
 
@@ -37,11 +47,24 @@
   --r-full: 999px;
   --shadow-1: 0 2px 10px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 12px 34px rgba(0, 0, 0, 0.45);
-  --glow-pri: 0 0 18px rgba(56, 189, 248, 0.18);
+  --glow-pri: 0 0 18px rgba(var(--pri-rgb), 0.18);
 
   --font: "Segoe UI", "SF Pro Text", Ubuntu, Roboto, Arial, sans-serif;
   --mono: "Cascadia Mono", Consolas, monospace;
   --dur: 0.22s;
+
+  /* One transition list for interactive chrome.
+
+     These controls used `transition: all`. That is not merely wasteful: it
+     animates EVERY property that happens to change, including width, padding,
+     margins and offsets. A transition on a layout-affecting property makes the
+     browser run layout on every frame of the animation, on the main thread,
+     instead of compositing transform and opacity on the GPU — which is exactly
+     how a hover on a button makes the whole window feel soft on a weak machine.
+     Naming the properties keeps the feel and drops the layout work. */
+  --t-ui: color var(--dur), background-color var(--dur), border-color var(--dur),
+          box-shadow var(--dur), transform var(--dur), opacity var(--dur),
+          filter var(--dur);
 }
 
 /* ── base ─────────────────────────────────────────────────────────────── */
@@ -58,8 +81,8 @@ body {
   font-size: 13.5px;
   color: var(--text);
   background:
-    radial-gradient(1100px 520px at 50% -12%, rgba(56, 130, 248, 0.09), transparent 62%),
-    radial-gradient(900px 500px at 88% 108%, rgba(139, 109, 245, 0.055), transparent 58%),
+    radial-gradient(1100px 520px at 50% -12%, rgba(var(--pri-rgb), 0.085), transparent 62%),
+    radial-gradient(900px 500px at 88% 108%, rgba(139, 109, 245, 0.05), transparent 58%),
     var(--bg);
   user-select: none;
 }
@@ -93,8 +116,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   width: 30px; height: 30px; border-radius: var(--r-full);
   display: grid; place-items: center; font-size: 15px;
   color: var(--pri);
-  background: radial-gradient(circle at 32% 30%, rgba(56,189,248,0.28), rgba(56,189,248,0.05));
-  border: 1px solid rgba(56, 189, 248, 0.32);
+  background: radial-gradient(circle at 32% 30%, rgba(var(--pri-rgb),0.28), rgba(var(--pri-rgb),0.05));
+  border: 1px solid rgba(var(--pri-rgb), 0.32);
   box-shadow: var(--glow-pri);
 }
 .brand-mark.big { width: 46px; height: 46px; font-size: 23px; margin: 0 auto 10px; }
@@ -113,23 +136,36 @@ button:disabled { opacity: 0.45; cursor: default; }
 .state-pill[data-state="LISTENING"] { color: var(--green);  border-color: rgba(49,217,174,.35); background: rgba(49,217,174,.08); }
 .state-pill[data-state="THINKING"]  { color: var(--acc);    border-color: rgba(139,109,245,.35); background: rgba(139,109,245,.08); }
 .state-pill[data-state="EXECUTING"] { color: var(--amber);  border-color: rgba(245,180,92,.35);  background: rgba(245,180,92,.08); }
-.state-pill[data-state="SPEAKING"]  { color: var(--pri);    border-color: rgba(56,189,248,.4);   background: var(--pri-ghost); }
+.state-pill[data-state="SPEAKING"]  { color: var(--pri);    border-color: rgba(var(--pri-rgb),.4);   background: var(--pri-ghost); }
 .state-pill[data-state="SLEEPING"]  { color: var(--text-dim); }
 .state-pill[data-state="MUTED"]     { color: var(--red);    border-color: rgba(255,92,122,.35);  background: rgba(255,92,122,.07); }
 .state-pill[data-state="ERROR"]     { color: var(--red);    border-color: rgba(255,92,122,.45);  background: rgba(255,92,122,.1); }
 
-.nav { display: flex; gap: 4px; margin-left: 12px; flex: 0 0 auto; }
-.nav-btn {
-  padding: 6px 15px; border-radius: var(--r-full);
-  font-size: 12.5px; color: var(--text-med);
-  border: 1px solid transparent;
-  transition: all var(--dur);
+/* ── section tabs ─────────────────────────────────────────────────────────
+   A recessed pill holding the tabs, with the live one filled in the identity
+   colour and dark text on it — the active section reads as a lit key rather
+   than as another word. */
+.nav {
+  display: flex; gap: 3px; margin-left: 12px; flex: 0 0 auto;
+  padding: 3px; border-radius: var(--r-full);
+  background: rgba(3, 6, 11, 0.55); border: 1px solid var(--border);
 }
+.nav-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 16px; border-radius: var(--r-full);
+  font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  transition: color var(--dur), background var(--dur), border-color var(--dur), box-shadow var(--dur);
+}
+.nav-ico { font-size: 11px; opacity: .85; }
 .nav-btn:hover { color: var(--white); background: var(--panel); }
 .nav-btn.active {
-  color: var(--pri); background: var(--pri-ghost);
-  border-color: rgba(56, 189, 248, 0.3);
+  color: #04150c; background: var(--pri);
+  border-color: var(--pri);
+  box-shadow: 0 0 16px rgba(var(--pri-rgb), 0.3);
 }
+.nav-btn.active .nav-ico { opacity: 1; }
 
 .title-right { margin-left: auto; display: flex; align-items: center; gap: 9px; }
 
@@ -154,7 +190,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   width: 30px; height: 28px; border-radius: var(--r-sm);
   color: var(--text-dim); font-size: 12px;
   display: grid; place-items: center;
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .wbtn:hover { color: var(--white); background: var(--panel-2); }
 .wbtn-close:hover { color: #fff; background: #c2334f; }
@@ -165,11 +201,21 @@ button:disabled { opacity: 0.45; cursor: default; }
 .view {
   position: absolute; inset: 0;
   opacity: 0; pointer-events: none;
+  /* `visibility: hidden` is doing real work here, not decoration. Hidden with
+     opacity alone, the inactive views stayed in the tab order and in the
+     accessibility tree: Tab from Home landed on invisible Settings buttons, and
+     a screen reader announced all three views at once. Visibility removes a
+     subtree from both while KEEPING its layout box, so anything that measures a
+     view's geometry still gets a real answer. */
+  visibility: hidden;
   transform: translateY(6px);
-  transition: opacity var(--dur) ease, transform var(--dur) ease;
+  transition: opacity var(--dur) ease, transform var(--dur) ease, visibility 0s linear;
   overflow: hidden;
 }
-.view.active { opacity: 1; pointer-events: auto; transform: none; }
+.view.active {
+  opacity: 1; pointer-events: auto; transform: none;
+  visibility: visible;
+}
 
 /* ── autonomy rail ────────────────────────────────────────────────────── */
 /* One row, six switches, always visible: the state of JARVIS's hands on this
@@ -188,7 +234,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   flex: 0 0 auto;
 }
 .auto-rail.mode-auto {
-  border-color: rgba(56,189,248,.34);
+  border-color: rgba(var(--pri-rgb),.34);
   box-shadow: var(--glow-pri);
 }
 /* The lead wraps inside its own column instead of running under the switches: at
@@ -211,13 +257,13 @@ button:disabled { opacity: 0.45; cursor: default; }
   color: var(--text-med);
   font-size: 10.5px; font-weight: 700; letter-spacing: 1.1px;
   text-transform: uppercase; white-space: nowrap;
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .auto-sw:hover { border-color: var(--border-2); color: var(--text); }
 .auto-sw .sw-dot {
   width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
   background: var(--text-dim); box-shadow: none;
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .auto-sw .sw-state { font-size: 9.5px; color: var(--text-dim); }
 .auto-sw[data-on="1"] {
@@ -227,21 +273,21 @@ button:disabled { opacity: 0.45; cursor: default; }
 .auto-sw[data-on="1"] .sw-dot { background: var(--green); box-shadow: 0 0 9px rgba(49,217,174,.7); }
 .auto-sw[data-on="1"] .sw-state { color: var(--green); }
 .auto-sw.sw-hot[data-on="1"] {
-  border-color: rgba(56,189,248,.5); background: var(--pri-ghost);
+  border-color: rgba(var(--pri-rgb),.5); background: var(--pri-ghost);
 }
-.auto-sw.sw-hot[data-on="1"] .sw-dot { background: var(--pri); box-shadow: 0 0 12px rgba(56,189,248,.85); }
+.auto-sw.sw-hot[data-on="1"] .sw-dot { background: var(--pri); box-shadow: 0 0 12px rgba(var(--pri-rgb),.85); }
 .auto-sw.sw-hot[data-on="1"] .sw-state { color: var(--pri); }
 .auto-sw .sw-ico { font-size: 12px; }
 
 .btn-handover {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 16px; border-radius: var(--r-full);
-  border: 1px solid rgba(56,189,248,.4);
+  border: 1px solid rgba(var(--pri-rgb),.4);
   background: var(--pri-ghost); color: var(--pri);
   font-size: 11px; font-weight: 750; letter-spacing: 1.3px;
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
-.btn-handover:hover { background: rgba(56,189,248,.18); box-shadow: var(--glow-pri); }
+.btn-handover:hover { background: rgba(var(--pri-rgb),.18); box-shadow: var(--glow-pri); }
 .btn-handover[data-on="1"] {
   border-color: rgba(255,92,122,.45); background: rgba(255,92,122,.1); color: var(--red);
 }
@@ -252,20 +298,23 @@ button:disabled { opacity: 0.45; cursor: default; }
 .chip-mode { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .chip-mode .mode-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim);
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .chip-mode[data-on="1"] {
-  color: var(--pri); border-color: rgba(56,189,248,.45);
+  color: var(--pri); border-color: rgba(var(--pri-rgb),.45);
   background: var(--pri-ghost); animation: autobreathe 2.6s ease-in-out infinite;
 }
-.chip-mode[data-on="1"] .mode-dot { background: var(--pri); box-shadow: 0 0 9px rgba(56,189,248,.8); }
+.chip-mode[data-on="1"] .mode-dot { background: var(--pri); box-shadow: 0 0 9px rgba(var(--pri-rgb),.8); }
 @keyframes autobreathe { 0%,100% { opacity: 1; } 50% { opacity: 0.62; } }
 
 /* ── home ─────────────────────────────────────────────────────────────── */
+/* Three columns: what the machine is doing (left), the face and the controls
+   (centre), and the conversation plus the work feed (right). The order is the
+   order you read them in — state, then JARVIS, then what was said. */
 .home-grid {
   display: grid; flex: 1 1 auto; min-height: 0;
-  grid-template-columns: 1fr minmax(280px, 360px);
-  gap: 18px; padding: 14px 22px 18px;
+  grid-template-columns: 252px minmax(0, 1fr) minmax(302px, 372px);
+  gap: 16px; padding: 14px 20px 18px;
 }
 
 .home-face-col {
@@ -285,7 +334,7 @@ button:disabled { opacity: 0.45; cursor: default; }
    feedback loop entirely: the canvas can no longer depend on itself. */
 #face {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  filter: drop-shadow(0 0 18px rgba(56, 189, 248, 0.10));
+  filter: drop-shadow(0 0 18px rgba(var(--pri-rgb), 0.10));
 }
 
 .face-caption {
@@ -313,6 +362,111 @@ button:disabled { opacity: 0.45; cursor: default; }
 @keyframes taskpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
 
 .home-side-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+
+/* ── left rail: the machine, at a glance ──────────────────────────────────
+   Every value on this rail is a real reading from the perf payload
+   (cpu · mem · net · tmp · gpu · procs · uptime) — see paintRail(). Nothing
+   here is a placeholder, because a telemetry rail that lies is worse than
+   having no rail at all. Each row carries its own colour so a reading is
+   identifiable without a legend. */
+.home-rail {
+  display: flex; flex-direction: column; gap: 12px;
+  min-height: 0; overflow-y: auto;
+}
+
+.rail-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: var(--shadow-1);
+  padding: 13px 14px 15px;
+}
+.rail-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+.rail-title {
+  font-size: 10px; font-weight: 650; letter-spacing: 1.6px;
+  text-transform: uppercase; color: var(--text-med);
+}
+.rail-live { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; letter-spacing: 1.3px; color: var(--text-dim); }
+.rail-live i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 6px var(--green);
+  animation: railPulse 2.4s ease-in-out infinite;
+}
+@keyframes railPulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
+
+.rail-metric { --tone: var(--pri-rgb); }
+.rail-metric[data-tone="violet"] { --tone: 139, 109, 245; }
+.rail-metric[data-tone="pink"]   { --tone: 255, 122, 168; }
+.rail-metric + .rail-metric { margin-top: 13px; }
+.rm-top { display: flex; align-items: baseline; justify-content: space-between; }
+.rm-k { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); }
+.rm-v {
+  font-size: 21px; font-weight: 650; line-height: 1;
+  color: rgba(var(--tone), 1); font-variant-numeric: tabular-nums;
+}
+.rm-v em { font-size: 10px; font-style: normal; font-weight: 600; color: var(--text-dim); margin-left: 2px; }
+.rm-bar {
+  display: block; height: 5px; border-radius: var(--r-full); margin-top: 7px;
+  background: rgba(var(--tone), 0.12); overflow: hidden;
+}
+.rm-bar b {
+  display: block; height: 100%; width: 0%; border-radius: var(--r-full);
+  background: rgba(var(--tone), 0.85);
+  transition: width .5s var(--out);
+}
+
+.rail-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.rail-tile {
+  --tone: var(--pri-rgb);
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 10px 12px; border-radius: var(--r-md);
+  background: var(--panel); border: 1px solid var(--border);
+  transition: border-color var(--dur);
+}
+.rail-tile[data-tone="violet"] { --tone: 139, 109, 245; }
+.rail-tile[data-tone="amber"]  { --tone: 245, 180, 92; }
+.rail-tile[data-tone="pink"]   { --tone: 255, 122, 168; }
+.rail-tile:hover { border-color: rgba(var(--tone), 0.3); }
+.rt-k { font-size: 9px; letter-spacing: 1.3px; text-transform: uppercase; color: var(--text-dim); }
+.rt-v {
+  font-size: 15px; font-weight: 650; color: rgba(var(--tone), .95);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── conversation panel ─────────────────────────────────────────────────── */
+.conv-card { flex: 0 0 auto; }
+.conv-live {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 9px; letter-spacing: 1.3px; text-transform: uppercase; color: var(--green);
+}
+.conv-live i {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--green);
+  animation: railPulse 2.4s ease-in-out infinite;
+}
+.conv-body {
+  display: flex; flex-direction: column; gap: 9px;
+  max-height: 234px; min-height: 106px; overflow-y: auto;
+  padding: 11px 13px 13px;
+}
+.conv-empty {
+  flex: 1; min-height: 82px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; text-align: center;
+}
+.conv-empty-mark {
+  width: 34px; height: 34px; border-radius: var(--r-full);
+  display: grid; place-items: center; font-size: 15px; color: var(--text-dim);
+  border: 1px dashed var(--border-2);
+}
+.conv-empty-sub { font-size: 11px; color: var(--text-dim); }
+
+.conv-msg { display: flex; gap: 9px; align-items: flex-start; }
+.conv-who {
+  flex: 0 0 auto; min-width: 32px; padding-top: 2px;
+  font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dim);
+}
+.conv-text { flex: 1 1 auto; font-size: 12px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.conv-msg[data-role="user"] .conv-who { color: rgba(var(--pri-rgb), .9); }
+.conv-msg[data-role="sys"] .conv-text,
+.conv-msg[data-role="err"] .conv-text { font-size: 11px; color: var(--text-med); }
+.conv-msg[data-role="err"] .conv-text { color: var(--red); }
 
 .status-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
@@ -347,7 +501,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .xbtn {
   width: 22px; height: 22px; border-radius: var(--r-sm);
   color: var(--text-dim); font-size: 10px; display: grid; place-items: center;
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .xbtn:hover { color: var(--white); background: var(--panel-2); }
 
@@ -413,7 +567,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .chat-list { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
 
 .chat-empty { text-align: center; padding-top: 12vh; color: var(--text-dim); }
-.chat-empty-mark { font-size: 40px; color: rgba(56,189,248,.5); margin-bottom: 12px; }
+.chat-empty-mark { font-size: 40px; color: rgba(var(--pri-rgb),.5); margin-bottom: 12px; }
 .chat-empty-title { font-size: 20px; font-weight: 650; color: var(--text-med); margin-bottom: 6px; }
 .chat-empty-sub { font-size: 12.5px; }
 
@@ -429,8 +583,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   user-select: text; overflow-wrap: break-word; min-width: 0;
 }
 .msg-user .bubble {
-  background: linear-gradient(135deg, rgba(56,189,248,0.20), rgba(56,130,248,0.12));
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: linear-gradient(135deg, rgba(var(--pri-rgb),0.20), rgba(var(--pri-rgb),0.12));
+  border: 1px solid rgba(var(--pri-rgb), 0.3);
   color: var(--white);
   border-bottom-right-radius: var(--r-sm);
 }
@@ -474,7 +628,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .bubble a { color: var(--pri); text-decoration: none; border-bottom: 1px dotted var(--pri-dim); }
 .bubble code {
   font-family: var(--mono); font-size: 12px;
-  background: rgba(56, 189, 248, 0.09); color: #9fd9f7;
+  background: rgba(var(--pri-rgb), 0.09); color: #9fd9f7;
   padding: 1px 5px; border-radius: 5px;
 }
 .bubble pre {
@@ -503,7 +657,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   background: var(--panel-2); border: 1px solid var(--border-2);
   color: var(--pri); font-size: 14px;
   box-shadow: var(--shadow-1);
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .scroll-latest:hover { border-color: var(--pri-dim); }
 
@@ -520,12 +674,12 @@ button:disabled { opacity: 0.45; cursor: default; }
   display: flex; align-items: center; gap: 9px;
   padding: 8px 12px; border-radius: var(--r-sm);
   color: var(--text-med); font-size: 12.5px; text-align: left;
-  transition: all var(--dur); border: 1px solid transparent;
+  transition: var(--t-ui); border: 1px solid transparent;
 }
 .settings-nav button:hover { color: var(--white); background: var(--panel); }
 .settings-nav button.active {
   color: var(--pri); background: var(--pri-ghost);
-  border-color: rgba(56, 189, 248, 0.25);
+  border-color: rgba(var(--pri-rgb), 0.25);
 }
 .settings-nav .nav-ico { width: 16px; text-align: center; font-size: 12px; }
 
@@ -553,12 +707,12 @@ button:disabled { opacity: 0.45; cursor: default; }
 .toggle {
   flex: 0 0 auto; width: 40px; height: 22px; border-radius: var(--r-full);
   background: rgba(148,184,255,.10); border: 1px solid var(--border-2);
-  position: relative; transition: all var(--dur);
+  position: relative; transition: var(--t-ui);
 }
 .toggle::after {
   content: ""; position: absolute; top: 2px; left: 2px;
   width: 16px; height: 16px; border-radius: 50%;
-  background: var(--text-med); transition: all var(--dur);
+  background: var(--text-med); transition: var(--t-ui);
 }
 .toggle.on { background: rgba(49,217,174,.22); border-color: var(--green-dim); }
 .toggle.on::after { left: 20px; background: var(--green); }
@@ -570,10 +724,10 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-size: 10.5px; font-weight: 650; letter-spacing: 0.6px;
   color: var(--text-med); background: var(--panel);
   border: 1px solid var(--border);
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .pill:hover { color: var(--white); border-color: var(--border-2); }
-.pill.sel { color: var(--pri); background: var(--pri-ghost); border-color: rgba(56,189,248,.35); }
+.pill.sel { color: var(--pri); background: var(--pri-ghost); border-color: rgba(var(--pri-rgb),.35); }
 
 /* buttons */
 .btn {
@@ -581,11 +735,11 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-size: 12px; font-weight: 600;
   border: 1px solid var(--border-2); color: var(--text);
   background: var(--panel);
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .btn:hover { border-color: var(--pri-dim); color: var(--pri); }
 .btn-primary {
-  background: linear-gradient(135deg, #38bdf8, #2f8fe0);
+  background: linear-gradient(135deg, var(--pri), var(--pri-dim));
   color: #04121e; border: none;
 }
 .btn-primary:hover { filter: brightness(1.1); color: #04121e; }
@@ -648,7 +802,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
 .note {
   font-size: 11.5px; color: var(--text-dim); line-height: 1.5;
   padding: 9px 14px; border-radius: var(--r-sm);
-  background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.13);
+  background: rgba(var(--pri-rgb), 0.05); border: 1px solid rgba(var(--pri-rgb), 0.13);
 }
 
 .mono-val { font-family: var(--mono); font-size: 11.5px; color: var(--text-med); }
@@ -675,6 +829,18 @@ select.text-input option { background: #0a1120; color: var(--text); }
 .plugin-desc { font-size: 11px; color: var(--text-dim); flex: 1; }
 .plugin-err { font-size: 11px; color: var(--red); }
 
+/* mail: one line that says whether the account is actually usable, coloured by
+   the answer rather than decorated — the same posture as the microphone verdict */
+.mail-status {
+  padding: 10px 13px; border-radius: var(--r-sm); font-size: 12px;
+  background: rgba(49, 217, 174, 0.06); border: 1px solid rgba(49, 217, 174, 0.3);
+  color: var(--text-med); line-height: 1.5; user-select: text;
+  transition: border-color .4s var(--out), background .4s var(--out);
+}
+.mail-status.warn {
+  background: rgba(245, 180, 92, 0.06); border-color: rgba(245, 180, 92, 0.32);
+}
+
 /* perf tiles */
 .perf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 .perf-tile {
@@ -693,12 +859,42 @@ select.text-input option { background: #0a1120; color: var(--text); }
   backdrop-filter: blur(6px);
 }
 
+/* The state light, centred above the input: the one element that answers
+   "what is it doing?" without the user looking anywhere else. It mirrors
+   #statePill — both are painted by applyState, so they cannot disagree. */
+.dock-status-row { display: flex; justify-content: center; margin-bottom: 9px; }
+.dock-state {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 7px 20px; border-radius: var(--r-full);
+  background: var(--panel-2); border: 1px solid var(--border-2);
+  font-size: 11px; font-weight: 650; letter-spacing: 1.8px;
+  color: var(--text-med);
+  transition: color var(--dur), border-color var(--dur), background var(--dur), box-shadow var(--dur);
+}
+.ds-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim);
+  transition: background var(--dur), box-shadow var(--dur);
+}
+.dock-state[data-state="LISTENING"] { color: var(--green); border-color: rgba(43, 212, 200, .35); background: rgba(43, 212, 200, .07); }
+.dock-state[data-state="LISTENING"] .ds-dot { background: var(--green); box-shadow: 0 0 8px var(--green); animation: railPulse 1.2s ease-in-out infinite; }
+.dock-state[data-state="THINKING"]  { color: var(--acc); border-color: rgba(139, 109, 245, .35); background: rgba(139, 109, 245, .07); }
+.dock-state[data-state="THINKING"] .ds-dot { background: var(--acc); box-shadow: 0 0 8px var(--acc); animation: railPulse .9s ease-in-out infinite; }
+.dock-state[data-state="EXECUTING"] { color: var(--amber); border-color: rgba(245, 180, 92, .35); background: rgba(245, 180, 92, .07); }
+.dock-state[data-state="EXECUTING"] .ds-dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: railPulse .7s ease-in-out infinite; }
+.dock-state[data-state="SPEAKING"]  { color: var(--pri); border-color: rgba(var(--pri-rgb), .4); background: var(--pri-ghost); box-shadow: var(--glow-pri); }
+.dock-state[data-state="SPEAKING"] .ds-dot { background: var(--pri); box-shadow: 0 0 9px var(--pri); animation: railPulse .8s ease-in-out infinite; }
+.dock-state[data-state="MUTED"]     { color: var(--amber); }
+.dock-state[data-state="MUTED"] .ds-dot { background: var(--amber); }
+.dock-state[data-state="SLEEPING"]  { color: var(--text-dim); }
+.dock-state[data-state="ERROR"]     { color: var(--red); border-color: rgba(255, 92, 122, .45); background: rgba(255, 92, 122, .08); }
+.dock-state[data-state="ERROR"] .ds-dot { background: var(--red); box-shadow: 0 0 8px var(--red); animation: railPulse .6s ease-in-out infinite; }
+
 .quick-row { display: none; } /* quick-launch pills removed */
 .quick-btn {
   padding: 4px 12px; border-radius: var(--r-full);
   font-size: 11px; color: var(--text-med);
   background: var(--panel); border: 1px solid var(--border);
-  transition: all var(--dur); white-space: nowrap;
+  transition: var(--t-ui); white-space: nowrap;
 }
 .quick-btn:hover { color: var(--white); border-color: var(--pri-dim); background: var(--panel-2); }
 
@@ -711,7 +907,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
 }
 .input-shell:focus-within {
   border-color: var(--pri-dim);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.09);
+  box-shadow: 0 0 0 3px rgba(var(--pri-rgb), 0.09);
 }
 #input {
   width: 100%; resize: none; border: none; outline: none;
@@ -728,7 +924,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 10.5px; color: var(--pri);
-  background: var(--pri-ghost); border: 1px solid rgba(56,189,248,.3);
+  background: var(--pri-ghost); border: 1px solid rgba(var(--pri-rgb),.3);
   border-radius: var(--r-full); padding: 3px 9px;
   max-width: 200px; white-space: nowrap; overflow: hidden;
 }
@@ -739,7 +935,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
   display: grid; place-items: center; font-size: 15px;
   background: var(--panel); border: 1px solid var(--border-2);
   color: var(--text-med);
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .dock-btn:hover { color: var(--pri); border-color: var(--pri-dim); background: var(--pri-ghost); }
 
@@ -751,7 +947,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
 .dock-stop:hover { color: var(--red); border-color: var(--red); background: rgba(255,92,122,.09); }
 
 .dock-send {
-  background: linear-gradient(135deg, #38bdf8, #2f8fe0);
+  background: linear-gradient(135deg, var(--pri), var(--pri-dim));
   color: #04121e; border: none; font-size: 14px;
 }
 .dock-send:hover { filter: brightness(1.12); color: #04121e; }
@@ -824,7 +1020,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
   flex: 1; padding: 8px; border-radius: var(--r-sm);
   font-size: 12px; font-weight: 600; color: var(--text-med);
   background: rgba(5,10,20,.6); border: 1px solid var(--border);
-  transition: all var(--dur);
+  transition: var(--t-ui);
 }
 .os-btn:hover { color: var(--white); }
 .os-btn.sel { color: var(--pri); border-color: var(--pri-dim); background: var(--pri-ghost); }
@@ -871,7 +1067,7 @@ select.text-input option { background: #0a1120; color: var(--text); }
 }
 .toast.t-ok   { border-color: rgba(49,217,174,.4); }
 .toast.t-err  { border-color: rgba(255,92,122,.4); }
-.toast.leaving { opacity: 0; transform: translateX(12px); transition: all .3s; }
+.toast.leaving { opacity: 0; transform: translateX(12px); transition: var(--t-ui); }
 @keyframes toastin { from { opacity: 0; transform: translateX(12px); } }
 
 /* ── scrollbars ───────────────────────────────────────────────────────── */
@@ -905,6 +1101,9 @@ select.text-input option { background: #0a1120; color: var(--text); }
   .home-grid > * { flex: 0 0 auto; }
   .face-stage { min-height: 34vh; }
   .home-face-col { flex: 0 0 auto; }
+  /* the rail stacks too, and must stop scrolling inside itself: with the whole
+     view scrolling, a nested scroll on the rail traps the telemetry tiles */
+  .home-rail { flex: 0 0 auto; overflow: visible; }
   .home-side-col { display: flex; flex: 0 0 auto; overflow: visible; }
   #view-settings { grid-template-columns: 56px 1fr; }
   .settings-nav button span:not(.nav-ico) { display: none; }
@@ -928,8 +1127,10 @@ select.text-input option { background: #0a1120; color: var(--text); }
   .auto-sw .sw-name { display: none; }
 }
 
+/* compact keeps the two panels that answer a question at a glance — what the
+   machine is doing and what JARVIS is — and drops the scrolling work feed */
 body.compact .home-side-col { display: none; }
-body.compact .home-grid { grid-template-columns: 1fr; }
+body.compact .home-grid { grid-template-columns: 240px minmax(0, 1fr); }
 
 /* ── reduced motion ───────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
@@ -944,7 +1145,7 @@ body.compact .home-grid { grid-template-columns: 1fr; }
   transition: background var(--dur), box-shadow var(--dur);
 }
 .upd-dot.checking    { background: var(--amber); animation: updpulse 1.1s ease-in-out infinite; }
-.upd-dot.update      { background: var(--pri); box-shadow: 0 0 10px rgba(56,189,248,.55); animation: updpulse 1.6s ease-in-out infinite; }
+.upd-dot.update      { background: var(--pri); box-shadow: 0 0 10px rgba(var(--pri-rgb),.55); animation: updpulse 1.6s ease-in-out infinite; }
 .upd-dot.downloading { background: var(--amber); animation: updpulse 1s ease-in-out infinite; }
 .upd-dot.ready       { background: var(--green); box-shadow: 0 0 12px rgba(49,217,174,.55); animation: updpulse 1.4s ease-in-out infinite; }
 .upd-dot.err         { background: var(--red); }
@@ -963,7 +1164,7 @@ body.compact .home-grid { grid-template-columns: 1fr; }
   display: block; height: 100%; width: 0%;
   border-radius: var(--r-full); position: relative;
   background: linear-gradient(90deg, var(--pri-dim), var(--pri));
-  box-shadow: 0 0 10px rgba(56,189,248,.45);
+  box-shadow: 0 0 10px rgba(var(--pri-rgb),.45);
   transition: width .45s cubic-bezier(.22, 1, .36, 1);
 }
 .upd-bar i::after {   /* shimmer riding the fill while downloading */
@@ -1001,7 +1202,7 @@ body.compact .home-grid { grid-template-columns: 1fr; }
 .fx-aurora {
   position: absolute; inset: -20%;
   background:
-    radial-gradient(38% 42% at 22% 24%, rgba(56, 189, 248, 0.075), transparent 68%),
+    radial-gradient(38% 42% at 22% 24%, rgba(var(--pri-rgb), 0.075), transparent 68%),
     radial-gradient(30% 36% at 78% 18%, rgba(139, 109, 245, 0.055), transparent 66%),
     radial-gradient(34% 40% at 62% 82%, rgba(49, 217, 174, 0.035), transparent 64%);
   filter: blur(2px);
@@ -1016,8 +1217,8 @@ body.compact .home-grid { grid-template-columns: 1fr; }
 .fx-grid {
   position: absolute; inset: 0;
   background:
-    repeating-linear-gradient(0deg,  rgba(56,189,248,.028) 0 1px, transparent 1px 44px),
-    repeating-linear-gradient(90deg, rgba(56,189,248,.028) 0 1px, transparent 1px 44px);
+    repeating-linear-gradient(0deg,  rgba(var(--pri-rgb),.028) 0 1px, transparent 1px 44px),
+    repeating-linear-gradient(90deg, rgba(var(--pri-rgb),.028) 0 1px, transparent 1px 44px);
   mask-image: radial-gradient(120% 95% at 50% 40%, rgba(0,0,0,.8), transparent 78%);
   -webkit-mask-image: radial-gradient(120% 95% at 50% 40%, rgba(0,0,0,.8), transparent 78%);
 }
@@ -1025,8 +1226,8 @@ body.compact .home-grid { grid-template-columns: 1fr; }
 .fx-scan {
   position: absolute; left: 0; right: 0; height: 140px;
   background: linear-gradient(180deg, transparent,
-    rgba(56,189,248,.045) 45%, rgba(56,189,248,.09) 50%,
-    rgba(56,189,248,.045) 55%, transparent);
+    rgba(var(--pri-rgb),.045) 45%, rgba(var(--pri-rgb),.09) 50%,
+    rgba(var(--pri-rgb),.045) 55%, transparent);
   animation: fxscan 9s linear infinite;
 }
 @keyframes fxscan { from { top: -20%; } to { top: 110%; } }
@@ -1050,14 +1251,14 @@ body.compact .home-grid { grid-template-columns: 1fr; }
 }
 .hud-ring.r1 {                       /* dashed halo, slow clockwise */
   width: min(72%, 340px); height: min(72%, 340px);
-  border: 1px dashed rgba(56,189,248,.20);
+  border: 1px dashed rgba(var(--pri-rgb),.20);
   animation: hudspin 26s linear infinite;
 }
 .hud-ring.r2 {                       /* sweeping arc segment, faster */
   width: min(84%, 396px); height: min(84%, 396px);
   background: conic-gradient(from 0deg,
-    rgba(56,189,248,0) 0deg, rgba(56,189,248,.3) 26deg,
-    rgba(56,189,248,0) 60deg, rgba(56,189,248,0) 360deg);
+    rgba(var(--pri-rgb),0) 0deg, rgba(var(--pri-rgb),.3) 26deg,
+    rgba(var(--pri-rgb),0) 60deg, rgba(var(--pri-rgb),0) 360deg);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
   animation: hudspin 13s linear infinite;
@@ -1074,7 +1275,7 @@ body.compact .home-grid { grid-template-columns: 1fr; }
 /* corner brackets around the stage */
 .hud-frame b {
   position: absolute; width: 26px; height: 26px;
-  border: 2px solid rgba(56,189,248,.38);
+  border: 2px solid rgba(var(--pri-rgb),.38);
   pointer-events: none;
 }
 .hud-frame b.tl { top: 6px;    left: 6px;  border-right: none; border-bottom: none; }
@@ -1108,7 +1309,7 @@ body[data-sight="1"] .hud-readout.ro-br b { color: var(--pri); }
 }
 .hud-vu i {
   display: block; width: 3px; height: 100%; border-radius: 2px;
-  background: linear-gradient(180deg, var(--pri), rgba(56,189,248,.30));
+  background: linear-gradient(180deg, var(--pri), rgba(var(--pri-rgb),.30));
   transform-origin: bottom center;
   transform: scaleY(calc(0.22 + max(0, var(--voice, 0) - var(--th, 0)) * 3.2));
   opacity: calc(0.30 + max(0, var(--voice, 0) - var(--th, 0)) * 2.4);
@@ -1122,7 +1323,7 @@ body[data-sight="1"] .hud-readout.ro-br b { color: var(--pri); }
 .hud-vu i:nth-child(6) { --th: .58; }
 .hud-vu i:nth-child(7) { --th: .72; }
 /* the dashed halo brightens with the voice — colour only, so it stays cheap */
-.hud-ring.r1 { border-color: rgba(56,189,248, calc(.16 + var(--voice, 0) * .55)); }
+.hud-ring.r1 { border-color: rgba(var(--pri-rgb), calc(.16 + var(--voice, 0) * .55)); }
 .auto-rail.mode-auto ~ * .hud-readout.ro-right b,
 body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation: taskpulse 1.6s ease-in-out infinite; }
 
@@ -1135,7 +1336,7 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
 /* energy line sweeping the top edge while the rail exists */
 .auto-rail::before {
   content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(56,189,248,.75), transparent);
+  background: linear-gradient(90deg, transparent, rgba(var(--pri-rgb),.75), transparent);
   background-size: 45% 100%;
   background-repeat: no-repeat;
   animation: railcomet 5.5s linear infinite;
@@ -1147,8 +1348,8 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
   to   { background-position: 150% 0; }
 }
 .auto-rail.mode-auto {
-  border-color: rgba(56,189,248,.5);
-  box-shadow: var(--glow-pri), inset 0 0 34px rgba(56,189,248,.05);
+  border-color: rgba(var(--pri-rgb),.5);
+  box-shadow: var(--glow-pri), inset 0 0 34px rgba(var(--pri-rgb),.05);
 }
 .auto-rail.mode-auto::before {
   animation-duration: 1.6s;
@@ -1160,9 +1361,9 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
 .btn-handover {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(56,189,248,.20), rgba(56,189,248,.07));
+  background: linear-gradient(180deg, rgba(var(--pri-rgb),.20), rgba(var(--pri-rgb),.07));
   box-shadow: var(--glow-pri);
-  text-shadow: 0 0 12px rgba(56,189,248,.5);
+  text-shadow: 0 0 12px rgba(var(--pri-rgb),.5);
 }
 .btn-handover::after {                 /* slow radar sweep inside the pill */
   content: ""; position: absolute; inset: 0;
@@ -1199,14 +1400,14 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
   position: relative;
   background:
     linear-gradient(180deg, rgba(10,16,30,.72), rgba(7,11,20,.82));
-  border-color: rgba(56,189,248,.16);
+  border-color: rgba(var(--pri-rgb),.16);
 }
 .pc-body {
   position: relative;
   /* faint CRT scanlines over the feed only */
   background: repeating-linear-gradient(0deg,
-    rgba(56,189,248,.022) 0 1px, transparent 1px 3px);
-  text-shadow: 0 0 8px rgba(56,189,248,.12);
+    rgba(var(--pri-rgb),.022) 0 1px, transparent 1px 3px);
+  text-shadow: 0 0 8px rgba(var(--pri-rgb),.12);
 }
 .pc-row { transition: opacity .2s; }
 .pc-row:hover { opacity: 1 !important; }
@@ -1220,7 +1421,7 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
 }
 .pc-row.k-ok   .pc-ico { color: var(--green); border-color: rgba(49,217,174,.35); background: rgba(49,217,174,.08); }
 .pc-row.k-fail .pc-ico { color: var(--red);   border-color: rgba(255,92,122,.4); background: rgba(255,92,122,.08); }
-.pc-row.k-mode .pc-ico { color: var(--pri);   border-color: rgba(56,189,248,.45); background: var(--pri-ghost); }
+.pc-row.k-mode .pc-ico { color: var(--pri);   border-color: rgba(var(--pri-rgb),.45); background: var(--pri-ghost); }
 .pc-row.k-act  .pc-ico { color: var(--amber); border-color: rgba(245,180,92,.35); background: rgba(245,180,92,.07); }
 .pc-row.k-act  .pc-text { color: var(--amber); }
 .pc-row.k-act  .pc-ico { animation: taskpulse 1.2s ease-in-out infinite; }
@@ -1228,7 +1429,7 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
 @keyframes okflash { from { background: rgba(49,217,174,.09); } to { background: transparent; } }
 .pc-row.k-fail { animation: pcslide 0.28s ease-out, failflash 2.2s ease-out; }
 @keyframes failflash { 0% { background: rgba(255,92,122,.14); } 100% { background: transparent; } }
-.pc-row.k-mode { border-left: 2px solid rgba(56,189,248,.55); padding-left: 6px; }
+.pc-row.k-mode { border-left: 2px solid rgba(var(--pri-rgb),.55); padding-left: 6px; }
 .pc-live { text-shadow: 0 0 10px rgba(49,217,174,.45); }
 .pc-foot { font-family: var(--mono); letter-spacing: .4px; }
 .pc-foot b { color: var(--pri); }
@@ -1254,7 +1455,7 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
   box-shadow: inset 0 0 22px rgba(49,217,174,.05);
 }
 .status-tile .status-ico {
-  filter: drop-shadow(0 0 6px rgba(56,189,248,.35));
+  filter: drop-shadow(0 0 6px rgba(var(--pri-rgb),.35));
 }
 .status-val { font-family: var(--mono); font-size: 12px; letter-spacing: .5px; }
 
@@ -1273,8 +1474,8 @@ body[data-autopilot="1"] .hud-readout.ro-right b { color: var(--pri); animation:
 .chip.chip-bad::after { opacity: .95; }
 
 /* ── face + caption glow ──────────────────────────────────────────────── */
-#face { filter: drop-shadow(0 0 26px rgba(56,189,248,.16)); }
-.face-caption { text-shadow: 0 0 14px rgba(56,189,248,.35); }
+#face { filter: drop-shadow(0 0 26px rgba(var(--pri-rgb),.16)); }
+.face-caption { text-shadow: 0 0 14px rgba(var(--pri-rgb),.35); }
 
 /* ── motion-free mode: respect reduced-motion preferences ────────────── */
 @media (prefers-reduced-motion: reduce) {
@@ -1333,7 +1534,7 @@ body[data-state="EXECUTING"] .fx-grid { opacity: 1.5; }
      breathing keyframes, so it never fights their scale animation */
   translate: calc(var(--mx, 0) * 18px) calc(var(--my, 0) * 14px);
   background: radial-gradient(circle,
-    rgba(56,189,248,.14) 0%, rgba(56,189,248,.05) 45%, transparent 70%);
+    rgba(var(--pri-rgb),.14) 0%, rgba(var(--pri-rgb),.05) 45%, transparent 70%);
   filter: blur(2px);
   pointer-events: none;
   animation: corebreathe 4.2s ease-in-out infinite;
@@ -1356,7 +1557,7 @@ body[data-state="THINKING"] .hud-core {
 }
 body[data-state="SPEAKING"] .hud-core {
   background: radial-gradient(circle,
-    rgba(56,189,248,.2) 0%, rgba(56,189,248,.07) 45%, transparent 70%);
+    rgba(var(--pri-rgb),.2) 0%, rgba(var(--pri-rgb),.07) 45%, transparent 70%);
   animation-duration: 1.9s;
 }
 body[data-state="SLEEPING"] .hud-core { opacity: .3; animation-duration: 7s; }
@@ -1382,7 +1583,7 @@ body[data-state="SLEEPING"] .hud-core { opacity: .3; animation-duration: 7s; }
   scale: calc(1 + var(--voice, 0) * 0.16 + var(--mswell, 0) * 2
               + var(--mz, 0) * 0.6);
   background: radial-gradient(circle,
-    rgba(56,189,248,.10) 0%, rgba(56,189,248,.03) 50%, transparent 72%);
+    rgba(var(--pri-rgb),.10) 0%, rgba(var(--pri-rgb),.03) 50%, transparent 72%);
   opacity: calc(0.25 + var(--voice, 0) * 1.1);
   transition: opacity .12s linear;
   pointer-events: none;
@@ -1447,13 +1648,13 @@ body[data-state="THINKING"] .hud-ring.r2 {
 .nav-btn:hover  { transform: translateY(-1px); }
 .dock-btn:hover { transform: translateY(-2px) scale(1.06); }
 .dock-btn:active{ transform: translateY(0) scale(.94); }
-.dock-send:hover { box-shadow: 0 0 18px rgba(56,189,248,.4); }
+.dock-send:hover { box-shadow: 0 0 18px rgba(var(--pri-rgb),.4); }
 .status-tile:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
 .status-tile:active{ transform: translateY(0) scale(.985); }
 
 /* keyboard focus gets a proper glow ring */
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-  outline: 2px solid rgba(56,189,248,.55);
+  outline: 2px solid rgba(var(--pri-rgb),.55);
   outline-offset: 2px;
   border-radius: var(--r-sm);
 }
@@ -1461,8 +1662,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* cards breathe open on hover */
 .card { transition: border-color .35s var(--out), box-shadow .35s var(--out); }
 .pc-card:hover, .activity-card:hover {
-  border-color: rgba(56,189,248,.28);
-  box-shadow: var(--shadow-2), 0 0 24px rgba(56,189,248,.05);
+  border-color: rgba(var(--pri-rgb),.28);
+  box-shadow: var(--shadow-2), 0 0 24px rgba(var(--pri-rgb),.05);
 }
 
 /* feed rows: silk entrance with a slight blur-in */
@@ -1477,7 +1678,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .brand-mark::after {
   content: ""; position: absolute; inset: -5px;
   border-radius: 50%;
-  border: 1px dashed rgba(56,189,248,.22);
+  border: 1px dashed rgba(var(--pri-rgb),.22);
   animation: hudspin 14s linear infinite;
   pointer-events: none;
 }
@@ -1485,7 +1686,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* state pill: soft glow matching its state */
 .state-pill { transition: color var(--dur), border-color var(--dur), background var(--dur), box-shadow .6s var(--out); }
 .state-pill[data-state="EXECUTING"] { box-shadow: 0 0 14px rgba(245,180,92,.22); }
-.state-pill[data-state="SPEAKING"]  { box-shadow: 0 0 14px rgba(56,189,248,.25); }
+.state-pill[data-state="SPEAKING"]  { box-shadow: 0 0 14px rgba(var(--pri-rgb),.25); }
 .state-pill[data-state="LISTENING"]{ box-shadow: 0 0 14px rgba(49,217,174,.2); }
 
 /* caption: letter-spacing breath while listening */
@@ -1528,7 +1729,7 @@ body[data-state="LISTENING"] .face-caption { letter-spacing: 3.4px; color: var(-
 }
 .train-live[data-on="1"] { color: var(--green); border-color: rgba(49,217,174,.3); }
 .train-live[data-on="1"] i { background: var(--green); box-shadow: 0 0 7px var(--green); }
-.train-live[data-on="2"] { color: var(--pri); border-color: rgba(56,189,248,.35); }
+.train-live[data-on="2"] { color: var(--pri); border-color: rgba(var(--pri-rgb),.35); }
 .train-live[data-on="2"] i { background: var(--pri); animation: trainpulse 1.1s ease-in-out infinite; }
 .train-live[data-on="3"] { opacity: .7; }
 @keyframes trainpulse {
@@ -1701,10 +1902,10 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
    inside the card reads from it. Adding a mood means adding one line here —
    the alternative (a colour per element per state) is how a palette rots. */
 .presence-card {
-  --mood: 56, 189, 248;                    /* CURIOUS, the resting state */
+  --mood: 46, 232, 127;                    /* CURIOUS, the resting state */
   position: relative; overflow: hidden;
 }
-.presence-card[data-mood="CURIOUS"] { --mood: 56, 189, 248; }
+.presence-card[data-mood="CURIOUS"] { --mood: 46, 232, 127; }
 .presence-card[data-mood="FOCUSED"] { --mood: 139, 109, 245; }
 .presence-card[data-mood="EXCITED"] { --mood: 255, 209, 102; }
 .presence-card[data-mood="HAPPY"]   { --mood: 49, 217, 174; }
@@ -1859,13 +2060,13 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
 .guide-art {
   position: relative; overflow: hidden; min-height: 100%;
   background:
-    radial-gradient(circle at 50% 42%, rgba(56, 189, 248, 0.16), transparent 62%),
+    radial-gradient(circle at 50% 42%, rgba(var(--pri-rgb), 0.16), transparent 62%),
     linear-gradient(180deg, #070d18, #04070e);
   border-right: 1px solid var(--border);
 }
 .ga-ring {
   position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%);
-  border: 1px solid rgba(56, 189, 248, 0.22); border-radius: 50%;
+  border: 1px solid rgba(var(--pri-rgb), 0.22); border-radius: 50%;
 }
 .ga-ring.r1 { width: 150px; height: 150px; animation: gaSpin 22s linear infinite; }
 .ga-ring.r2 { width: 96px;  height: 96px;  border-style: dashed;
@@ -1874,7 +2075,7 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
 .ga-core {
   position: absolute; left: 50%; top: 44%; width: 54px; height: 54px;
   transform: translate(-50%, -50%); border-radius: 50%;
-  background: radial-gradient(circle at 50% 42%, #ffffff, var(--pri) 46%, rgba(56, 189, 248, 0) 74%);
+  background: radial-gradient(circle at 50% 42%, #ffffff, var(--pri) 46%, rgba(var(--pri-rgb), 0) 74%);
   animation: gaCore 4.2s ease-in-out infinite;
 }
 @keyframes gaCore {
@@ -1884,7 +2085,7 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
 .ga-spark {
   position: absolute; left: 50%; top: 44%; width: 190px; height: 190px;
   transform: translate(-50%, -50%); border-radius: 50%;
-  background: radial-gradient(circle, rgba(56, 189, 248, 0.10), transparent 68%);
+  background: radial-gradient(circle, rgba(var(--pri-rgb), 0.10), transparent 68%);
 }
 
 .guide-main { padding: 22px 24px 16px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
@@ -1900,7 +2101,7 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
 }
 .guide-note {
   font-size: 11.5px; line-height: 1.6; color: var(--text-med);
-  background: rgba(56, 189, 248, 0.06); border: 1px solid rgba(56, 189, 248, 0.18);
+  background: rgba(var(--pri-rgb), 0.06); border: 1px solid rgba(var(--pri-rgb), 0.18);
   border-radius: var(--r-sm); padding: 8px 11px; margin-bottom: 10px;
 }
 .guide-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
@@ -1919,7 +2120,12 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
 .guide-dots i.on   { width: 17px; background: var(--pri); }
 
 /* the app steps back while the tour is up, so the tour reads as being in front
-   of a window rather than pasted over it */
+   of a window rather than pasted over it.
+
+   This only works because #guideVeil is a SIBLING of #app in the markup. A
+   filter applies to the element's whole subtree, so while the veil lived inside
+   #app the tour card was blurred by this very rule and its text could not be
+   read — the one thing the tour exists to avoid. Keep the veil outside #app. */
 body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996); }
 #app { transition: filter .3s ease, transform .3s ease; }
 
@@ -1965,7 +2171,7 @@ body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996);
   font-size: 12px; line-height: 1.6; user-select: text;
   transition: border-color .25s ease, background .25s ease;
 }
-.mic-result[data-tone="wait"] { border-color: rgba(56, 189, 248, 0.22); background: rgba(56, 189, 248, 0.05); }
+.mic-result[data-tone="wait"] { border-color: rgba(var(--pri-rgb), 0.22); background: rgba(var(--pri-rgb), 0.05); }
 .mic-result[data-tone="ok"]   { border-color: rgba(49, 217, 174, 0.4);  background: rgba(49, 217, 174, 0.07); }
 .mic-result[data-tone="warn"] { border-color: rgba(245, 180, 92, 0.4);  background: rgba(245, 180, 92, 0.07); }
 .mic-result[data-tone="bad"]  { border-color: rgba(255, 92, 122, 0.34); background: rgba(255, 92, 122, 0.06); }
@@ -1974,7 +2180,7 @@ body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996);
   flex: 0 0 auto; width: 21px; height: 21px; border-radius: 50%;
   display: grid; place-items: center; font-size: 11px; font-weight: 700;
 }
-.mic-result[data-tone="wait"] .mv-ico { color: var(--pri);   background: rgba(56, 189, 248, 0.14); }
+.mic-result[data-tone="wait"] .mv-ico { color: var(--pri);   background: rgba(var(--pri-rgb), 0.14); }
 .mic-result[data-tone="ok"]   .mv-ico { color: var(--green); background: rgba(49, 217, 174, 0.16); }
 .mic-result[data-tone="warn"] .mv-ico { color: var(--amber); background: rgba(245, 180, 92, 0.16); }
 .mic-result[data-tone="bad"]  .mv-ico { color: var(--red);   background: rgba(255, 92, 122, 0.16); }
@@ -1986,7 +2192,7 @@ body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996);
    Deliberately small and additive: the point is that every interactive thing
    responds the same way, not that anything looks new. */
 :focus-visible {
-  outline: 2px solid rgba(56, 189, 248, 0.75); outline-offset: 2px;
+  outline: 2px solid rgba(var(--pri-rgb), 0.75); outline-offset: 2px;
 }
 .btn, .btn-sm, .dock-btn, .auto-sw, .status-tile, .presence-toggle, .nav-btn {
   -webkit-tap-highlight-color: transparent;
@@ -2013,11 +2219,36 @@ body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996);
   .guide-art { display: none; }
 }
 
-/* the home grid stacks earlier than it used to: below ~1180px the side column
-   was scrolling inside a 300px slot, which hid the presence card entirely */
-@media (max-width: 1180px) and (min-width: 981px) {
-  .home-grid { grid-template-columns: 1fr; }
-  .home-side-col { overflow-y: visible; }
+/* Between the three-column layout and the stacked one there is a band where
+   three columns cannot all be legible (the side column was scrolling inside a
+   300px slot, which hid the presence card entirely). There the rail keeps its
+   column next to the face and the work feed moves to its own full-width row.
+
+   The rows must then size to their CONTENT and the home view must scroll. With
+   `min-height: 0` inherited from the three-column rules, the second row stayed
+   inside the viewport, so the side column's five cards were flex-shrunk into
+   two-pixel slivers and the whole right-hand side of the app read as a set of
+   stray hairlines at exactly the window sizes most people use. `auto` rows plus
+   `align-content: start` let each card take the height it needs; the rail keeps
+   its own internal scroll so the telemetry stays where it was. */
+@media (max-width: 1280px) and (min-width: 981px) {
+  .home-grid {
+    grid-template-columns: 236px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: start;
+    overflow-y: auto; overflow-x: hidden;
+  }
+  /* Both first-row items must contribute a real height. With the inherited
+     `min-height: 0` their automatic minimum size is zero, so an `auto` row
+     resolved to 0px and the rail and the face vanished completely while the
+     stage overflowed its invisible box. */
+  .home-face-col { min-height: auto; }
+  .face-stage { min-height: clamp(280px, 40vh, 430px); }
+  .home-side-col {
+    grid-column: 1 / -1;
+    min-height: auto;
+    overflow-y: visible;
+  }
 }
 
 /* reduced motion: the guide and the mood still *change*, they just stop

@@ -166,6 +166,95 @@ def types_module():
     return types.ModuleType("sounddevice")
 
 
+class ProbeRateLadderTest(unittest.TestCase):
+    """The probe must walk the same rate ladder as the capture layer.
+
+    Regression: test_device asked every device for 16 kHz and nothing else, so a
+    fixed-rate desktop microphone — USB interface, webcam, Bluetooth HFP — failed
+    to open in the diagnostic while main.py was recording from the very same
+    device happily. The user was then told their voice was not reaching JARVIS,
+    which was not true: only the rate we asked for was wrong.
+    """
+
+    def _sd_that_only_accepts(self, good_rate):
+        """A fake sounddevice whose InputStream rejects every rate but one."""
+        import types
+        sd = types.ModuleType("sounddevice")
+        attempts = []
+
+        class Stream:
+            def __init__(self, samplerate, **kw):
+                attempts.append(samplerate)
+                if samplerate != good_rate:
+                    raise Exception("Invalid sample rate")
+                self._cb = kw.get("callback")
+
+            def start(self):
+                rng = np.random.default_rng(11)
+                for _ in range(3):
+                    block = rng.integers(-3000, 3000, 1024).astype(np.int16)
+                    self._cb(block.reshape(-1, 1), 1024, None, None)
+            def stop(self): pass
+            def close(self): pass
+
+        sd.InputStream = lambda **kw: Stream(**kw)
+        return sd, attempts
+
+    def test_fixed_rate_mic_is_measured_not_declared_dead(self):
+        sd, attempts = self._sd_that_only_accepts(48000)
+        with mock.patch.dict(sys.modules, {"sounddevice": sd}):
+            r = md.test_device(0, seconds=0.4)
+        self.assertTrue(r["opened"], "a 48 kHz-only mic must still open")
+        self.assertEqual(r["rate"], 48000)
+        self.assertTrue(r["delivered"])
+        self.assertNotEqual(r["verdict"], "no_signal")
+        # The preferred rate is still tried first, so a laptop mic is untouched.
+        self.assertEqual(attempts[0], 16000)
+        self.assertIn(48000, attempts)
+
+    def test_the_probe_and_the_capture_layer_share_one_ladder(self):
+        self.assertEqual(md._rates_to_try(), ad.input_rate_ladder())
+        self.assertEqual(ad.input_rate_ladder()[0], 16000)
+
+    def test_a_device_that_opens_at_no_rate_reports_an_actionable_message(self):
+        sd = types_module()
+        sd.InputStream = lambda **kw: (_ for _ in ()).throw(
+            Exception("Invalid sample rate"))
+        with mock.patch.dict(sys.modules, {"sounddevice": sd}):
+            r = md.test_device(0)
+        self.assertFalse(r["opened"])
+        self.assertEqual(r["rate"], 0)
+        self.assertIn("exclusive", r["message"].lower())
+
+    def test_diagnose_reports_the_rate_it_opened_at(self):
+        devs = [{"name": "USB Mic", "hostapi": 0, "max_input_channels": 1,
+                 "default_samplerate": 48000.0, "default": True,
+                 "default_comm": False, "index": 0, "openable": True}]
+        with mock.patch.dict(sys.modules, {"sounddevice": _sd(devs, default_in=0)}), \
+             mock.patch.object(md, "test_device",
+                               return_value={"opened": True, "rate": 48000,
+                                             "delivered": True, "peak_rms": 3000.0,
+                                             "floor_rms": 80.0,
+                                             "speech_headroom": 37.0,
+                                             "noisy": False, "verdict": "ok",
+                                             "message": ""}):
+            d = md.diagnose(0)
+        self.assertEqual(d["verdict"], "ok")
+        self.assertEqual(d["rate"], 48000)
+
+    def test_diagnose_tolerates_a_probe_that_reports_no_rate(self):
+        # webui and older callers may hand diagnose a stubbed probe result.
+        with mock.patch.object(md, "test_device",
+                               return_value={"opened": False, "delivered": False,
+                                             "peak_rms": 0.0, "floor_rms": 0.0,
+                                             "speech_headroom": 0.0,
+                                             "noisy": False,
+                                             "verdict": "no_signal",
+                                             "message": ""}):
+            d = md.diagnose(0)
+        self.assertEqual(d["rate"], 0)
+
+
 class DiagnoseTest(unittest.TestCase):
     def test_diagnose_composes_the_chain(self):
         devs = [{"name": "Headset Mic", "hostapi": 0, "max_input_channels": 1,
@@ -266,6 +355,183 @@ class RateFallbackTest(unittest.TestCase):
             self.assertEqual(ad.input_open_rate(1), 16000)
             ad.clear_rate_cache()
             self.assertEqual(ad.input_open_rate(1), 16000)   # re-probed fresh
+
+
+class QuietRoomTest(unittest.TestCase):
+    """A silent room is not a broken microphone.
+
+    Regression, measured on a real desktop PC: three consecutive 1.2 s windows
+    of the SAME working microphone — same host API, nothing moved — read 202.8,
+    20.9 and 133.1. That spread is wider than the gap between the silence and
+    speech thresholds, so one short sample cannot classify a device. The old
+    probe classified from exactly one, which is how a perfectly good mic in a
+    quiet room was told, in red, that "nothing is reaching me".
+    """
+
+    def _stream(self, per_attempt_rms):
+        """Fake sounddevice delivering different blocks on each open."""
+        import types
+        sd = types.ModuleType("sounddevice")
+        opens = {"n": 0}
+
+        class Stream:
+            def __init__(self, **kw):
+                self._cb = kw.get("callback")
+                i = min(opens["n"], len(per_attempt_rms) - 1)
+                self._rms = per_attempt_rms[i]
+                opens["n"] += 1
+
+            def start(self):
+                for rms in self._rms:
+                    amp = int(min(32767, rms * 1.7321))
+                    block = (np.random.default_rng(5).integers(
+                        -amp, max(amp, 1), size=1024)).astype(np.int16)
+                    self._cb(block.reshape(-1, 1), 1024, None, None)
+
+            def stop(self): pass
+            def close(self): pass
+
+        sd.InputStream = lambda **kw: Stream(**kw)
+        return sd
+
+    def _run(self, per_attempt_rms):
+        with mock.patch.dict(sys.modules, {"sounddevice": self._stream(per_attempt_rms)}):
+            return md.test_device(0, seconds=0.3)
+
+    def test_a_quiet_room_is_inconclusive_not_a_failure(self):
+        r = self._run([[60, 70, 65, 62]])
+        self.assertTrue(r["opened"] and r["delivered"])
+        self.assertEqual(r["verdict"], "quiet")
+        self.assertNotEqual(r["verdict"], "no_signal")
+        self.assertIn("say something", r["message"].lower())
+
+    def test_a_transient_dead_sample_does_not_condemn_the_microphone(self):
+        # First open digitally silent, second one plainly carrying speech.
+        r = self._run([[2, 3, 1], [80, 2600, 2400]])
+        self.assertEqual(r["verdict"], "ok")
+        self.assertEqual(r["attempts_used"], 2)
+        self.assertEqual(len(r["peaks"]), 2)
+        self.assertGreaterEqual(r["peak_rms"], md.DEAD_RMS)
+
+    def test_a_genuinely_dead_device_is_still_reported_dead(self):
+        # The retry must not become a way of never believing a dead reading.
+        r = self._run([[2, 3, 1]])
+        self.assertEqual(r["verdict"], "no_signal")
+        self.assertEqual(r["attempts_used"], md.DEFAULT_ATTEMPTS)
+
+    def test_a_good_reading_is_not_re_measured(self):
+        r = self._run([[2600, 2500]])
+        self.assertEqual(r["verdict"], "ok")
+        self.assertEqual(r["attempts_used"], 1)
+
+    def test_the_sample_is_long_enough_for_a_person_to_react(self):
+        self.assertGreaterEqual(md.DEFAULT_TEST_SECONDS, 2.0)
+        # ...but never long enough to feel like a hang.
+        self.assertLessEqual(md.DEFAULT_TEST_SECONDS, 5.0)
+
+    def test_dead_is_far_below_a_quiet_room(self):
+        # A quiet room really does read in the tens-to-low-hundreds; the old
+        # 90 RMS "silence" line sat INSIDE that population, which is the bug.
+        self.assertLess(md.DEAD_RMS, 40.0)
+
+
+_QUIET_PROBE = {"opened": True, "delivered": True, "peak_rms": 64.0,
+                "floor_rms": 58.0, "speech_headroom": 1.1, "noisy": False,
+                "blocks": 30, "attempts_used": 1, "peaks": [64.0],
+                "verdict": "quiet", "message": "the microphone is delivering "
+                                                  "audio, but nothing above room "
+                                                  "noise arrived"}
+_DEAD_PROBE = {"opened": True, "delivered": True, "peak_rms": 3.0,
+               "floor_rms": 2.0, "speech_headroom": 1.5, "noisy": False,
+               "blocks": 30, "attempts_used": 2, "peaks": [3.0, 2.0],
+               "verdict": "no_signal", "message": "every sample was "
+                                                    "digitally silent"}
+
+
+def _one_default_mic():
+    return [{"name": "Desktop Mic", "hostapi": 0, "max_input_channels": 1,
+             "default_samplerate": 44100.0, "default": True,
+             "default_comm": False, "index": 0, "openable": True}]
+
+
+class DiagnoseQuietTest(unittest.TestCase):
+    """The chain diagnosis must not turn an inconclusive reading into a fault."""
+
+    def test_a_quiet_room_is_reported_as_inconclusive(self):
+        with mock.patch.dict(sys.modules,
+                             {"sounddevice": _sd(_one_default_mic(), default_in=0)}), \
+             mock.patch.object(md, "test_device", return_value=dict(_QUIET_PROBE)):
+            d = md.diagnose(0)
+        self.assertEqual(d["verdict"], "quiet")
+        self.assertTrue(d["inconclusive"])
+        self.assertNotEqual(d["verdict"], "failed")
+        # Nothing is broken, so nothing is reported as broken...
+        self.assertEqual(d["problems"], [])
+        self.assertEqual(d["capture"], "working")
+        self.assertEqual(d["signal"], "quiet")
+        # ...but the user is still told what to do about it.
+        self.assertTrue(d["fixes"])
+        self.assertTrue(any("speak" in f.lower() for f in d["fixes"]))
+
+    def test_a_digitally_silent_device_is_still_a_problem(self):
+        with mock.patch.dict(sys.modules,
+                             {"sounddevice": _sd(_one_default_mic(), default_in=0)}), \
+             mock.patch.object(md, "test_device", return_value=dict(_DEAD_PROBE)):
+            d = md.diagnose(0)
+        self.assertEqual(d["verdict"], "failed")
+        self.assertFalse(d["inconclusive"])
+        self.assertTrue(d["problems"])
+        self.assertTrue(any("silent" in p.lower() for p in d["problems"]))
+
+    def test_diagnose_gives_the_probe_time_to_hear_speech(self):
+        with mock.patch.dict(sys.modules,
+                             {"sounddevice": _sd(_one_default_mic(), default_in=0)}), \
+             mock.patch.object(md, "test_device",
+                               return_value=dict(_QUIET_PROBE)) as probe:
+            md.diagnose(0)
+        self.assertEqual(probe.call_args.kwargs.get("seconds"),
+                         md.DEFAULT_TEST_SECONDS)
+
+
+class WebVerdictContractTest(unittest.TestCase):
+    """Every verdict the backend can return must have a rendering in the UI.
+
+    A verdict with no entry in the web UI's MIC_VERDICT table falls through to
+    ``failed`` — a red error panel. That is exactly how a healthy microphone in
+    a quiet room got painted as broken, so the two lists are pinned together
+    here rather than left to drift.
+    """
+
+    def _ui_verdict_keys(self):
+        js = (Path(__file__).resolve().parent.parent
+              / "ui_web" / "js" / "app.js").read_text(encoding="utf-8")
+        start = js.index("const MIC_VERDICT = {")
+        body = js[start:js.index("\n  };", start)]
+        keys = set()
+        for line in body.splitlines()[1:]:
+            stripped = line.strip()
+            if stripped.endswith(": {"):
+                keys.add(stripped[:-3].strip())
+        return keys
+
+    def test_every_backend_verdict_is_rendered(self):
+        keys = self._ui_verdict_keys()
+        self.assertIn("ok", keys)
+        for verdict in ("ok", "faint", "quiet", "no_signal"):
+            self.assertIn(verdict, keys,
+                          f"{verdict} would fall through to the red failure "
+                          f"panel in the UI")
+
+    def test_no_signal_is_the_only_red_signal_verdict(self):
+        js = (Path(__file__).resolve().parent.parent
+              / "ui_web" / "js" / "app.js").read_text(encoding="utf-8")
+        start = js.index("const MIC_VERDICT = {")
+        body = js[start:js.index("\n  };", start)]
+        for name in ("ok", "faint", "quiet"):
+            block_start = body.index(name + ": {")
+            block = body[block_start:block_start + 260]
+            self.assertNotIn('tone: "bad"', block,
+                             f"a {name} reading must not be painted as an error")
 
 
 if __name__ == "__main__":

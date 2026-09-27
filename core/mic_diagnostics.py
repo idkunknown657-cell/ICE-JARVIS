@@ -48,6 +48,29 @@ FAINT_RMS = 240.0         # above silence but below real speech
 NOISE_FLOOR_MAX = 420.0   # device idle noise above this = hot/noisy input
 SPEECH_HEADROOM_WANT = 3.0
 
+# ── The measurements that made this module honest about its own limits ────────
+#
+# Measured on one ordinary desktop PC, three consecutive 1.2 s windows of the
+# SAME working microphone, same host API:
+#
+#     endpoint 1 (MME)       202.8   20.9  133.1
+#     endpoint 6 (DirectSo)  222.2  220.2  194.7
+#     endpoint 5 (DirectSo)    1.4  101.9   99.7
+#
+# A single short window can read 1.4 on a microphone that reads 102 a second
+# later. That spread is wider than the gap between the silence and speech
+# thresholds, so ONE sample cannot classify a microphone — and the old code
+# classified from exactly one sample, which is how a working microphone in a
+# quiet room got reported as "nothing is reaching me".
+#
+# So: sample long enough that a person can actually say something, give a
+# digitally-silent reading a second chance before believing it, and keep a
+# verdict for "I genuinely could not tell" that is not a fault.
+DEAD_RMS = 12.0           # at or below this the input is digitally silent,
+                          # which is NOT the same as a quiet room
+DEFAULT_TEST_SECONDS = 2.5   # long enough for the user to react and speak
+DEFAULT_ATTEMPTS = 2         # one retry before believing a dead reading
+
 # ── Windows permission registry (ConsentStore) ──────────────────────────────
 _CONSENT_KEY = (r"Software\Microsoft\Windows\CurrentVersion"
                 r"\CapabilityAccessManager\ConsentStore\microphone")
@@ -200,18 +223,142 @@ def _windows_comm_default_index(devs) -> int | None:
 
 # ── The real test: open it and measure ───────────────────────────────────────
 
-def test_device(index: int | None = None, seconds: float = 0.9) -> dict:
-    """Open the microphone and MEASURE. Never raises.
+def _rates_to_try() -> tuple[int, ...]:
+    """The input rates a microphone may be opened at, preferred first.
 
-    Returns {opened, delivered, peak_rms, floor_rms, speech_headroom,
-             noisy, verdict, message}. `opened` means the stream started;
-             `delivered` means frames actually arrived; the RMS numbers mean
-             a real waveform was captured. A device can be opened AND deliver
-             AND still be 'no_signal' — that is the desktop bug this module
-             exists to name.
+    Shared with the capture layer on purpose (audio_devices.input_rate_ladder).
+    This probe used to ask for 16 kHz and nothing else, so a fixed-rate
+    endpoint — USB interfaces, many webcams, Bluetooth HFP — failed to open
+    here while main.py was recording from the very same device at its own rate.
+    The test then told the user their voice was not reaching JARVIS when the
+    only thing that was broken was the rate we asked for. Falls back to the
+    same ladder inline if audio_devices cannot be imported.
     """
-    out = {"opened": False, "delivered": False, "peak_rms": 0.0,
+    try:
+        from core import audio_devices
+        ladder = tuple(audio_devices.input_rate_ladder())
+        if ladder:
+            return ladder
+    except Exception:
+        pass
+    return (16000, 48000, 44100, 96000, 24000, 32000, 8000, 11025)
+
+
+def _open_and_measure(index: int | None, seconds: float,
+                      numpy_mod, sd_mod) -> dict:
+    """One capture window: open, listen, close, measure. No judgement.
+
+    Returns raw facts only — the verdict is decided by test_device, which owns
+    the retry policy. Keeping the two apart is deliberate: mixing "what did I
+    hear" with "what does it mean" is how a single unlucky window became a
+    diagnosis.
+    """
+    res = {"opened": False, "rate": 0, "delivered": False, "peak_rms": 0.0,
+           "floor_rms": 0.0, "blocks": 0, "error": ""}
+
+    blocks: list = []
+    frames_seen = [0]
+
+    def _cb(indata, n, *_a):
+        frames_seen[0] += n
+        try:
+            blocks.append(numpy_mod.frombuffer(indata,
+                                               dtype=numpy_mod.int16).astype(numpy_mod.float32))
+        except Exception:
+            pass
+
+    # The device's own rate first, then the rest of the ladder — the same order
+    # the capture layer uses, so "the test passes" and "JARVIS can hear you"
+    # cannot disagree. The first rate that opens is the one we measure on.
+    st = None
+    open_err = None
+    for rate in _rates_to_try():
+        try:
+            candidate = sd_mod.InputStream(samplerate=rate, channels=1,
+                                           dtype="int16", blocksize=1024,
+                                           device=index, callback=_cb)
+        except Exception as e:
+            open_err = e
+            continue
+        try:
+            candidate.start()
+        except Exception as e:
+            open_err = e
+            try:
+                candidate.stop(); candidate.close()
+            except Exception:
+                pass
+            continue
+        st = candidate
+        res["rate"] = rate
+        break
+
+    if st is None:
+        res["error"] = _explain_open_error(str(open_err or ""))
+        return res
+
+    res["opened"] = True
+    try:
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < max(0.3, float(seconds)):
+            time.sleep(0.05)
+    except Exception as e:
+        res["error"] = f"capture was interrupted: {e}"
+        return res
+    finally:
+        try:
+            st.stop(); st.close()
+        except Exception:
+            pass
+
+    res["delivered"] = frames_seen[0] > 0
+    if not res["delivered"]:
+        res["error"] = ("the stream opened but the driver delivered no "
+                        "audio frames (device occupied, gated, or a "
+                        "silent endpoint)")
+        return res
+    if not blocks:
+        res["error"] = "frames arrived but could not be decoded"
+        return res
+
+    pcm = numpy_mod.concatenate(blocks)
+    # Per-1024-sample-block RMS: the min is the device's own noise floor, the
+    # max over the window is the loudest thing the mic heard.
+    n_blocks = max(1, len(pcm) // 1024)
+    rms_per_block = []
+    for i in range(n_blocks):
+        chunk = pcm[i * 1024:(i + 1) * 1024]
+        if chunk.size:
+            rms_per_block.append(float(numpy_mod.sqrt(numpy_mod.mean(chunk * chunk))))
+    res["blocks"] = len(rms_per_block)
+    res["floor_rms"] = round(min(rms_per_block), 1) if rms_per_block else 0.0
+    res["peak_rms"] = round(max(rms_per_block), 1) if rms_per_block else 0.0
+    return res
+
+
+def test_device(index: int | None = None, seconds: float = DEFAULT_TEST_SECONDS,
+                attempts: int = DEFAULT_ATTEMPTS) -> dict:
+    """Open the microphone and MEASURE it. Never raises.
+
+    Returns {opened, rate, delivered, peak_rms, floor_rms, speech_headroom,
+             noisy, blocks, attempts_used, peaks, verdict, message}.
+
+    The verdicts are:
+      ok        real audio that looks like a microphone carrying speech
+      faint     audio is arriving, but very quietly
+      quiet     audio is arriving and nothing above its own noise was heard —
+                INCONCLUSIVE. Usually a silent room, not a fault, so this is
+                never reported as a problem.
+      no_signal digitally silent (peak below DEAD_RMS) on every attempt — the
+                device opens and delivers frames, yet no waveform is there
+
+The `quiet` verdict exists because a one-shot sample cannot tell a silent room
+from a muted microphone, and the old code guessed "muted" — see the measurement
+note beside DEAD_RMS.
+    """
+    out = {"opened": False, "rate": 0, "delivered": False, "peak_rms": 0.0,
            "floor_rms": 0.0, "speech_headroom": 0.0, "noisy": False,
+           "blocks": 0, "attempts_used": 0, "peaks": [],
            "verdict": "no_signal", "message": ""}
     try:
         import numpy as np
@@ -220,69 +367,51 @@ def test_device(index: int | None = None, seconds: float = 0.9) -> dict:
         out["message"] = f"audio libraries unavailable: {e}"
         return out
 
-    blocks: list = []
-    frames_seen = [0]
-    opened_err = ""
+    tries = max(1, int(attempts))
+    best = None
+    for _attempt in range(tries):
+        res = _open_and_measure(index, seconds, np, sd)
+        out["attempts_used"] += 1
+        out["rate"] = out["rate"] or res["rate"]
 
-    def _cb(indata, n, *_a):
-        frames_seen[0] += n
-        try:
-            blocks.append(np.frombuffer(indata, dtype=np.int16).astype(np.float32))
-        except Exception:
-            pass
-
-    try:
-        st = sd.InputStream(samplerate=16000, channels=1, dtype="int16",
-                            blocksize=1024, device=index, callback=_cb)
-        st.start()
-        out["opened"] = True
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < max(0.3, float(seconds)):
-            time.sleep(0.05)
-        st.stop(); st.close()
-        out["delivered"] = frames_seen[0] > 0
-        if not out["delivered"]:
-            out["message"] = ("the stream opened but the driver delivered no "
-                              "audio frames (device occupied, gated, or a "
-                              "silent endpoint)")
+        if not res["opened"]:
+            out["message"] = res["error"]
             return out
-    except Exception as e:
-        out["message"] = _explain_open_error(str(e))
+        out["opened"] = True
+        if not res["delivered"]:
+            out["delivered"] = False
+            out["message"] = res["error"]
+            return out
+        out["delivered"] = True
+        out["peaks"].append(res["peak_rms"])
+
+        if best is None or res["peak_rms"] > best["peak_rms"]:
+            best = res
+        # Enough evidence: stop asking the user to wait. Only a dead reading is
+        # worth re-measuring, because only a dead reading can be wrong.
+        if res["peak_rms"] >= DEAD_RMS:
+            break
+
+    if best is None:
+        out["message"] = "the microphone was never captured"
         return out
 
-    if not blocks:
-        out["message"] = "frames arrived but could not be decoded"
-        return out
-
-    import numpy as _np
-    pcm = _np.concatenate(blocks)
-    # Per-1024-sample-block RMS: block 0 is the device's own noise floor,
-    # the max over the window is the loudest thing the mic heard.
-    n_blocks = max(1, len(pcm) // 1024)
-    rms_per_block = []
-    for i in range(n_blocks):
-        chunk = pcm[i * 1024:(i + 1) * 1024]
-        if chunk.size:
-            rms_per_block.append(float(_np.sqrt(_np.mean(chunk * chunk))))
-    floor = min(rms_per_block) if rms_per_block else 0.0
-    peak = max(rms_per_block) if rms_per_block else 0.0
-    out["floor_rms"] = round(floor, 1)
-    out["peak_rms"] = round(peak, 1)
+    peak, floor = best["peak_rms"], best["floor_rms"]
+    out["peak_rms"] = peak
+    out["floor_rms"] = floor
+    out["blocks"] = best["blocks"]
     out["speech_headroom"] = round(peak / floor, 1) if floor > 1 else float(peak > 0)
+    headroom = peak / floor if floor > 1 else 99.0
 
-    if peak < SILENCE_RMS:
+    if peak < DEAD_RMS:
         out["verdict"] = "no_signal"
-        out["message"] = ("no audio signal above silence — the device opens "
-                          "but is muted, gated by Windows privacy, or not "
-                          "the microphone you are speaking into")
-    elif peak < FAINT_RMS:
-        out["verdict"] = "faint"
-        out["message"] = ("signal barely above silence — try speaking; if this "
-                          "repeats, the input gain in Windows sound settings "
-                          "is very low")
-    else:
+        out["message"] = (
+            "the device opened and delivered frames, but every sample was "
+            "digitally silent — check the microphone's own mute switch, "
+            "Windows input level, or that this is the device you are "
+            "speaking into, then test again while talking")
+    elif peak >= FAINT_RMS:
         out["noisy"] = floor > NOISE_FLOOR_MAX
-        headroom = peak / floor if floor > 1 else 99.0
         if headroom < SPEECH_HEADROOM_WANT and peak < FAINT_RMS * 4:
             out["verdict"] = "faint"
             out["message"] = ("signal present but with almost no headroom over "
@@ -291,6 +420,19 @@ def test_device(index: int | None = None, seconds: float = 0.9) -> dict:
             out["verdict"] = "ok"
             out["message"] = ("signal detected and it looks like a microphone "
                               "that carries speech")
+    elif headroom >= SPEECH_HEADROOM_WANT:
+        # Real waveform above its own noise floor, just quiet.
+        out["verdict"] = "faint"
+        out["message"] = ("audio is arriving, but quietly — try speaking a "
+                          "little louder or closer; if it repeats, raise the "
+                          "input level in Windows sound settings")
+    else:
+        # Audio present, nothing above its own noise. That is a silent room OR
+        # a muted path, and the difference cannot be measured from here.
+        out["verdict"] = "quiet"
+        out["message"] = ("the microphone is delivering audio, but nothing "
+                          "above room noise arrived during the test — say "
+                          "something while the test runs and check again")
     return out
 
 
@@ -316,9 +458,18 @@ def _explain_open_error(msg: str) -> str:
 
 # ── Chain diagnosis ──────────────────────────────────────────────────────────
 
-def diagnose(index: int | None = None, seconds: float = 0.9) -> dict:
+def diagnose(index: int | None = None,
+             seconds: float | None = None) -> dict:
     """The full chain, honestly labelled. This is the 'what is actually
-    broken' answer for the Settings page and the voice diagnostic tool."""
+    broken' answer for the Settings page and the voice diagnostic tool.
+
+    The sample is deliberately long enough for a person to say something
+    into it. A short probe of a quiet room measures the room, not the mic,
+    and reporting that as a fault is how a working microphone gets told
+    "nothing is reaching me".
+    """
+    if seconds is None:
+        seconds = DEFAULT_TEST_SECONDS
     perm = windows_permission()
     devs = devices()
     if index is None:
@@ -339,6 +490,9 @@ def diagnose(index: int | None = None, seconds: float = 0.9) -> dict:
     device_present = bool(devs)
     capture_ok = bool(t["opened"] and t["delivered"])
     signal_ok = t["verdict"] in ("ok", "faint")
+    # Heard nothing, but the stream itself was alive: the mic is fine and the
+    # room was quiet. That is not a defect, so it must not be reported as one.
+    inconclusive = capture_ok and t["verdict"] == "quiet"
 
     if not device_present:
         problems.append("No recording device is visible to JARVIS at all.")
@@ -359,16 +513,31 @@ def diagnose(index: int | None = None, seconds: float = 0.9) -> dict:
             fixes.append("Pick a different microphone below, then press Test — "
                          "and close apps that may hold the mic (Discord, Teams, "
                          "OBS).")
-    if capture_ok and not signal_ok:
-        problems.append("The microphone opens but delivers no usable signal: "
+    if capture_ok and inconclusive:
+        # Not a problem - a missing answer. Say so in the same words the
+        # module uses everywhere else, and give the one action that resolves it.
+        fixes.append("That reading was inconclusive, not a failure: the "
+                     "microphone opened and streamed, but the room was silent. "
+                     "Press Test again and speak - say anything - while it "
+                     "listens.")
+    if capture_ok and t["verdict"] == "no_signal":
+        # Digitally silent on every sample, which IS a real fault and usually
+        # the Windows per-device mute or a zero input level.
+        problems.append("The microphone opens but is digitally silent: "
                         + t["message"])
-        fixes.append("Speak while testing; check this is the device you are "
-                     "actually talking into (Windows 'default' moves when a "
-                     "headset is plugged in), and raise its input level in "
-                     "Windows sound settings.")
+        fixes.append("Check this is the device you are actually talking into "
+                     "(Windows 'default' moves when a headset is plugged in), "
+                     "that it is not muted in Windows sound settings, and raise "
+                     "its input level.")
 
-    verdict = "ok" if (device_present and perm["allowed"] and signal_ok) else \
-              ("faint" if capture_ok and t["verdict"] == "faint" else "failed")
+    if device_present and perm["allowed"] and not signal_ok and not inconclusive:
+        verdict = "failed"
+    elif inconclusive:
+        verdict = "quiet"
+    elif capture_ok and signal_ok:
+        verdict = "ok" if t["verdict"] == "ok" else "faint"
+    else:
+        verdict = "failed"
 
     return {
         "device_present": device_present,
@@ -378,9 +547,16 @@ def diagnose(index: int | None = None, seconds: float = 0.9) -> dict:
         "capture": "working" if capture_ok else "failed",
         "signal": ("detected" if t["verdict"] == "ok"
                    else "weak" if t["verdict"] == "faint"
+                   else "quiet" if inconclusive
                    else "no signal"),
+        "inconclusive": inconclusive,
         "levels": {"peak_rms": t["peak_rms"], "floor_rms": t["floor_rms"],
                    "speech_headroom": t["speech_headroom"], "noisy": t["noisy"]},
+        # The rate the probe actually opened at. 0 means it never opened. Worth
+        # reporting: a mic that only opens at 48 kHz is a normal device, not a
+        # broken one, and the number is what proves the probe used the same
+        # ladder as the capture layer.
+        "rate": t.get("rate", 0),
         "problems": problems,
         "fixes": fixes,
         "verdict": verdict,

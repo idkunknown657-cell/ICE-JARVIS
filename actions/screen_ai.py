@@ -73,6 +73,30 @@ def _clamp(x: int, y: int) -> tuple[int, int]:
     return int(x), int(y)
 
 
+# Each pywinauto call in this file is a COM round trip INTO the target process,
+# and Windows puts no timeout on those. A window that is busy, modal, painting a
+# heavy page or simply not pumping messages parks the call — and this tool, and
+# therefore the whole task, with it. That was the "PC control is stuck" report:
+# the state pill sat on EXECUTING while the accessibility walk slept inside a
+# syscall. Wrapping the blocking phases in the engine's ceiling means one bad
+# window costs a second and then falls through to vision, which is what the
+# cascade is for.
+_UIA_BUDGET_S = 2.0
+
+
+def _bounded(fn, default=None, seconds: float = _UIA_BUDGET_S):
+    """Run a blocking accessibility call with a wall-clock ceiling."""
+    if _engine is not None and hasattr(_engine, "run_bounded"):
+        try:
+            return _engine.run_bounded(fn, seconds, default)
+        except Exception:
+            pass
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
 def _remember_target_ctx(label: str, x: int, y: int, w: int, h: int,
                          source: str) -> None:
     """Feed the shared context memory so "move it there" has something to mean."""
@@ -239,35 +263,53 @@ def _target_element_info(parameters: dict):
     if not _uia_available():
         return None
     win_name = (parameters.get("window") or _TARGET_WINDOW or "").strip()
-    try:
-        if win_name:
-            try:
-                wins = pywinauto.findwindows.find_windows(
-                    title_re=rf".*{re.escape(win_name)}.*",
-                    backend="uia", visible_only=True)
-            except Exception:
-                wins = []
-            if not wins:
-                return None
-            return pywinauto.Desktop(backend="uia").window(handle=wins[0]).element_info
-        return _focused_window()
-    except Exception as e:
-        _log(f"window resolve failed: {e}")
-        return None
+
+    def _resolve_info():
+        try:
+            if win_name:
+                try:
+                    wins = pywinauto.findwindows.find_windows(
+                        title_re=rf".*{re.escape(win_name)}.*",
+                        backend="uia", visible_only=True)
+                except Exception:
+                    wins = []
+                if not wins:
+                    return None
+                return pywinauto.Desktop(backend="uia").window(handle=wins[0]).element_info
+            return _focused_window()
+        except Exception as e:
+            _log(f"window resolve failed: {e}")
+            return None
+
+    return _bounded(_resolve_info)
 
 
 def _uia_inventory(parameters: dict) -> tuple[list, str | None]:
     """(elements, error). error set when the tree cannot genuinely be opened."""
-    win = _target_element_info(parameters)
-    if win is None:
-        return [], "foreground window is not UIA-inspectable"
-    try:
-        kids = win.children() or []
-    except Exception as e:
-        return [], f"cannot read UIA tree: {e}"
-    out = []
-    _walk(kids, out)
-    return out, None
+    def _read_tree():
+        """Returns (elements, error) — exactly one of the two is meaningful."""
+        win = _target_element_info(parameters)
+        if win is None:
+            return (None, "foreground window is not UIA-inspectable")
+        try:
+            kids = win.children() or []
+        except Exception as e:
+            return (None, f"cannot read UIA tree: {e}")
+        out = []
+        _walk(kids, out)
+        return (out, None)
+
+    # Bounded as one phase: resolving the window and walking its tree are both
+    # COM work against the same process, so the ceiling covers the pair. A
+    # timeout is reported as its own cause — "busy and not answering" is a
+    # different problem from "no tree here" and suggests a different next move.
+    elements, error = _bounded(_read_tree, ("timeout", None))
+    if elements is None:
+        return [], error
+    if elements == "timeout":
+        return [], ("the foreground window is not answering accessibility - "
+                    "it is busy or not responding")
+    return elements, None
 
 
 def _exact_hit(query: str, elements: list) -> list:
@@ -311,11 +353,14 @@ def _pick_match(query: str, elements: list):
 
 def _element_at_point(x: int, y: int) -> str:
     """UIA element name under a physical point (used to verify moves)."""
-    try:
-        elm = pywinauto.Desktop(backend="uia").element_from_point(x, y)
-        return (elm.name or "").strip()
-    except Exception:
-        return ""
+    def _look():
+        try:
+            elm = pywinauto.Desktop(backend="uia").element_from_point(x, y)
+            return (elm.name or "").strip()
+        except Exception:
+            return ""
+
+    return _bounded(_look, "") or ""
 
 
 # ── Vision fallback (imported lazily from computer_control) ──────────────────
@@ -417,26 +462,44 @@ def _window_action(parameters: dict) -> str:
     if not _uia_available():
         _TARGET_WINDOW = name
         return f"Targeting window '{name}' (no UIA; vision mode)."
-    wins = []
-    try:
-        wins = pywinauto.findwindows.find_windows(
-            title_re=rf".*{re.escape(name)}.*", backend="uia", visible_only=True)
-    except Exception:
-        wins = []
-    if not wins:
-        _TARGET_WINDOW = name
+    def _find_and_focus():
+        """find_windows + set_focus in one bounded phase. Returns (found, title).
+
+        set_focus SENDS A MESSAGE to the target and waits for it to be handled,
+        which is the single most likely place in this tool to wait forever: a
+        splash screen, a hung game or a crashed app's ghost window never
+        answers. Bounded, so targeting a window that is not listening costs a
+        couple of seconds and reports honestly instead of freezing.
+        """
+        try:
+            wins = pywinauto.findwindows.find_windows(
+                title_re=rf".*{re.escape(name)}.*", backend="uia", visible_only=True)
+        except Exception:
+            wins = []
+        if not wins:
+            return (False, "")
+        info = pywinauto.Desktop(backend="uia").window(handle=wins[0]).element_info
+        try:
+            info.set_focus()
+        except Exception:
+            pass
+        try:
+            return (True, info.name)
+        except Exception:
+            return (True, name)
+
+    # "nothing matches that title" and "the window is there but deaf" are
+    # different problems with different fixes, so they stay different answers.
+    _TIMED_OUT = ("timeout", "")
+    found, title = _bounded(_find_and_focus, _TIMED_OUT)
+    _TARGET_WINDOW = name
+    if found == "timeout":
+        return (f"I could not confirm a window matching '{name}' in time — "
+                f"either nothing matches it, or it is busy and not answering "
+                f"accessibility. I will keep targeting '{name}'.")
+    if not found:
         return (f"No visible window matching '{name}' right now. I will target "
                 f"'{name}' if it appears.")
-    _TARGET_WINDOW = name
-    info = pywinauto.Desktop(backend="uia").window(handle=wins[0]).element_info
-    try:
-        info.set_focus()
-    except Exception:
-        pass
-    try:
-        title = info.name
-    except Exception:
-        title = name
     return f"Now targeting window '{title}'."
 
 
