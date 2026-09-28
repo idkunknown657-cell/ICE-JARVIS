@@ -12,3 +12,10 @@ for name in ['vendor/three.min.js', 'js/markdown.js', 'js/motion.js', 'js/avatar
         html = html.replace('</body>', '<script>\n' + js + '\n</script>\n</body>')
 Path('preview_bundle.html').write_text(html, encoding='utf-8')
 print('bundle:', len(html), 'bytes')
+
+# demo.html for the website: same bundle, but the site's index page hides its
+# own avatar while hosting this one in an iframe, so the real UI can run here
+# without a second, half-hidden copy behind the landing page.
+demo = html.replace('</body>', '<script>document.documentElement.classList.add("embedded-demo");</script>\n</body>')
+Path('docs/demo.html').write_text(demo, encoding='utf-8')
+print('demo  :', len(demo), 'bytes')

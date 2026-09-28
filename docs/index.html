@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICE JARVIS — a voice companion that runs on your own PC</title>
+<meta name="description" content="ICE JARVIS is an open-source Windows voice assistant: natural talk in English, Hindi and Hinglish, full PC control by voice, local memory, plugins — and zero telemetry.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b0f14' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand">ICE <span>JARVIS</span></div>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#setup">Setup</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#source">Source</a>
+      <a class="nav-cta" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <h1>ICE JARVIS</h1>
+  <p class="tag">A voice companion that runs on <b>your own machine</b>. It talks naturally — English, Hindi, Hinglish — remembers things locally, and controls your PC by voice.</p>
+  <div class="cta-row">
+    <a class="btn btn-main" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">⬇ Download ICE-Setup.exe</a>
+    <a class="btn btn-ghost" href="https://github.com/idkunknown657-cell/ICE-JARVIS">★ Star on GitHub</a>
+  </div>
+  <p class="ver">Latest release <b id="latest-ver">v1.1.2</b> · Windows 10/11 · no admin rights · no Python needed</p>
+
+  <div class="demo">
+    <div class="demo-frame">
+      <iframe src="demo.html" title="ICE JARVIS avatar demo — the real UI, running in your browser" loading="lazy"></iframe>
+    </div>
+    <p class="demo-note"><span class="dot">●</span> This is the <b>real interface</b> from the app, running live in your browser — the same avatar you get on your desktop.</p>
+  </div>
+
+  <div class="stats">
+    <div><b id="stat-ver">1.1.2</b><span>latest release</span></div>
+    <div><b>1274</b><span>tests passing</span></div>
+    <div><b>3</b><span>languages spoken</span></div>
+    <div><b>0</b><span>data leaves your PC</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section id="features">
+    <h2>What it does</h2>
+    <p class="sub">Everything runs locally — the only network calls it makes are to the AI model you configure.</p>
+    <div class="grid">
+      <div class="card"><h3><span class="ico">🎙️</span>Talks like a person</h3><p>Natural conversation in English, Hindi and Hinglish. It hears pauses, hears emotion, and answers out loud with a voice you pick.</p></div>
+      <div class="card"><h3><span class="ico">🖱️</span>Controls your PC by voice</h3><p>Mouse, keyboard, windows, typing, apps — full desktop automation. "Open Chrome and search for flights" is one sentence.</p></div>
+      <div class="card"><h3><span class="ico">🧠</span>Remembers on your disk</h3><p>Long-term memory, preferences and context live in local files you can open and read. Wipe them anytime; they never leave the machine.</p></div>
+      <div class="card"><h3><span class="ico">🤖</span>Autonomous mode</h3><p>Give it a goal and a time budget; it works, reports what it did, and stays inside the limits you set.</p></div>
+      <div class="card"><h3><span class="ico">🔌</span>Plugins &amp; mail</h3><p>Gmail and Calendar sign-in with Google OAuth, WhatsApp, YouTube, weather, notes — and a documented plugin API to add your own.</p></div>
+      <div class="card"><h3><span class="ico">🪟</span>A face that reacts</h3><p>A living avatar that breathes, listens and reacts to its voice — the one animating above is the shipped UI, not a mockup.</p></div>
+    </div>
+  </section>
+
+  <section id="setup">
+    <h2>Install in three steps</h2>
+    <p class="sub">The installer does everything — no Python, no commands, no admin prompt.</p>
+    <div class="steps">
+      <div class="step"><h3>Download the installer</h3><p><a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">ICE-Setup.exe</a> (~119&nbsp;MB). If SmartScreen asks, choose <i>More info → Run anyway</i> — the build is reproducible from source.</p></div>
+      <div class="step"><h3>Double-click it</h3><p>Installs for the current user, adds <b>ICE JARVIS</b> to the Start Menu, and shows up in <i>Settings → Apps</i> so it can be removed the normal way.</p></div>
+      <div class="step"><h3>Add a free key</h3><p>First launch opens setup: paste a free <a href="https://aistudio.google.com/apikey">Gemini API key</a> (~1 minute). That's the whole setup.</p></div>
+    </div>
+    <p class="sub" style="margin-top:18px">Prefer source? It's Python — no build step:</p>
+    <pre><span class="c"># requires Python 3.13 or 3.14</span>
+git clone https://github.com/idkunknown657-cell/ICE-JARVIS.git
+cd ICE-JARVIS
+setup.bat        <span class="c"># Windows — installs everything and starts ICE</span></pre>
+  </section>
+
+  <section id="privacy">
+    <div class="privacy">
+      <h2>Private by architecture</h2>
+      <ul>
+        <li><b>Keys, memory, conversations stay on your disk</b> — plain files in the app folder, nothing synced, nothing phoned home.</li>
+        <li><b>No telemetry, no accounts, no cloud</b> — the only outbound calls go to the AI endpoint you configure yourself.</li>
+        <li><b>Updates are opt-in and verified</b> — the app checks a manifest you can point anywhere, verifies the SHA-256, and never deletes your data when updating.</li>
+        <li><b>Open source, CC BY-NC 4.0</b> — read every line before you trust it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="source">
+    <h2>Build it, check it, break it</h2>
+    <p class="sub">Releases are built by GitHub Actions from tagged commits: PyInstaller freeze, Inno Setup installer, selftest of the packaged app, then the exe is published automatically.</p>
+    <div class="grid">
+      <div class="card"><h3><span class="ico">📦</span>Releases &amp; changelog</h3><p>Every version, with checksums: <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases">github.com/idkunknown657-cell/ICE-JARVIS/releases</a></p></div>
+      <div class="card"><h3><span class="ico">🧪</span>CI you can read</h3><p>1274 tests on every push, plus a smoke test of the packaged exe before a release is allowed out.</p></div>
+      <div class="card"><h3><span class="ico">📖</span>Full documentation</h3><p>Plugins, keyboard control, troubleshooting: the <a href="https://github.com/idkunknown657-cell/ICE-JARVIS#readme">readme</a> and <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/CHANGELOG.md">changelog</a>.</p></div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>ICE JARVIS — free, open-source, local-first. CC BY-NC 4.0.</span>
+    <span class="right"><a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a> · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases">Releases</a> · <a href="demo.html">Standalone demo</a></span>
+  </div>
+</footer>
+
+<script>
+// keep the version badges honest — read the real "latest" release from the GitHub API
+fetch("https://api.github.com/repos/idkunknown657-cell/ICE-JARVIS/releases/latest")
+  .then(r => r.ok ? r.json() : Promise.reject(r.status))
+  .then(rel => {
+    const v = (rel.tag_name || "").replace(/^v/, "");
+    if (v) {
+      for (const id of ["latest-ver", "stat-ver"]) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = id === "latest-ver" ? rel.tag_name : v;
+      }
+    }
+  })
+  .catch(() => { /* static fallback stays */ });
+</script>
+</body>
+</html>
