@@ -207,8 +207,9 @@ def download_and_stage(progress=None) -> dict:
             return {"ok": False, "err": "payload has no JARVIS.exe/main.py",
                     "path": ""}
         # keep the version we are moving to, for the record (written OUTSIDE
-        # the root so _payload_root's single-wrapper detection still works)
-        (payload / "STAGED_VERSION").write_text(info["latest"], encoding="utf-8")
+        # the payload so _payload_root's single-wrapper detection still works,
+        # and at the exact path pending_version() reads it back from)
+        (STAGING_DIR / "STAGED_VERSION").write_text(info["latest"], encoding="utf-8")
         return {"ok": True, "err": "", "path": str(root),
                 "version": info["latest"], "notes": info["notes"]}
     except Exception as e:
@@ -250,7 +251,10 @@ def apply_on_restart() -> dict:
         exe = Path(sys.executable) if getattr(sys, "frozen", False) \
             else Path(sys.executable)
         pid = os.getpid()
-        src = str(_payload_root(payload)) + "\\*"
+        # robocopy takes a DIRECTORY as its source (a trailing \* is "Invalid
+        # Parameter" exit 16) and copies its CONTENTS into the destination,
+        # merging — exactly the update semantics we want.
+        src = str(_payload_root(payload))
         # NOTE: goto-style flow on purpose — %tries% inside a parenthesized
         # block would expand at parse time and never increment.
         bat = (

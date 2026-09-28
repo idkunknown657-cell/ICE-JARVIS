@@ -127,6 +127,7 @@ class DownloadTest(unittest.TestCase):
         self.vf.write_text("2026.9.20", encoding="utf-8")
         for attr, val in (("STAGING_DIR", self.staging),
                           ("STAGED_MARK", self.staging / "payload"),
+                          ("STAGED_VERSION", self.staging / "STAGED_VERSION"),
                           ("VERSION_FILE", self.vf)):
             p = mock.patch.object(updater, attr, val)
             p.start()
@@ -154,8 +155,9 @@ class DownloadTest(unittest.TestCase):
         self.assertTrue(r["ok"], r.get("err"))
         payload = Path(r["path"])
         self.assertTrue((payload / "JARVIS.exe").exists())
-        self.assertEqual((payload / "STAGED_VERSION").read_text(encoding="utf-8"),
-                         "2026.9.21")
+        # the version marker lives at staging level, where pending_version()
+        # reads it — writing it inside the payload made the label always blank
+        self.assertEqual(updater.pending_version(), "2026.9.21")
         self.assertTrue(updater.pending())
 
     def test_wrapped_zip_root_is_stripped(self):
@@ -226,6 +228,9 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("start \"\"", bat)
         # /E copy — never /MIR, the user's config must survive updates
         self.assertNotIn("/MIR", bat)
+        # robocopy's source is the payload DIRECTORY — a trailing \* is
+        # "Invalid Parameter", exit 16, and the update would silently not apply
+        self.assertNotIn("\\*", bat)
 
     def test_nothing_staged_is_clean_no(self):
         p = mock.patch.object(updater, "STAGED_MARK",
