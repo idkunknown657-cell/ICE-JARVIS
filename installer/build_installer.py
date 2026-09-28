@@ -77,7 +77,22 @@ PUBLISHER_REPO = "https://github.com/idkunknown657-cell/ICE-JARVIS"
 # ── small helpers ────────────────────────────────────────────────────────────
 
 def say(msg: str = "") -> None:
-    print(msg, flush=True)
+    """Print a progress line without ever dying about it.
+
+    GitHub's Windows runners hand this process a cp1252 console, and a single
+    unencodable character — the arrow in "zipping dist → zip" — killed the first
+    tagged release mid-build. Encode through the stream's own codec with
+    replacement so a decoration degrades to '?' instead of ending the release.
+    """
+    stream = sys.stdout
+    if stream is None:
+        return
+    text = str(msg)
+    try:
+        enc = stream.encoding or "ascii"
+        print(text.encode(enc, "replace").decode(enc), flush=True)
+    except Exception:
+        pass
 
 
 def step(msg: str) -> None:

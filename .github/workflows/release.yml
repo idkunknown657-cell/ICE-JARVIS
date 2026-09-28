@@ -15,6 +15,13 @@ on:
 permissions:
   contents: write
 
+# The runners' consoles are cp1252; without this, an em dash or arrow in any
+# tool's progress output is a UnicodeEncodeError — which is how the first
+# tagged release died.
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
 jobs:
   windows-installer:
     runs-on: windows-latest

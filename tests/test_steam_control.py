@@ -148,7 +148,12 @@ class LocalInstallTests(unittest.TestCase):
 
 class ActionOutputTests(unittest.TestCase):
     def test_unknown_resolution_message(self):
-        with patch("actions.steam_control._store_search", return_value=[]):
+        # The test is about "store search found nothing", so Steam itself must be
+        # faked as installed: on a machine without it, _purchase_app answers the
+        # installation question first and this test fails on any clean CI runner
+        # (and passes on any gamer's PC — the worst kind of test to keep).
+        with patch("actions.steam_control._steam_root", return_value=Path("C:/Steam")), \
+             patch("actions.steam_control._store_search", return_value=[]):
             out = sc.steam_control({"action": "purchase", "query": "zzz not a real game"})
         self.assertIn("Could not resolve", out)
         self.assertNotIn("Confirmation", out)

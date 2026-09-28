@@ -1,5 +1,9 @@
 # Runtime dependencies for ICE JARVIS. Optional features degrade gracefully when
 # an OS-specific integration is unavailable.
+# PyQt6 drives the legacy Qt interface (ui.py) and the tests for it. The shipped
+# interface is the WebView2 one, so a user never needs this — but the Qt GUI tests
+# cannot even import without it, which is how they failed on a clean machine.
+PyQt6>=6.7,<7
 google-genai>=1,<2
 requests>=2.31,<3
 websockets>=12,<16
