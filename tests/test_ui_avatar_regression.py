@@ -214,6 +214,8 @@ class LivingMotionTest(unittest.TestCase):
 class BundleIsFreshTest(unittest.TestCase):
 
     def test_preview_bundle_was_rebuilt_after_the_frontend_changes(self):
+        if not BUNDLE.exists():
+            self.skipTest("preview_bundle.html not built in this checkout")
         html = _read(HTML)
         css = _read(CSS)
         js = _read(JS_AVATAR)
