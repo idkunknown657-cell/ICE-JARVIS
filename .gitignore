@@ -86,3 +86,8 @@ update_staging/
 .freebuff/
 _orig_ui.py
 preview_bundle.html
+
+# ── Installer build output — release assets, never committed ─────────────────
+installer/Output/
+installer/redist/
+installer/build/

@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1011%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1274%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
@@ -14,6 +14,26 @@ your PC by voice — mouse, keyboard, windows, typing, everything.
 
 Everything personal stays on **your** PC: your API keys, your memory, your
 conversations. No telemetry, no accounts, no cloud.
+
+---
+
+## ⬇️ Install on Windows
+
+**[Download ICE-Setup.exe](https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe)** — then double-click it.
+
+No Python, no commands, no administrator prompt. It installs for the current user,
+adds **ICE JARVIS** to the Start Menu (and to the Desktop if you leave that box
+ticked), and appears in *Settings → Apps → Installed apps* so it can be removed the
+normal way. Installing a newer version over it keeps your keys, memory and
+settings untouched.
+
+The first launch opens a setup screen asking for a **free Gemini API key** (about a
+minute): [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+If anything looks wrong, open **ICE JARVIS (debug console)** from the Start Menu:
+same app, output attached, everything also written to `logs\jarvis.log`.
+
+> On Linux or macOS, or if you would rather run it from source, read on.
 
 ---
 
@@ -227,7 +247,9 @@ ICE-JARVIS/
 - Screen awareness, proactive comments and memory are each one toggle away from
   off (⚙ Settings).
 - Network calls come from four places, and nowhere else: the AI providers you
-  configure, the update manifest on GitHub, the public data feeds listed below
+  configure (including your provider's own sign-in page and token endpoint, and
+  only when you press *Sign in*), the update manifest on GitHub, the public data
+  feeds listed below
   (only when you ask a question about the world), and — only once you have set
   up an account in ⚙ Settings → Mail — your own mail server. No telemetry, no
   analytics, and nothing about you or your machine is sent to any of them.
@@ -235,6 +257,15 @@ ICE-JARVIS/
   spoken, logged, or shown back in the interface, and is sent to no one but your
   own provider. Reading a message does not mark it as read. Sending anything
   stops at an on-screen confirmation showing the recipient and the text first.
+- **Signing in to mail** (⚙ Settings → Mail) opens Google's or Microsoft's own
+  login page in your own browser — JARVIS never sees your login, and the password
+  is typed into their page, not into this app. What is kept afterwards is an
+  OAuth token in your local `config/api_keys.json`, refreshed against that
+  provider's token endpoint (`oauth2.googleapis.com/token`, or
+  `login.microsoftonline.com/common/oauth2/v2.0/token`) and nothing else. Those
+  two endpoints are the only network calls a sign-in adds, and only after you
+  press the button. **Sign out** removes the tokens and keeps an app password if
+  you saved one.
 - The world lookups need no account and no key. Your saved home location stays
   in your own `config/api_keys.json`; it is sent to a feed only as the plain
   coordinates of the question you just asked ("what is overhead right now"),

@@ -1,0 +1,114 @@
+name: release
+
+# Push a tag (v1.1.0) and GitHub builds ICE-Setup.exe on a clean Windows machine,
+# publishes it on the Release, and updates the in-app updater's manifest.
+# Nothing needs to be built or uploaded by hand.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v1.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Resolve the version
+        id: v
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Build ICE-Setup.exe
+        run: python installer/build_installer.py --version ${{ steps.v.outputs.version }} --tag ${{ steps.v.outputs.tag }}
+
+      # The frozen build proves it is complete before anyone downloads it:
+      # every app module imports and every shipped asset is where the app looks
+      # for it. Run with the console build so the report is readable in the log.
+      - name: Verify the packaged app
+        run: dist\JARVIS\JARVIS-Debug.exe --selftest
+
+      - name: Smoke-test the windowed build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\JARVIS\JARVIS.exe" -PassThru
+          Start-Sleep -Seconds 25
+          if ($p.HasExited) {
+            Write-Host "JARVIS.exe exited early with code $($p.ExitCode)"
+          } else {
+            Write-Host "JARVIS.exe is running — stopping it"
+            Stop-Process -Id $p.Id -Force
+          }
+          if (Test-Path "logs\jarvis.log") {
+            Write-Host "--- tail of logs/jarvis.log ---"
+            Get-Content "logs\jarvis.log" -Tail 40
+          }
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.v.outputs.tag }}"
+          $version = "${{ steps.v.outputs.version }}"
+
+          $notes = @"
+          ## ICE JARVIS $version
+
+          **Windows:** download ``ICE-Setup.exe`` and run it. No Python, no commands, no
+          administrator rights — it installs for the current user, adds a Start Menu entry,
+          offers a desktop shortcut, and appears in *Installed apps* so it can be removed
+          the normal way.
+
+          After installing, first launch opens the setup screen where you paste a free
+          Gemini API key (~1 minute): https://aistudio.google.com/apikey
+
+          Upgrading over an older install keeps your keys, memory and settings.
+
+          ### Verifying the download
+          ``SHA256SUMS.txt`` holds the checksums: ``certutil -hashfile ICE-Setup.exe SHA256``
+          "@
+          $notes | Out-File -FilePath release-notes.md -Encoding utf8
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "ICE JARVIS $version" --notes-file release-notes.md
+          } else {
+            gh release edit $tag --title "ICE JARVIS $version" --notes-file release-notes.md
+          }
+
+          gh release upload $tag `
+            installer/Output/ICE-Setup.exe `
+            installer/Output/ICE-JARVIS-Windows-x64.zip `
+            installer/Output/update.json `
+            installer/Output/SHA256SUMS.txt `
+            --clobber

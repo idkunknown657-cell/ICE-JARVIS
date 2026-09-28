@@ -13,6 +13,7 @@ import base64
 import hashlib
 import re
 import secrets
+import sys
 import socket
 import string
 import time
@@ -35,7 +36,14 @@ try:
 except Exception:
     pass
 
-BASE_DIR    = Path(__file__).resolve().parent.parent
+# Where the config, certs and uploads live. Frozen, that means beside the installed
+# exe — the same rule memory/config_manager.py and webui.py already follow. The old
+# `Path(__file__).parent.parent` resolved into _internal/ in a packaged build, so the
+# dashboard read a config file that was not there and kept its certificate somewhere
+# an upgrade replaces (forcing every phone to re-accept it after each update).
+BASE_DIR    = (Path(sys.executable).resolve().parent
+               if getattr(sys, "frozen", False)
+               else Path(__file__).resolve().parent.parent)
 STATIC_DIR  = Path(__file__).parent / "static"
 PORT        = 8000
 MAX_UPLOAD_MB = 500

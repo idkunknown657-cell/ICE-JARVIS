@@ -2,6 +2,90 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
 
+## Unreleased — one download, no Python, no commands
+
+Until now JARVIS was something you *ran from a source checkout*: install Python,
+install twenty packages, keep a terminal around. That is a fine way to work on
+something and a terrible way to hand it to anyone.
+
+- **`ICE-Setup.exe`.** Double-click and JARVIS is installed for the current user —
+  no administrator prompt, no command line, no Python on the machine. Start Menu
+  group, optional desktop shortcut (on whichever desktop Windows actually uses,
+  including a redirected OneDrive one), and a real entry under *Settings → Apps →
+  Installed apps* that uninstalls it again. Proper icon, publisher, version and
+  copyright in the file properties too, not just in a readme.
+- **Upgrading never touches your things.** The payload deliberately contains no
+  user data at all — no `config/api_keys.json`, no certificates, no memory state,
+  no logs — and the build refuses to run if a secret is still findable in what it
+  is about to ship. Proved by planting a key, a memory file and a settings file,
+  then installing a newer build over them: all three came through untouched.
+- **Uninstalling asks before it takes anything with it**, and the default answer is
+  *keep my data*, so a silent or scripted uninstall cannot destroy someone's keys
+  and memory by accident.
+- **A console build ships beside it.** `JARVIS.exe` opens windowless; *ICE JARVIS
+  (debug console)* in the Start Menu is the same app with its output attached and
+  everything mirrored to `logs/jarvis.log` — because "it started and nothing
+  happened" needs somewhere to look. A startup crash now writes
+  `logs/startup-crash.log` *and* shows a dialog saying where that file is.
+- **The packaged app checks itself, and CI refuses to publish a bad one.**
+  `JARVIS.exe --selftest` imports every module the build claims to contain, plus
+  17 key libraries and the data files the app reads off disk. It earnt its keep
+  immediately: it caught 54 modules missing from the bundle, including every one
+  of the `actions/*` tools JARVIS reaches for by name, and then an install that
+  looked perfectly healthy with **all 42 of its abilities absent** —
+  `core/action_loader.py` discovers tools by scanning that folder for `.py` files,
+  so they now ship as files rather than baked-in modules.
+- **Browser automation without a second download.** Playwright's driver is in the
+  payload; its 450 MB of browsers are a tick-box that runs
+  `JARVIS.exe --install-browser-deps`, because JARVIS drives the Chrome or Edge
+  already on the PC first and only needs its own engines on a machine with
+  neither. The installer also carries Microsoft's WebView2 bootstrapper and only
+  runs it when the runtime is actually missing, since without it there is no
+  window at all.
+- **One version number.** `core/version.py` used to keep its own copy of the
+  version beside the `VERSION` file the updater and the installer both use — two
+  copies means one of them is wrong every release. It reads the file now.
+- **Three install-only bugs fixed on the way.** The phone dashboard resolved its
+  config and certificates relative to its own source file, which inside a packaged
+  build pointed into `_internal/`: it read a config file that was not there and
+  stored its certificate somewhere an upgrade replaces, forcing every phone to
+  re-accept it after each update. The dashboard's pages and the frozen app's
+  `BASE_DIR` were the other two.
+
+## Unreleased — sign in to your mail the way the provider intends
+
+Pasting an app password works, and it is not what someone expects when they press
+*connect my Gmail*. This is the real thing: press **Sign in**, and your own browser
+opens Google's or Microsoft's login page. When you finish, the account connects to
+JARVIS by itself.
+
+- **It opens your system browser, not a window inside JARVIS** — deliberately.
+  Google refuses sign-in from embedded browsers outright ("this browser or app may
+  not be secure") and Microsoft discourages it, so a webview would be a button that
+  cannot work. The app watches the same flow and connects the account the moment
+  the browser is done.
+- **Public client + PKCE (RFC 8252), no client secret anywhere.** A provider's
+  client secret cannot ship in a repo people run on their own machines, so you
+  paste your own client ID once — roughly two minutes, and the app links to the
+  page that creates it — and a `client_secret` stays optional for providers that
+  want one.
+- **The callback is a loopback server on `127.0.0.1`** bound to an ephemeral port
+  that exists only for the length of one sign-in and is torn down on completion,
+  cancellation or timeout. `state` is checked and a mismatch is refused as the CSRF
+  it is: no code is stored, and nothing is exchanged.
+- **Tokens are refreshed with 120 seconds of leeway**, so one cannot expire
+  mid-conversation, and a rotated refresh token replaces the old one instead of
+  leaving both behind. IMAP and SMTP authenticate with `XOAUTH2`; an app password
+  keeps working beside a sign-in for providers that have none.
+- **Signing out drops the tokens and keeps a saved app password**, clearing removes
+  both, and no password, access token, refresh token or client ID can reach a
+  sentence — every failure path runs through a scrubber first.
+- **Two bugs found and fixed while building it.** Saving the app-password form
+  destroyed a saved sign-in, and the client-ID step deleted the very field it had
+  just asked you to fill in, so it could never be completed. A third was found by
+  the new bridge-contract test: a *Pair phone* button called a backend method that
+  did not exist, and only looked alive because the offline preview's mock faked it.
+
 ## Unreleased — it can read and send your actual mail
 
 "Check my mail" used to mean opening Gmail in a browser and clicking around it.
