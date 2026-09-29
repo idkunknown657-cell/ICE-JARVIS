@@ -5,19 +5,41 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ICE JARVIS — a voice companion that runs on your own PC</title>
 <meta name="description" content="ICE JARVIS is an open-source Windows voice assistant: natural talk in English, Hindi and Hinglish, full PC control by voice, local memory, plugins — and zero telemetry.">
+<link rel="canonical" href="https://idkunknown657-cell.github.io/ICE-JARVIS/">
+<meta name="theme-color" content="#0b0f14">
+<meta name="author" content="FatihMakes">
+<meta name="keywords" content="voice assistant, Windows, open source, offline AI, local memory, Hindi, Hinglish, PC control, Gemini, JARVIS">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ICE JARVIS">
+<meta property="og:title" content="ICE JARVIS — a voice companion that runs on your own PC">
+<meta property="og:description" content="Talk to your PC like a person. English, Hindi and Hinglish, full desktop control by voice, local memory, no telemetry. Free Windows installer.">
+<meta property="og:url" content="https://idkunknown657-cell.github.io/ICE-JARVIS/">
+<meta property="og:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="ICE JARVIS — a voice companion that runs on your own PC">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ICE JARVIS — a voice companion that runs on your own PC">
+<meta name="twitter:description" content="Open-source Windows voice assistant: English, Hindi, Hinglish, full PC control, local memory, zero telemetry.">
+<meta name="twitter:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b0f14' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<a class="skip" href="#main">Skip to content</a>
+
 <nav>
   <div class="wrap">
-    <div class="brand">ICE <span>JARVIS</span></div>
+    <a class="brand" href="./">ICE <span>JARVIS</span></a>
     <div class="links">
       <a href="#features">Features</a>
-      <a href="#setup">Setup</a>
-      <a href="#privacy">Privacy</a>
-      <a href="#source">Source</a>
+      <a href="install.html">Install</a>
+      <a href="download.html">Downloads</a>
+      <a href="faq.html">FAQ</a>
+      <a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a>
       <a class="nav-cta" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">Download</a>
     </div>
   </div>
@@ -30,24 +52,47 @@
     <a class="btn btn-main" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">⬇ Download ICE-Setup.exe</a>
     <a class="btn btn-ghost" href="https://github.com/idkunknown657-cell/ICE-JARVIS">★ Star on GitHub</a>
   </div>
-  <p class="ver">Latest release <b id="latest-ver">v1.1.2</b> · Windows 10/11 · no admin rights · no Python needed</p>
+  <p class="ver">Latest release <b data-latest-tag>v1.1.2</b> · Windows 10/11 · no admin rights · no Python needed</p>
 
   <div class="demo">
     <div class="demo-frame">
       <iframe src="demo.html" title="ICE JARVIS avatar demo — the real UI, running in your browser" loading="lazy"></iframe>
     </div>
-    <p class="demo-note"><span class="dot">●</span> This is the <b>real interface</b> from the app, running live in your browser — the same avatar you get on your desktop.</p>
+    <p class="demo-note"><span class="dot">●</span> This is the <b>real interface</b> from the app, running live in your browser — the same avatar, motion and voice meter you get on your desktop. Nothing is uploaded: the demo runs entirely on this page.</p>
   </div>
 
   <div class="stats">
-    <div><b id="stat-ver">1.1.2</b><span>latest release</span></div>
-    <div><b>1274</b><span>tests passing</span></div>
+    <div><b data-latest-version>1.1.2</b><span>latest release</span></div>
+    <div><b>1297</b><span>tests passing</span></div>
     <div><b>3</b><span>languages spoken</span></div>
     <div><b>0</b><span>data leaves your PC</span></div>
   </div>
 </header>
 
-<main class="wrap">
+<main class="wrap" id="main">
+
+  <section id="new">
+    <h2>What changed in <span data-latest-tag>v1.1.2</span></h2>
+    <p class="sub">Every release is built by GitHub Actions from a tagged commit, then verified before it is published. The newest one fixes how the app updates itself.</p>
+    <div class="grid">
+      <div class="card">
+        <h4>Updates actually apply now</h4>
+        <p>The swap step handed <code>robocopy</code> a source it rejects (<code>folder\*</code>), so a staged update silently never landed. It now copies the staged folder properly — and a rehearsal proved the whole path: download, SHA-256 check, swap, relaunch.</p>
+      </div>
+      <div class="card">
+        <h4>Your data survives the upgrade</h4>
+        <p>Keys, memory and settings are never part of the payload. In the rehearsal a planted <code>config/api_keys.json</code>, <code>memory/long_term.json</code> and <code>config/settings.json</code> came through the update byte-for-byte identical.</p>
+      </div>
+      <div class="card">
+        <h4>A green test suite again</h4>
+        <p>1297 tests on Python 3.13 and 3.14, plus a smoke test of the packaged <code>JARVIS.exe</code> before anything is allowed to ship. The failures that had been red for days are fixed, not muted.</p>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:16px">
+      Full history: <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/CHANGELOG.md">CHANGELOG.md</a>
+      · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases">all releases</a>
+    </p>
+  </section>
 
   <section id="features">
     <h2>What it does</h2>
@@ -59,22 +104,43 @@
       <div class="card"><h3><span class="ico">🤖</span>Autonomous mode</h3><p>Give it a goal and a time budget; it works, reports what it did, and stays inside the limits you set.</p></div>
       <div class="card"><h3><span class="ico">🔌</span>Plugins &amp; mail</h3><p>Gmail and Calendar sign-in with Google OAuth, WhatsApp, YouTube, weather, notes — and a documented plugin API to add your own.</p></div>
       <div class="card"><h3><span class="ico">🪟</span>A face that reacts</h3><p>A living avatar that breathes, listens and reacts to its voice — the one animating above is the shipped UI, not a mockup.</p></div>
+      <div class="card"><h3><span class="ico">🌍</span>Answers about the real world</h3><p>Live aircraft, earthquakes, natural events and satellites, read directly from public feeds — no account, no key, nothing stored.</p></div>
+      <div class="card"><h3><span class="ico">📈</span>Trading &amp; market analysis</h3><p>Indicators, backtests, order-flow reads and a paper journal — analysis on your machine, with risk limits you define.</p></div>
+      <div class="card"><h3><span class="ico">📱</span>Phone dashboard</h3><p>An optional local dashboard, served over TLS from your own PC with an AES-encrypted channel, so you can reach JARVIS from the couch.</p></div>
     </div>
   </section>
 
   <section id="setup">
     <h2>Install in three steps</h2>
-    <p class="sub">The installer does everything — no Python, no commands, no admin prompt.</p>
+    <p class="sub">The installer does everything — no Python, no commands, no admin prompt. <a href="install.html">The full guide has screenshots-of-truth: what SmartScreen says, how to verify the download, and how to uninstall cleanly.</a></p>
     <div class="steps">
-      <div class="step"><h3>Download the installer</h3><p><a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">ICE-Setup.exe</a> (~119&nbsp;MB). If SmartScreen asks, choose <i>More info → Run anyway</i> — the build is reproducible from source.</p></div>
+      <div class="step"><h3>Download the installer</h3><p><a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">ICE-Setup.exe</a> (~119&nbsp;MB). If SmartScreen asks, choose <i>More info → Run anyway</i> — the build is reproducible from source, and the <a href="download.html#verify">SHA-256 to check it against</a> is published with every release.</p></div>
       <div class="step"><h3>Double-click it</h3><p>Installs for the current user, adds <b>ICE JARVIS</b> to the Start Menu, and shows up in <i>Settings → Apps</i> so it can be removed the normal way.</p></div>
       <div class="step"><h3>Add a free key</h3><p>First launch opens setup: paste a free <a href="https://aistudio.google.com/apikey">Gemini API key</a> (~1 minute). That's the whole setup.</p></div>
     </div>
     <p class="sub" style="margin-top:18px">Prefer source? It's Python — no build step:</p>
-    <pre><span class="c"># requires Python 3.13 or 3.14</span>
+    <div class="copybox">
+<pre><span class="c"># requires Python 3.13 or 3.14</span>
 git clone https://github.com/idkunknown657-cell/ICE-JARVIS.git
 cd ICE-JARVIS
 setup.bat        <span class="c"># Windows — installs everything and starts ICE</span></pre>
+    </div>
+  </section>
+
+  <section id="verify">
+    <h2>Check what you downloaded</h2>
+    <p class="sub">You should not have to trust a download link. Every release ships <code>SHA256SUMS.txt</code> beside the installer, so you can prove the file you have is the file that was built.</p>
+    <div class="grid two">
+      <div class="card">
+        <h4>One command, Windows</h4>
+        <p><code>certutil -hashfile ICE-Setup.exe SHA256</code> — compare the result to the line in <code>SHA256SUMS.txt</code>. Same hash, same bytes.</p>
+      </div>
+      <div class="card">
+        <h4>Or in PowerShell</h4>
+        <p><code>(Get-FileHash .\ICE-Setup.exe -Algorithm SHA256).Hash</code> — case-insensitive comparison is fine here.</p>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:14px"><a href="download.html#verify">Downloads, checksums and the full verification walk-through →</a></p>
   </section>
 
   <section id="privacy">
@@ -94,8 +160,8 @@ setup.bat        <span class="c"># Windows — installs everything and starts IC
     <p class="sub">Releases are built by GitHub Actions from tagged commits: PyInstaller freeze, Inno Setup installer, selftest of the packaged app, then the exe is published automatically.</p>
     <div class="grid">
       <div class="card"><h3><span class="ico">📦</span>Releases &amp; changelog</h3><p>Every version, with checksums: <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases">github.com/idkunknown657-cell/ICE-JARVIS/releases</a></p></div>
-      <div class="card"><h3><span class="ico">🧪</span>CI you can read</h3><p>1274 tests on every push, plus a smoke test of the packaged exe before a release is allowed out.</p></div>
-      <div class="card"><h3><span class="ico">📖</span>Full documentation</h3><p>Plugins, keyboard control, troubleshooting: the <a href="https://github.com/idkunknown657-cell/ICE-JARVIS#readme">readme</a> and <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/CHANGELOG.md">changelog</a>.</p></div>
+      <div class="card"><h3><span class="ico">🧪</span>CI you can read</h3><p>1297 tests on every push, plus a smoke test of the packaged exe before a release is allowed out. The workflows live in <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/tree/main/.github/workflows">.github/workflows</a>.</p></div>
+      <div class="card"><h3><span class="ico">📖</span>Documentation</h3><p>Install guide, FAQ and download verification are on this site; the deep detail is in the <a href="https://github.com/idkunknown657-cell/ICE-JARVIS#readme">readme</a> and <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/CHANGELOG.md">changelog</a>.</p></div>
     </div>
   </section>
 
@@ -104,24 +170,30 @@ setup.bat        <span class="c"># Windows — installs everything and starts IC
 <footer>
   <div class="wrap">
     <span>ICE JARVIS — free, open-source, local-first. CC BY-NC 4.0.</span>
-    <span class="right"><a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a> · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases">Releases</a> · <a href="demo.html">Standalone demo</a></span>
+    <span class="right">
+      <a href="install.html">Install</a> · <a href="download.html">Downloads</a> · <a href="faq.html">FAQ</a> ·
+      <a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a> · <a href="demo.html">Standalone demo</a>
+    </span>
   </div>
 </footer>
 
-<script>
-// keep the version badges honest — read the real "latest" release from the GitHub API
-fetch("https://api.github.com/repos/idkunknown657-cell/ICE-JARVIS/releases/latest")
-  .then(r => r.ok ? r.json() : Promise.reject(r.status))
-  .then(rel => {
-    const v = (rel.tag_name || "").replace(/^v/, "");
-    if (v) {
-      for (const id of ["latest-ver", "stat-ver"]) {
-        const el = document.getElementById(id);
-        if (el) el.textContent = id === "latest-ver" ? rel.tag_name : v;
-      }
-    }
-  })
-  .catch(() => { /* static fallback stays */ });
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "ICE JARVIS",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "Windows 10, Windows 11, Linux, macOS",
+  "description": "A local-first open-source voice assistant for Windows: natural English, Hindi and Hinglish conversation, full PC control by voice, local memory, and no telemetry.",
+  "url": "https://idkunknown657-cell.github.io/ICE-JARVIS/",
+  "downloadUrl": "https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe",
+  "softwareVersion": "1.1.2",
+  "license": "https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/LICENSE",
+  "isAccessibleForFree": true,
+  "author": { "@type": "Person", "name": "FatihMakes" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
 </script>
+<script src="site.js" defer></script>
 </body>
 </html>

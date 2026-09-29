@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICE JARVIS — frequently asked questions</title>
+<meta name="description" content="Is ICE JARVIS free? Does it need Python? Where does my data go? What does it cost to run? Honest answers about the local-first Windows voice assistant.">
+<link rel="canonical" href="https://idkunknown657-cell.github.io/ICE-JARVIS/faq.html">
+<meta name="theme-color" content="#0b0f14">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="ICE JARVIS">
+<meta property="og:title" content="ICE JARVIS — frequently asked questions">
+<meta property="og:description" content="Cost, privacy, requirements, updates and uninstalling — answered plainly.">
+<meta property="og:url" content="https://idkunknown657-cell.github.io/ICE-JARVIS/faq.html">
+<meta property="og:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ICE JARVIS — FAQ">
+<meta name="twitter:description" content="Cost, privacy, requirements, updates and uninstalling — answered plainly.">
+<meta name="twitter:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b0f14' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="./">ICE <span>JARVIS</span></a>
+    <div class="links">
+      <a href="./#features">Features</a>
+      <a href="install.html">Install</a>
+      <a href="download.html">Downloads</a>
+      <a href="faq.html">FAQ</a>
+      <a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a>
+      <a class="nav-cta" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page wrap">
+  <p class="crumbs"><a href="./">ICE JARVIS</a> / FAQ</p>
+  <h1>Questions, answered</h1>
+  <p class="lede">The short, honest version — including the parts that are limitations rather than features.</p>
+  <div class="toc">
+    <a href="#installing">Installing</a>
+    <a href="#using">Using it</a>
+    <a href="#privacy">Privacy &amp; safety</a>
+    <a href="#working">Working on it</a>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+
+  <section id="installing">
+    <h2>Installing</h2>
+
+    <details class="qa">
+      <summary>Is it really free?</summary>
+      <div class="body">
+        <p>Yes. The app is free to download and use, and the source is published under <b>CC BY-NC 4.0</b> — non-commercial use, no charge, no account, no upsell screen. You can read every line before running it.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Do I need Python installed?</summary>
+      <div class="body">
+        <p>No. The installer carries its own Python runtime and every library — that is most of why <code>ICE-Setup.exe</code> is ~119 MB.</p>
+        <p>Python 3.13 or 3.14 is only needed for the <a href="install.html#source">from-source route</a>, where you clone the repository and double-click <code>setup.bat</code>.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Does installing it need administrator rights?</summary>
+      <div class="body">
+        <p>No. It installs for the current user only: nothing machine-wide, no services, no UAC prompt. It appears in <i>Settings → Apps → Installed apps</i> like any normal program, and uninstalls from there.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Windows says "Windows protected your PC". Is it a virus?</summary>
+      <div class="body">
+        <p>No — that is SmartScreen's <i>reputation</i> warning, which appears for any downloadable executable Microsoft has not seen enough times. A brand-new release of a small open-source project is exactly that case.</p>
+        <p>Click <b>More info → Run anyway</b>, or do what a cautious person does and <a href="download.html#verify">check the SHA-256</a> first. The checksums are published beside every release.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Can I use it without installing anything?</summary>
+      <div class="body">
+        <p>Yes. Every release also ships <code>ICE-JARVIS-Windows-x64.zip</code>. Unpack it anywhere, run <code>JARVIS.exe</code>. No registry entries, no Start Menu group — good for a USB stick or for keeping two versions side by side.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Which systems does it run on?</summary>
+      <div class="body">
+        <p>Windows 10 and 11 (64-bit) is the target and the only platform the installer is built for. Linux and macOS work from source and are tested less.</p>
+      </div>
+    </details>
+  </section>
+
+  <section id="using">
+    <h2>Using it</h2>
+
+    <details class="qa">
+      <summary>How much does it cost to run?</summary>
+      <div class="body">
+        <p>Nothing, in the normal case. Replies come from an AI provider, and the free tiers are generous: <a href="https://aistudio.google.com/apikey">Gemini</a> is primary, and GROQ, Cerebras, OpenRouter and Hugging Face work as free fallbacks. If one provider rate-limits you, JARVIS moves to the next instead of failing.</p>
+        <p>If you want a paid tier later, you paste that key in <b>⚙ Settings → API Keys</b> — nothing about the app changes.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Do I have to memorise commands?</summary>
+      <div class="body">
+        <p>No. There is no command list to learn. It understands intent, so <i>"open Chrome and search for flights to Delhi"</i>, <i>"turn the volume down"</i>, <i>"what's on my screen"</i> and <i>"remind me in ten minutes"</i> are all just sentences.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Which languages does it speak?</summary>
+      <div class="body">
+        <p>English, Hindi and Hinglish, and it handles the mix mid-sentence the way people actually talk. Emotional context is tracked as part of the conversation, so tone matters, not just words.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Does it work offline?</summary>
+      <div class="body">
+        <p>Partly, and it is worth being precise: the <b>brain</b> is a cloud model, so generating a new reply needs a connection. Everything else is local — memory, files, PC control, screen reading, the interface, the avatar, the update manifest check only happens when you allow it.</p>
+        <p>There is no bundled local model. If you want fully offline inference, this is not that app.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>How does it update, and can I stop it?</summary>
+      <div class="body">
+        <p>On start it reads a small JSON manifest from the releases page, which carries the new version, its download URL and its SHA-256. If you accept, the payload is downloaded, hashed, and staged — then applied on the <i>next</i> restart by a script that waits for the app to exit, so files are never swapped under a running process.</p>
+        <p>Your data is not in the payload at all: no keys, no memory, no logs. You can point the app at a manifest you host yourself, or simply not update — nothing forces it.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Can I reach it from my phone?</summary>
+      <div class="body">
+        <p>Yes, with the optional local dashboard: a small server on your own PC that your phone connects to over TLS with an encrypted channel. It is off unless you turn it on, and it stays inside your network unless you deliberately expose it.</p>
+      </div>
+    </details>
+  </section>
+
+  <section id="privacy">
+    <h2>Privacy &amp; safety</h2>
+
+    <details class="qa">
+      <summary>Does it send my data anywhere?</summary>
+      <div class="body">
+        <p>Only in these places, and nowhere else:</p>
+        <ul class="bullets">
+          <li><b>The AI provider you configured</b> — the conversation you are having, so it can be answered.</li>
+          <li><b>The update manifest on GitHub</b> — a plain read of a public file, when the app checks for updates.</li>
+          <li><b>Public data feeds</b> — only when you ask a question about the world (aircraft, earthquakes, natural events, satellites). Keyless, read-only.</li>
+          <li><b>Your own mail server</b> — only if you set up mail, and only for the mail you asked it to read or send.</li>
+        </ul>
+        <p>No telemetry, no analytics, no accounts, no crash reporting. Nothing about you or your machine is sent along with any of those requests.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Where are my API keys stored?</summary>
+      <div class="body">
+        <p>In <code>config/api_keys.json</code> inside the app folder on your own PC. It is git-ignored, is never part of a release, and the build refuses to run if it detects a secret in the payload it is about to ship. Mail passwords are never spoken, logged or shown back in the interface.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Is the microphone always listening and uploading?</summary>
+      <div class="body">
+        <p>The mic tile on the Home screen is a mute switch — click it and input stops. Windows' own microphone privacy gate applies to JARVIS like any other app, and <b>⚙ Settings → Voice &amp; Language → Test</b> measures real audio and tells you exactly which link is failing if it hears nothing.</p>
+        <p>Audio is used to transcribe what you said; it is not uploaded anywhere except as the text of your request to your own AI provider.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Giving an AI control of my mouse and keyboard sounds risky.</summary>
+      <div class="body">
+        <p>That is a reasonable instinct, so the app is built with brakes rather than assurances:</p>
+        <ul class="bullets">
+          <li><b>Autonomous mode is bounded</b> — a goal and a time budget you set, and it reports what it did afterwards.</li>
+          <li><b>Sending anything is confirmed first</b> — mail, for instance, stops at an on-screen confirmation showing the recipient and the text.</li>
+          <li><b>Self-training only changes what JARVIS believes.</b> It can never edit settings, keys, permissions or files, never drives the mouse on its own, stops the moment you speak, and is entirely disabled when memory is off.</li>
+          <li><b>Nothing is hidden</b> — every action is in the interface as it happens, and in <code>logs/jarvis.log</code>.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>How do I get a completely clean slate?</summary>
+      <div class="body">
+        <p>Delete <code>config/api_keys.json</code> and <code>memory/long_term.json</code> — the app runs first-time setup again. Uninstalling asks first, and its default answer is <b>keep my data</b>, so a reinstall keeps your keys and memory.</p>
+      </div>
+    </details>
+  </section>
+
+  <section id="working">
+    <h2>Working on it</h2>
+
+    <details class="qa">
+      <summary>Can I read and build the code myself?</summary>
+      <div class="body">
+        <p>Yes — the repository is the app. Clone it, run <code>setup.bat</code>, and you are running from source in one step. Releases are built by GitHub Actions on tagged commits: freeze with PyInstaller, compile the installer with Inno Setup, selftest the packaged executable, then publish.</p>
+        <p>You can build your own installer too: <code>installer/build_installer.py</code> does the whole thing, and refuses to run if it finds a secret in what it is about to ship.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>How stable is it, really?</summary>
+      <div class="body">
+        <p>1297 tests run on every push against Python 3.13 and 3.14, and a smoke test of the packaged <code>JARVIS.exe</code> runs before a release is allowed out. The packaged build also supports <code>JARVIS.exe --selftest</code>, which verifies every module and data file the build claims to contain — it has already caught installs that looked healthy while all 42 of their abilities were missing.</p>
+        <p>The test suite runs on your machine with one command, so you do not have to trust a badge: <code>python -m unittest discover -s tests</code>.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Something is broken. Where do I look?</summary>
+      <div class="body">
+        <p>Start <b>ICE JARVIS (debug console)</b> from the Start Menu — same app, output attached, everything mirrored to <code>logs/jarvis.log</code>. A startup crash writes <code>logs/startup-crash.log</code> and tells you where it is.</p>
+        <p>Then <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">open an issue</a> with the log and what you expected. It is a small project, so a clear report is genuinely useful.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Can I add my own tools?</summary>
+      <div class="body">
+        <p>Yes — there is a documented plugin API and examples in the repository's <code>plugins/</code> folder. The tool loader discovers them by scanning that folder, so a new plugin is a file, not a rebuild.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Why is it called ICE?</summary>
+      <div class="body">
+        <p>Because a companion that is calm, clear and quietly capable felt like ice rather than fire — and because the core on the home screen looks better frozen than burning.</p>
+      </div>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>ICE JARVIS — free, open-source, local-first. CC BY-NC 4.0.</span>
+    <span class="right"><a href="./">Home</a> · <a href="install.html">Install</a> · <a href="download.html">Downloads</a> · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">Ask something else</a></span>
+  </div>
+</footer>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is ICE JARVIS really free?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. The app is free to download and use, and the source is published under CC BY-NC 4.0 for non-commercial use. No account, no charge, no upsell." }
+    },
+    {
+      "@type": "Question",
+      "name": "Do I need Python installed to run ICE JARVIS?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. The Windows installer carries its own Python runtime and every library. Python 3.13 or 3.14 is only needed if you run it from source." }
+    },
+    {
+      "@type": "Question",
+      "name": "Does installing ICE JARVIS need administrator rights?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. It installs for the current user only, with no machine-wide changes, no services and no UAC prompt, and it uninstalls from Settings, Apps, Installed apps." }
+    },
+    {
+      "@type": "Question",
+      "name": "Where is my data stored and is anything uploaded?",
+      "acceptedAnswer": { "@type": "Answer", "text": "API keys, memory and conversations are plain files in the app folder on your own PC. There is no telemetry or analytics. Network calls go only to the AI provider you configure, the public update manifest, keyless public world-data feeds when you ask about them, and your own mail server if you set mail up." }
+    },
+    {
+      "@type": "Question",
+      "name": "What does ICE JARVIS cost to run?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Nothing in the normal case. Gemini's free tier is the primary provider and there are free fallbacks (GROQ, Cerebras, OpenRouter, Hugging Face) that the app switches to automatically when one is rate-limited." }
+    },
+    {
+      "@type": "Question",
+      "name": "Does ICE JARVIS work offline?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Partly. Memory, files, PC control, screen reading and the interface are all local, but generating a new reply uses a cloud model, so a connection is needed for new answers. There is no bundled local model." }
+    },
+    {
+      "@type": "Question",
+      "name": "How does ICE JARVIS update itself?",
+      "acceptedAnswer": { "@type": "Answer", "text": "It reads a small JSON manifest from the GitHub releases page, downloads the payload, verifies its SHA-256, stages it, and applies it on the next restart. The payload contains no user data, so keys, memory and settings are never overwritten." }
+    }
+  ]
+}
+</script>
+<script src="site.js" defer></script>
+</body>
+</html>

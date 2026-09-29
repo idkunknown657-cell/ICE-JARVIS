@@ -1,0 +1,7 @@
+# ICE JARVIS — https://idkunknown657-cell.github.io/ICE-JARVIS/
+# Everything here is public documentation; crawl all of it.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://idkunknown657-cell.github.io/ICE-JARVIS/sitemap.xml

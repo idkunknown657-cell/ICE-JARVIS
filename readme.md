@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1274%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1297%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
@@ -20,6 +20,8 @@ conversations. No telemetry, no accounts, no cloud.
 ## ⬇️ Install on Windows
 
 **[Download ICE-Setup.exe](https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe)** — then double-click it.
+
+Prefer to read first? **[The website](https://idkunknown657-cell.github.io/ICE-JARVIS/)** has the install guide, the FAQ, every checksum, and a live demo of the real interface running in your browser.
 
 No Python, no commands, no administrator prompt. It installs for the current user,
 adds **ICE JARVIS** to the Start Menu (and to the Desktop if you leave that box
@@ -199,7 +201,7 @@ python -m unittest discover -s tests -p "test_[a-u]*.py"
 python -m unittest discover -s tests -p "test_[v-z]*.py"
 ```
 
-Both halves pass — 1011 tests total.
+Both halves pass — 1297 tests total.
 
 ---
 
@@ -220,7 +222,7 @@ ICE-JARVIS/
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
 ├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
-└── tests/             # 1011 unit tests
+└── tests/             # 1297 unit tests
 ```
 
 ---
