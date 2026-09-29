@@ -17,6 +17,11 @@
 <meta name="twitter:title" content="Install ICE JARVIS on Windows">
 <meta name="twitter:description" content="Two minutes, no Python, no admin prompt — and a clean uninstall if you change your mind.">
 <meta name="twitter:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+<!-- Theme and motion flag, set before the first paint: a stored choice wins,
+     otherwise the system preference, otherwise the dark default (the site's
+     own look, and the app's). With scripting off none of this runs and every
+     word of every page is still visible. -->
+<script>try{var s=localStorage.getItem("ice-theme")||(window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",s)}catch(e){}document.documentElement.classList.add("js");</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b0f14' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -153,7 +158,7 @@ setup.bat        <span class="c"># Windows: finds Python, installs deps, checks 
         <tr><th>Launcher</th><th>Console</th><th>Use it when</th></tr>
         <tr><td><code>main.pyw</code></td><td>hidden</td><td>Normal daily use — errors go to <code>logs/jarvis.log</code></td></tr>
         <tr><td><code>start_debug.bat</code></td><td>visible</td><td>Something is misbehaving — every print and traceback, live, and in the log</td></tr>
-        <tr><td><code>python -m unittest discover -s tests</code></td><td>visible</td><td>You want to see the 1297 tests pass on your own machine</td></tr>
+        <tr><td><code>python -m unittest discover -s tests</code></td><td>visible</td><td>You want to see the 1306 tests pass on your own machine</td></tr>
       </table>
     </div>
     <div class="note">Building your own installer is possible too: <code>installer/build_installer.py</code> freezes the app with PyInstaller and compiles <code>ICE-Setup.exe</code> with Inno Setup. It refuses to build if it finds a secret in what it is about to ship.</div>
@@ -181,7 +186,7 @@ setup.bat        <span class="c"># Windows: finds Python, installs deps, checks 
 <footer>
   <div class="wrap">
     <span>ICE JARVIS — free, open-source, local-first. CC BY-NC 4.0.</span>
-    <span class="right"><a href="./">Home</a> · <a href="download.html">Downloads</a> · <a href="faq.html">FAQ</a> · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">Report a problem</a></span>
+    <span class="right"><a href="./">Home</a> · <a href="download.html">Downloads</a> · <a href="faq.html">FAQ</a> · <a href="privacy.html">Privacy</a> · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">Report a problem</a></span>
   </div>
 </footer>
 

@@ -27,11 +27,39 @@ loudly rather than quietly.
   a destination, when the baked-in version or test count disagrees with
   `VERSION` / reality, when the demo is stale or starts loading anything over
   the network, or when the sitemap, robots.txt and canonical URLs stop agreeing
-  with each other. 23 tests, all of them about invariants rather than markup.
+  with each other. 32 tests, all of them about invariants rather than markup.
 - **Findability done properly**: canonical URLs, Open Graph and Twitter cards
   with a generated 1200×630 image, a `SoftwareApplication` and `FAQPage` schema,
   `robots.txt`, a `sitemap.xml`, and a 404 page that is actually part of the
   site. Deployment is a GitHub Pages workflow, like everything else here.
+- **A light theme, with no flash of the wrong one.** The stored choice (or the
+  system preference) is applied by a four-line inline bootstrap in each page's
+  `<head>`, before the stylesheet is even parsed, so switching themes never
+  strobes. The palette is a variable swap rather than a second stylesheet.
+- **Motion that cannot break the page.** Sections fade up as they arrive, the
+  stat strip counts up, the navbar condenses and a reading-progress hairline
+  runs along the top, cards take a cursor-following highlight, and Chrome
+  crossfades between pages with the View Transitions API. Every one of those is
+  driven by JavaScript and switched off wholesale for anyone whose system asks
+  for reduced motion — with scripting disabled the pages are simply static and
+  complete, which `tests/test_website.py` asserts by proving the hiding rules
+  only exist under `html.js`.
+- **The demo is now a thing you can poke.** The live interface in the landing
+  page has viewport buttons — desktop, tablet, phone — a restart, and a link to
+  open it full size, so you can see the layout the app takes on a small window
+  without installing anything.
+- **A privacy policy that states facts rather than intentions** — and that
+  names the only `localStorage` key the site writes, the two requests a page
+  makes, and the four kinds of network call the application makes. Ad networks
+  require one; readers deciding whether to run an installer deserve one.
+- **One labelled ad slot, switched off.** `site.js` will not load an ad network
+  unless a publisher id is deliberately configured, and the single slot in the
+  markup stays `display: none` until then — so the site's "no telemetry" claim
+  is true rather than aspirational. `docs/README.md` writes down what turning
+  it on actually commits you to, together with the reason it does not work from
+  a `github.io` address at all (`ads.txt` must live at a domain root you own),
+  the realistic developer-tool CPM, and the sponsorship route that needs no
+  domain.
 
 ## v1.1.2 — 2026-09-28
 

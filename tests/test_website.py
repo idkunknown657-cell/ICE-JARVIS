@@ -36,13 +36,22 @@ VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # demo.html is generated, not authored: it is the app itself, and its links
 # belong to the app. Every other page is ours to keep honest.
 PAGES = sorted(p for p in DOCS.glob("*.html") if p.name != "demo.html")
-SITE = "https://idkunknown657-cell.github.io/ICE-JARVIS/"
 
 # 404 is deliberately unindexed and absent from the sitemap.
 INDEXED = [p for p in PAGES if p.name != "404.html"]
 REQUIRED = ["index.html", "install.html", "download.html", "faq.html",
-            "404.html", "style.css", "site.js", "robots.txt", "sitemap.xml",
-            "og.png"]
+            "privacy.html", "404.html", "style.css", "site.js", "robots.txt",
+            "sitemap.xml", "ads.txt", "og.png"]
+
+# The site's own address lives in exactly one authoritative place — the landing
+# page's canonical URL — and everything else is checked against it. Moving to a
+# custom domain then means editing the pages and failing this suite if one of
+# them is missed, instead of quietly shipping a site that half-believes it is
+# hosted somewhere else.
+SITE = re.search(r'<link rel="canonical" href="([^"]+)"',
+                 (DOCS / "index.html").read_text(encoding="utf-8")).group(1)
+assert SITE.endswith("/"), SITE
+SITE = SITE[:-1]   # every other URL is built as SITE + "/page.html"
 
 
 def read(path):
@@ -89,7 +98,7 @@ class PageMetaTest(unittest.TestCase):
         for page in INDEXED:
             html = read(page)
             with self.subTest(page=page.name):
-                self.assertIn('<meta property="og:image" content="%sog.png">' % SITE,
+                self.assertIn('<meta property="og:image" content="%s/og.png">' % SITE,
                               html, "Open Graph image must be the real card, "
                                     "served from the site itself")
                 self.assertTrue(meta(html, r'<meta property="og:title" content="([^"]+)">'))
@@ -103,10 +112,24 @@ class PageMetaTest(unittest.TestCase):
             canonical = meta(html, r'<link rel="canonical" href="([^"]+)">')
             with self.subTest(page=page.name):
                 self.assertIsNotNone(canonical, "missing canonical link")
-                self.assertTrue(canonical.startswith(SITE))
+                self.assertTrue(canonical.startswith(SITE + "/"),
+                                "%s advertises %s, but the site lives at %s — a "
+                                "half-migrated domain" % (page.name, canonical, SITE))
                 self.assertNotIn(canonical, seen,
                                  "already claimed by %s" % seen.get(canonical))
             seen[canonical] = page.name
+
+    def test_every_page_agrees_on_the_site_address(self):
+        """og:url is a second copy of the address on every page. It has to agree
+        with the canonical link, or a link preview points at a different site
+        than the search result does."""
+        for page in INDEXED:
+            html = read(page)
+            canonical = meta(html, r'<link rel="canonical" href="([^"]+)">')
+            og = meta(html, r'<meta property="og:url" content="([^"]+)">')
+            with self.subTest(page=page.name):
+                self.assertEqual(og, canonical,
+                                 "og:url and canonical disagree on %s" % page.name)
 
 
 class StructureTest(unittest.TestCase):
@@ -214,21 +237,132 @@ class SitemapTest(unittest.TestCase):
     def test_sitemap_lists_every_indexable_page(self):
         sitemap = read(DOCS / "sitemap.xml")
         for page in INDEXED:
-            url = SITE if page.name == "index.html" else SITE + page.name
+            url = SITE + "/" if page.name == "index.html" else "%s/%s" % (SITE, page.name)
             with self.subTest(page=page.name):
                 self.assertIn("<loc>%s</loc>" % url, sitemap)
 
     def test_sitemap_has_no_dead_urls(self):
         sitemap = read(DOCS / "sitemap.xml")
         for loc in re.findall(r"<loc>([^<]+)</loc>", sitemap):
-            name = loc[len(SITE):] or "index.html"
             with self.subTest(loc=loc):
+                self.assertTrue(loc.startswith(SITE + "/"),
+                                "%s is on a different domain than the canonical "
+                                "URLs" % loc)
+                name = loc[len(SITE) + 1:] or "index.html"
                 self.assertTrue((DOCS / name).exists(), "%s does not exist" % loc)
 
     def test_robots_points_search_engines_at_the_sitemap(self):
         robots = read(DOCS / "robots.txt")
-        self.assertIn("Sitemap: %ssitemap.xml" % SITE, robots)
+        self.assertIn("Sitemap: %s/sitemap.xml" % SITE, robots)
         self.assertIn("Allow: /", robots)
+
+    def test_the_ads_file_explains_itself_rather_than_pretending(self):
+        ads = read(DOCS / "ads.txt")
+        self.assertIn("pub-0000000000000000", ads,
+                      "the placeholder publisher id is the tell that this is a "
+                      "template, not a live authorization")
+        self.assertIn("root", ads.lower(),
+                      "the file must say where ads.txt really has to live")
+
+
+class MotionAndHonestyTest(unittest.TestCase):
+    """The site moves, and it stays truthful while doing it.
+
+    Two promises are easy to break by accident: the pages must show every word
+    to a reader without JavaScript (so anything animated has to be hidden by
+    JavaScript, never by the stylesheet), and the site must not load a single
+    third-party resource (its whole claim is that it tracks nobody).
+    """
+
+    BOOTSTRAP = 'document.documentElement.classList.add("js")'
+
+    def test_every_page_sets_the_theme_before_it_paints(self):
+        for page in PAGES:
+            html = read(page)
+            with self.subTest(page=page.name):
+                self.assertIn("ice-theme", html,
+                              "without the stored choice applied before paint, a "
+                              "light-theme reader gets a white flash")
+                self.assertIn(self.BOOTSTRAP, html)
+                self.assertLess(html.index(self.BOOTSTRAP), html.index('href="style.css"'),
+                                "the bootstrap must run before the stylesheet is "
+                                "applied, otherwise it is a flash of the wrong theme")
+
+    def test_animation_cannot_hide_content_without_javascript(self):
+        css = read(DOCS / "style.css")
+        # every rule that could hide a revealed element is scoped to html.js
+        for rule in re.findall(r"[^\n]*\.reveal[^\n]*\{", css):
+            self.assertTrue(rule.strip().startswith("html.js") or "is-in" in rule,
+                            "this rule hides content even when site.js never ran: %s"
+                            % rule.strip())
+        self.assertIn("html.js .reveal", css)
+        # and a reduced-motion reader gets the static page, not a blank one
+        reduced = css[css.rindex("prefers-reduced-motion"):]
+        self.assertIn("opacity: 1 !important", reduced,
+                      "reduced motion must force revealed content visible")
+
+    def test_scripted_motion_respects_the_readers_wish_for_calm(self):
+        js = read(DOCS / "site.js")
+        self.assertIn("prefers-reduced-motion", js)
+        # the motion modules must all consult the flag rather than assuming
+        for fn in ("function revealScan", "function countUp", "function glowScan"):
+            body = js[js.index(fn):js.index(fn) + 400]
+            with self.subTest(fn=fn):
+                self.assertIn("calm", body, "%s ignores reduced motion" % fn)
+
+    def test_no_page_loads_a_third_party_resource(self):
+        """No CDN, no font host, no analytics, no ad script. The only external
+        requests allowed are the ones a visitor triggers by clicking a link."""
+        for page in PAGES:
+            html = read(page)
+            for value in re.findall(r'<(?:script|link|img|iframe)[^>]*?(?:src|href)="(https?://[^"]+)"', html):
+                with self.subTest(page=page.name, value=value[:60]):
+                    self.assertNotIn("googlesyndication", value)
+                    self.assertNotIn("google-analytics", value)
+                    self.assertNotIn("doubleclick", value)
+        # and site.js does not inject one by itself unless it is configured
+        js = read(DOCS / "site.js")
+        self.assertIn("if (!cfg || !cfg.publisher", js,
+                      "the ad loader no longer refuses to run without a publisher id")
+        for page in PAGES:
+            with self.subTest(page=page.name):
+                self.assertNotIn("window.ICE_ADS", read(page),
+                                 "ads are switched on in the markup — update "
+                                 "privacy.html and the support note in the same commit")
+
+    def test_the_single_ad_slot_is_labelled_and_hidden_until_live(self):
+        css = read(DOCS / "style.css")
+        self.assertIn(".ad-slot { display: none", css,
+                      "an empty ad slot must never ship visible")
+        self.assertIn(".ad-slot.ready", css)
+        slots = []
+        for page in PAGES:
+            html = read(page)
+            slots += [(page.name, m) for m in re.findall(r'<div class="ad-slot"[^>]*>', html)]
+        self.assertEqual(len(slots), 1,
+                         "there should be exactly one ad slot on the whole site, "
+                         "found %d" % len(slots))
+        page = read(DOCS / slots[0][0])
+        self.assertIn("Advertisement", page, "an ad must be labelled as an ad")
+
+    def test_transitions_between_pages_are_opt_in_and_cheap(self):
+        css = read(DOCS / "style.css")
+        self.assertIn("@view-transition", css,
+                      "cross-document view transitions disappeared — Chrome would "
+                      "fall back to a hard reload between pages")
+        self.assertIn("::view-transition-old(root)", css)
+
+    def test_the_privacy_page_is_reachable_from_every_page(self):
+        # ad networks require this, and so do readers deciding whether to run an
+        # installer they were handed
+        for page in PAGES:
+            html = read(page)
+            with self.subTest(page=page.name):
+                self.assertIn('href="privacy.html"', html)
+        privacy = read(DOCS / "privacy.html")
+        self.assertIn("advertising", privacy.lower())
+        self.assertIn("localStorage", privacy,
+                      "the privacy page must disclose the one thing this site stores")
 
 
 class DeployWorkflowTest(unittest.TestCase):

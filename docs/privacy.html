@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — ICE JARVIS</title>
+<meta name="description" content="What the ICE JARVIS website and application actually do with your data: no analytics, no cookies beyond a theme preference, no telemetry in the app, and the complete list of network requests either one makes.">
+<link rel="canonical" href="https://idkunknown657-cell.github.io/ICE-JARVIS/privacy.html">
+<meta name="theme-color" content="#0b0f14">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="ICE JARVIS">
+<meta property="og:title" content="Privacy — ICE JARVIS">
+<meta property="og:description" content="No analytics on the site, no telemetry in the app, and the full list of what talks to the network.">
+<meta property="og:url" content="https://idkunknown657-cell.github.io/ICE-JARVIS/privacy.html">
+<meta property="og:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Privacy — ICE JARVIS">
+<meta name="twitter:description" content="No analytics on the site, no telemetry in the app, and the full list of what talks to the network.">
+<meta name="twitter:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
+<!-- Theme and motion flag, set before the first paint: a stored choice wins,
+     otherwise the system preference, otherwise the dark default (the site's
+     own look, and the app's). With scripting off none of this runs and every
+     word of every page is still visible. -->
+<script>try{var s=localStorage.getItem("ice-theme")||(window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",s)}catch(e){}document.documentElement.classList.add("js");</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b0f14' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="./">ICE <span>JARVIS</span></a>
+    <div class="links">
+      <a href="./#features">Features</a>
+      <a href="install.html">Install</a>
+      <a href="download.html">Downloads</a>
+      <a href="faq.html">FAQ</a>
+      <a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a>
+      <a class="nav-cta" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page wrap">
+  <p class="crumbs"><a href="./">ICE JARVIS</a> / Privacy</p>
+  <h1>Privacy</h1>
+  <p class="lede">This page covers two different things that share a name: the website you are reading, and the application you install. Both are short to describe, because neither of them collects anything.</p>
+  <div class="toc">
+    <a href="#site">This website</a>
+    <a href="#app">The application</a>
+    <a href="#downloads">Downloads &amp; updates</a>
+    <a href="#ads">Advertising</a>
+    <a href="#contact">Contact</a>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+
+  <section id="site">
+    <h2>This website</h2>
+    <p>Every page here is a static file served by GitHub Pages. There is no backend, no database, no login and no form that submits anywhere.</p>
+    <ul class="bullets">
+      <li><b>No analytics and no advertising.</b> No Google Analytics, no Plausible, no pixel, no heat-map script, no tag manager. Nothing on this site reports that you were here.</li>
+      <li><b>No cookies.</b> The only thing stored in your browser is one <code>localStorage</code> entry, <code>ice-theme</code>, which remembers whether you chose the light or dark theme. It stays on your machine, is never sent anywhere, and you can clear it like any other site data.</li>
+      <li><b>Two requests leave your browser</b>, and you can see both of them in your browser's network panel:
+        <ul class="bullets">
+          <li>A read-only <code>GET</code> to <code>api.github.com</code> for the project's public release list, which is what fills in the version badges, file sizes and download counts. It carries no identifier, no cookie and no personal data — it is the same public, anonymous request anyone's browser makes when visiting a GitHub releases page.</li>
+          <li>A request to <code>github.com</code> or its download host, only when you actually click a download link.</li>
+        </ul>
+      </li>
+      <li><b>No fonts, no CDNs, no third-party scripts.</b> The stylesheet, the small script that runs this site and the demo are all served from this domain. The 404 page is served by GitHub Pages itself.</li>
+      <li><b>Server logs</b> are GitHub's, not ours: GitHub Pages records requests as part of operating the service, under <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a>. The project owner can see aggregate traffic counts GitHub chooses to report; no page of this site adds any tracking of its own on top.</li>
+    </ul>
+  </section>
+
+  <section id="app">
+    <h2>The application</h2>
+    <p>ICE JARVIS runs on your computer. It has no telemetry, no accounts, no crash reporting and no analytics — and that is a property of how it is built, not a policy that could change quietly in a release.</p>
+    <ul class="bullets">
+      <li><b>Your files stay yours.</b> API keys live in <code>config/api_keys.json</code> inside the app folder, memory in <code>memory/</code>, logs in <code>logs/</code>. They are plain files on your disk. They are not part of any release payload and the build refuses to publish if it finds a secret in what it is about to ship.</li>
+      <li><b>Four kinds of outbound request, and no others</b> — the AI provider you configure (the conversation you are having, so it can be answered), the public update manifest on GitHub when the app checks for a new version, keyless public data feeds when you ask a question about the world, and your own mail server if you set mail up. Nothing about you or your machine is attached to any of them.</li>
+      <li><b>Microphone and screen access are yours to switch off</b>, in the interface and in <code>⚙ Settings</code>; Windows' own permission gates apply to the app like any other program. Audio is turned into the text of your request; it is not stored or uploaded anywhere else.</li>
+      <li><b>Deleting your data is deleting files.</b> Remove <code>config/api_keys.json</code> and <code>memory/long_term.json</code> for a clean slate, or uninstall — which asks first and defaults to keeping your data.</li>
+    </ul>
+    <div class="note">The <a href="https://github.com/idkunknown657-cell/ICE-JARVIS#-privacy">readme's privacy section</a> lists every requested endpoint by name, including the OAuth token endpoints a mail sign-in adds and the public feeds the world-data features read.</div>
+  </section>
+
+  <section id="downloads">
+    <h2>Downloads and updates</h2>
+    <p>Downloads go straight from this site's links to the project's own GitHub releases. There is no download counter of our own, no redirect service and no intermediary.</p>
+    <ul class="bullets">
+      <li><b>Every release publishes its SHA-256 checksums</b> in <code>SHA256SUMS.txt</code>, so you can verify that what you received is what was built. <a href="download.html#verify">How to check</a>.</li>
+      <li><b>Updates are opt-in.</b> The app reads a small public JSON manifest, compares versions, and only downloads if you agree. The downloaded payload is hashed and verified before it is staged, and applied on the next restart.</li>
+      <li><b>An update touches no user data.</b> The payload deliberately contains no keys, memory, logs or certificates, so upgrading cannot overwrite them.</li>
+    </ul>
+  </section>
+
+  <section id="ads">
+    <h2>Advertising</h2>
+    <p>There is no advertising on this site, and no ad network is loaded by any page. The ad slot wired into the landing page stays hidden and empty until a publisher ID is deliberately configured, which is not the case today.</p>
+    <p>If advertising is ever enabled, then before it goes live this page will be updated to say so plainly, naming the network and the cookies it sets, and the ad units will be labelled as advertisements. Until this page says otherwise, there is nothing to disclose — and if you would rather the project earned nothing than tracked you, the honest way to support it is a star or a good bug report.</p>
+  </section>
+
+  <section id="contact">
+    <h2>Contact</h2>
+    <p>Questions about any of this belong in a public issue on the repository, where the answer is useful to the next person who asks it: <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">github.com/idkunknown657-cell/ICE-JARVIS/issues</a>.</p>
+    <div class="last">Last updated 29 September 2026 · ICE JARVIS is free, open source and licensed CC BY-NC 4.0.</div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>ICE JARVIS — free, open-source, local-first. CC BY-NC 4.0.</span>
+    <span class="right"><a href="./">Home</a> · <a href="install.html">Install</a> · <a href="download.html">Downloads</a> · <a href="faq.html">FAQ</a> · <a href="privacy.html">Privacy</a></span>
+  </div>
+</footer>
+
+<script src="site.js" defer></script>
+</body>
+</html>

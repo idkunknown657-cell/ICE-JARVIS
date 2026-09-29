@@ -24,6 +24,11 @@
 <meta name="twitter:description" content="Open-source Windows voice assistant: English, Hindi, Hinglish, full PC control, local memory, zero telemetry.">
 <meta name="twitter:image" content="https://idkunknown657-cell.github.io/ICE-JARVIS/og.png">
 
+<!-- Theme and motion flag, set before the first paint: a stored choice wins,
+     otherwise the system preference, otherwise the dark default (the site's
+     own look, and the app's). With scripting off none of this runs and every
+     word of every page is still visible. -->
+<script>try{var s=localStorage.getItem("ice-theme")||(window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",s)}catch(e){}document.documentElement.classList.add("js");</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b0f14' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -58,12 +63,12 @@
     <div class="demo-frame">
       <iframe src="demo.html" title="ICE JARVIS avatar demo — the real UI, running in your browser" loading="lazy"></iframe>
     </div>
-    <p class="demo-note"><span class="dot">●</span> This is the <b>real interface</b> from the app, running live in your browser — the same avatar, motion and voice meter you get on your desktop. Nothing is uploaded: the demo runs entirely on this page.</p>
+    <p class="demo-note"><span class="dot">●</span> This is the <b>real interface</b> from the shipped app, running live in your browser — it opens with the same six-step tour the desktop build shows on first launch, then gives you the avatar, motion and voice meter. Switch the width with the buttons above to see it the way a phone or a small window gets it. Nothing is uploaded and no microphone is requested: the demo runs entirely on this page.</p>
   </div>
 
   <div class="stats">
     <div><b data-latest-version>1.1.2</b><span>latest release</span></div>
-    <div><b>1297</b><span>tests passing</span></div>
+    <div><b>1306</b><span>tests passing</span></div>
     <div><b>3</b><span>languages spoken</span></div>
     <div><b>0</b><span>data leaves your PC</span></div>
   </div>
@@ -85,7 +90,7 @@
       </div>
       <div class="card">
         <h4>A green test suite again</h4>
-        <p>1297 tests on Python 3.13 and 3.14, plus a smoke test of the packaged <code>JARVIS.exe</code> before anything is allowed to ship. The failures that had been red for days are fixed, not muted.</p>
+        <p>1306 tests on Python 3.13 and 3.14, plus a smoke test of the packaged <code>JARVIS.exe</code> before anything is allowed to ship. The failures that had been red for days are fixed, not muted.</p>
       </div>
     </div>
     <p class="sub" style="margin-top:16px">
@@ -155,15 +160,43 @@ setup.bat        <span class="c"># Windows — installs everything and starts IC
     </div>
   </section>
 
+  <section id="support">
+    <div class="support">
+      <h2>Supporting this project</h2>
+      <p class="sub">ICE JARVIS is free, has no ads and no analytics, and is not trying to become a business. If it is useful to you, these are the things that actually help — in order.</p>
+      <div class="grid">
+        <div class="card"><h4>⭐ Star the repository</h4><p>It is the only signal GitHub shows to people looking for something like this, and it costs you one click.</p></div>
+        <div class="card"><h4>🐞 Say what breaks</h4><p>A clear report — the log, what you expected, what happened — is worth more than a donation. It gets fixed, and everyone after you benefits.</p></div>
+        <div class="card"><h4>🔗 Tell one person</h4><p>Word of mouth is how a project like this travels. No referral codes, no affiliate links, nothing tracked.</p></div>
+      </div>
+      <div class="support-cta">
+        <a class="primary" href="https://github.com/idkunknown657-cell/ICE-JARVIS">Star on GitHub</a>
+        <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">Open an issue</a>
+        <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/LICENSE">Read the licence</a>
+      </div>
+      <p class="no-ads-note"><b>No ads, no analytics, no tracking.</b> Every page here is a static file. The only outbound request a page makes by itself is a read-only call to the public GitHub API for the version badges and the download list — nothing about you goes with it, and it is the same request a browser makes when you visit a release page. Donations are not set up yet; if you would like to fund something specific (a signed build, a Mac bundle), <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/issues">open an issue</a> and it can be arranged in the open.</p>
+    </div>
+  </section>
+
   <section id="source">
     <h2>Build it, check it, break it</h2>
     <p class="sub">Releases are built by GitHub Actions from tagged commits: PyInstaller freeze, Inno Setup installer, selftest of the packaged app, then the exe is published automatically.</p>
     <div class="grid">
       <div class="card"><h3><span class="ico">📦</span>Releases &amp; changelog</h3><p>Every version, with checksums: <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases">github.com/idkunknown657-cell/ICE-JARVIS/releases</a></p></div>
-      <div class="card"><h3><span class="ico">🧪</span>CI you can read</h3><p>1297 tests on every push, plus a smoke test of the packaged exe before a release is allowed out. The workflows live in <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/tree/main/.github/workflows">.github/workflows</a>.</p></div>
+      <div class="card"><h3><span class="ico">🧪</span>CI you can read</h3><p>1306 tests on every push, plus a smoke test of the packaged exe before a release is allowed out. The workflows live in <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/tree/main/.github/workflows">.github/workflows</a>.</p></div>
       <div class="card"><h3><span class="ico">📖</span>Documentation</h3><p>Install guide, FAQ and download verification are on this site; the deep detail is in the <a href="https://github.com/idkunknown657-cell/ICE-JARVIS#readme">readme</a> and <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/CHANGELOG.md">changelog</a>.</p></div>
     </div>
   </section>
+
+  <!-- One ad slot in the whole site, and it is invisible until a publisher id
+       is deliberately configured (see the ads() switch in site.js and the
+       honest accounting of what that commits you to in docs/README.md). A
+       site that promises "no telemetry" must not quietly load an ad network,
+       and an empty <ins> must never ship looking like a broken page. -->
+  <div class="ad-slot" role="complementary" aria-label="Advertisement">
+    <span class="ad-label">Advertisement</span>
+    <ins class="adsbygoogle" style="display:block"></ins>
+  </div>
 
 </main>
 
@@ -172,7 +205,7 @@ setup.bat        <span class="c"># Windows — installs everything and starts IC
     <span>ICE JARVIS — free, open-source, local-first. CC BY-NC 4.0.</span>
     <span class="right">
       <a href="install.html">Install</a> · <a href="download.html">Downloads</a> · <a href="faq.html">FAQ</a> ·
-      <a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a> · <a href="demo.html">Standalone demo</a>
+      <a href="privacy.html">Privacy</a> · <a href="https://github.com/idkunknown657-cell/ICE-JARVIS">GitHub</a>
     </span>
   </div>
 </footer>

@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/idkunknown657-cell/ICE-JARVIS"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20Linux%20macOS-38bdf8?style=flat-square"></a>
-  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1297%20passing-31d9ae?style=flat-square"></a>
+  <a href="https://github.com/idkunknown657-cell/ICE-JARVIS/actions"><img alt="Tests" src="https://img.shields.io/badge/tests-1306%20passing-31d9ae?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.13%20%7C%203.14-8b6df5?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/idkunknown657-cell/ICE-JARVIS?style=flat-square">
 </p>
@@ -201,7 +201,7 @@ python -m unittest discover -s tests -p "test_[a-u]*.py"
 python -m unittest discover -s tests -p "test_[v-z]*.py"
 ```
 
-Both halves pass — 1297 tests total.
+Both halves pass — 1306 tests total.
 
 ---
 
@@ -222,7 +222,7 @@ ICE-JARVIS/
 ├── plugins/           # user-facing plugin examples
 ├── memory/            # local memory + config managers
 ├── dashboard/         # phone/web remote dashboard (FastAPI + TLS + AES)
-└── tests/             # 1297 unit tests
+└── tests/             # 1306 unit tests
 ```
 
 ---
@@ -272,6 +272,12 @@ ICE-JARVIS/
   in your own `config/api_keys.json`; it is sent to a feed only as the plain
   coordinates of the question you just asked ("what is overhead right now"),
   and never as anything identifying you.
+
+- The **website** follows the same rules: no analytics, no cookies beyond the
+  theme you pick, no third-party fonts or scripts, and one read-only call to
+  the public GitHub API for the version badges and the download list. If that
+  ever changes, the [privacy page](https://idkunknown657-cell.github.io/ICE-JARVIS/privacy.html)
+  says so before the change rather than after it.
 
 ## 📡 World data — sources and credit
 

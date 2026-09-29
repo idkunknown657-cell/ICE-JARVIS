@@ -1,0 +1,27 @@
+# ads.txt — Authorized Digital Sellers
+#
+# Nothing here is live, because this site runs no advertising. This file exists
+# so that the day an ad network is switched on, the hard part is already
+# explained rather than discovered.
+#
+# Two things you must know before filling this in:
+#
+#   1. ads.txt MUST be served from the ROOT of the domain you own —
+#      https://your-domain.com/ads.txt — and *not* from a subdirectory.
+#      On github.io this is impossible: you do not own github.io, so
+#      /ICE-JARVIS/ads.txt is the wrong path and will be ignored. This is also
+#      why Google AdSense will not approve a *.github.io site: the domain is
+#      not yours. A custom domain (CNAME file + Pages custom domain) or a free
+#      subdomain of your OWN domain is required. See docs/README.md.
+#
+#   2. Replace the line below with the one your ad network gives you. The
+#      AdSense format is:
+#
+#        google.com, pub-0000000000000000, DIRECT, f08c47fec0942fa0
+#
+#      where pub-0000000000000000 is your publisher id (the same id that goes
+#      into window.ICE_ADS in the page <head>) and the long tail is Google's
+#      certification authority id, which is the same for every publisher.
+#
+# Until then: no sellers are authorized, which is correct, because there are
+# no ads to authorize.
