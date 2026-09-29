@@ -27,7 +27,7 @@ loudly rather than quietly.
   a destination, when the baked-in version or test count disagrees with
   `VERSION` / reality, when the demo is stale or starts loading anything over
   the network, or when the sitemap, robots.txt and canonical URLs stop agreeing
-  with each other. 32 tests, all of them about invariants rather than markup.
+  with each other. 33 tests, all of them about invariants rather than markup.
 - **Findability done properly**: canonical URLs, Open Graph and Twitter cards
   with a generated 1200×630 image, a `SoftwareApplication` and `FAQPage` schema,
   `robots.txt`, a `sitemap.xml`, and a 404 page that is actually part of the
@@ -52,6 +52,12 @@ loudly rather than quietly.
   names the only `localStorage` key the site writes, the two requests a page
   makes, and the four kinds of network call the application makes. Ad networks
   require one; readers deciding whether to run an installer deserve one.
+- **A way to be supported that does not cost the project its story.** With no
+domain of its own, advertising is not even available (an `ads.txt` must live at
+a domain root you control), so the site asks for what a small project actually
+benefits from — a star, a clear bug report, word of mouth — and `site.js` will
+draw a sponsor button the moment one exists rather than pointing at an account
+that does not.
 - **One labelled ad slot, switched off.** `site.js` will not load an ad network
   unless a publisher id is deliberately configured, and the single slot in the
   markup stays `display: none` until then — so the site's "no telemetry" claim

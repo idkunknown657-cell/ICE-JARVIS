@@ -346,6 +346,54 @@
     frame.parentNode.insertBefore(bar, frame);
   }
 
+  /* ══ sponsorship — one line away, never invented ════════════════════
+     The project has no donation link yet, and this site will not point at one
+     that does not exist (a sponsor button that 404s is worse than no button).
+     When an account exists, set window.ICE_SUPPORT in the page's <head> and
+     the button appears — the account itself has to be created by a human,
+     because it involves a real identity and a real payout method. */
+  function support() {
+    var cfg = window.ICE_SUPPORT;
+    var row = document.querySelector(".support-cta");
+    if (!cfg || !row) return;
+    var links = [
+      [cfg.sponsors, "♥ Sponsor on GitHub", true],
+      [cfg.kofi, "♥ Buy me a Ko-fi", true],
+      [cfg.bmc, "♥ Buy me a coffee", true],
+      [cfg.paypal, "♥ Donate with PayPal", true]
+    ];
+    var added = 0;
+    links.forEach(function (spec) {
+      if (!spec[0]) return;
+      if (row.querySelector('a[href="' + spec[0] + '"]')) return;
+      var a = document.createElement("a");
+      a.href = spec[0];
+      a.textContent = spec[1];
+      a.rel = "noopener";
+      row.insertBefore(a, row.firstChild);
+      added++;
+    });
+    if (!added) return;
+    // the donation becomes the strongest ask, so the star button stops
+    // shouting for attention in the same row
+    var first = row.querySelector("a");
+    row.querySelectorAll("a").forEach(function (a) {
+      if (a !== first) a.classList.remove("primary");
+    });
+    first.classList.add("primary");
+    // the paragraph that explains "donations are not set up yet" stops being
+    // true the moment a button exists, so its whole final sentence goes —
+    // including the trailing link, which the button now replaces
+    var note = row.parentNode.querySelector(".no-ads-note");
+    if (note) {
+      note.innerHTML = note.innerHTML.replace(
+        / Donations are not set up yet[\s\S]*$/,
+        " Sponsorship goes directly to the person who wrote the code, and funds " +
+        "the same work a paid build would — nothing is unlocked by it, because " +
+        "nothing here is behind a paywall.");
+    }
+  }
+
   /* ══ ads — off unless deliberately switched on ══════════════════════
      A site that promises "no telemetry, no accounts, no cloud" cannot quietly
      load an ad network. So: nothing here runs at all until window.ICE_ADS
@@ -379,6 +427,7 @@
     progressBar();
     countUp();
     demoTools();
+    support();
     ads();
   }
 

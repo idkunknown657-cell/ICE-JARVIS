@@ -63,6 +63,13 @@ def meta(html, pattern):
     return m.group(1) if m else None
 
 
+def without_comments(html):
+    """The pages explain things to whoever edits them, and an explanation of how
+    to switch an ad slot on is not the same thing as switching it on. Checks
+    about what the site *does* have to read the markup, not the notes."""
+    return re.sub(r"<!--.*?-->", "", html, flags=re.S)
+
+
 class SiteFilesTest(unittest.TestCase):
 
     def test_every_page_of_the_site_ships(self):
@@ -314,7 +321,7 @@ class MotionAndHonestyTest(unittest.TestCase):
         """No CDN, no font host, no analytics, no ad script. The only external
         requests allowed are the ones a visitor triggers by clicking a link."""
         for page in PAGES:
-            html = read(page)
+            html = without_comments(read(page))
             for value in re.findall(r'<(?:script|link|img|iframe)[^>]*?(?:src|href)="(https?://[^"]+)"', html):
                 with self.subTest(page=page.name, value=value[:60]):
                     self.assertNotIn("googlesyndication", value)
@@ -326,7 +333,7 @@ class MotionAndHonestyTest(unittest.TestCase):
                       "the ad loader no longer refuses to run without a publisher id")
         for page in PAGES:
             with self.subTest(page=page.name):
-                self.assertNotIn("window.ICE_ADS", read(page),
+                self.assertNotIn("window.ICE_ADS = {", without_comments(read(page)),
                                  "ads are switched on in the markup — update "
                                  "privacy.html and the support note in the same commit")
 
@@ -351,6 +358,27 @@ class MotionAndHonestyTest(unittest.TestCase):
                       "cross-document view transitions disappeared — Chrome would "
                       "fall back to a hard reload between pages")
         self.assertIn("::view-transition-old(root)", css)
+
+    def test_no_donation_link_is_invented(self):
+        """A sponsor button that leads to a profile instead of a sponsor page is
+        worse than no button — and GitHub Sponsors is not enrolled on this
+        account, so every `github.com/sponsors/...` link is a dead end today."""
+        js = read(DOCS / "site.js")
+        self.assertIn("window.ICE_SUPPORT", js,
+                      "the sponsorship switch disappeared")
+        self.assertIn("if (!cfg || !row) return;", js,
+                      "the site would draw a donation button with nothing behind it")
+        dead_ends = ("github.com/sponsors/", "ko-fi.com/", "buymeacoffee.com/",
+                     "paypal.me/", "patreon.com/")
+        for page in PAGES:
+            html = without_comments(read(page))
+            for host in dead_ends:
+                with self.subTest(page=page.name, host=host):
+                    self.assertNotIn(host, html,
+                                     "%s points at %s, which is not set up" % (page.name, host))
+            self.assertNotIn("window.ICE_SUPPORT = {", html,
+                             "sponsorship is switched on in %s's markup — make sure "
+                             "the account actually exists first" % page.name)
 
     def test_the_privacy_page_is_reachable_from_every_page(self):
         # ad networks require this, and so do readers deciding whether to run an

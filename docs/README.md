@@ -19,6 +19,12 @@ file here and pushing to `main` is the entire deploy process (about a minute).
 | `og.png` | The 1200×630 social card. Regenerate with `python .freebuff/make_og.py` |
 | `robots.txt`, `sitemap.xml`, `ads.txt` | Crawler and ad-network plumbing |
 
+**Current decisions** (September 2026): the address is a free `icejarvis.is-a.dev`
+subdomain (registration steps below — the file is yours to write, for the reason
+in that section), and the project earns through **sponsorship only**. The ad
+machinery in `site.js` and the hidden slot in the markup stay switched off, so
+the site's "no ads, no analytics" claim is literally true.
+
 `tests/test_website.py` guards all of it (23 tests): broken links, dead in-page
 anchors, a navbar that lost a destination, a baked-in version or test count that
 drifted from `VERSION`, a stale demo, a demo that started loading something over
@@ -48,21 +54,62 @@ Free means **a subdomain of somebody else's domain**, and every option is
 | [js.org](https://js.org) | `icejarvis.js.org` | **For JavaScript projects.** This is a Python app with a JS interface, so expect a rejection unless you argue the case convincingly |
 | `is-cool.dev`, `is-local.org`, … | — | The same PR-based model, run by the same community |
 
-What you need in the PR is a JSON file with the owner, a record for the
-`CNAME` target (`idkunknown657-cell.github.io`), and a description of the
-project. Then:
+### Chosen: a free `*.is-a.dev` subdomain
 
-1. Add a file named `CNAME` in this folder containing **just** the domain, e.g.
-   `icejarvis.is-a.dev` (no protocol, no trailing slash).
-2. Repo → *Settings → Pages → Custom domain* → enter it → **Enforce HTTPS**.
-3. Run the URL in `docs/README.md`'s "changing the domain" instructions below.
+Both `icejarvis.is-a.dev` and `ice-jarvis.is-a.dev` are **unclaimed** (checked
+against the registry, not by DNS — the whole zone is a wildcard, so every name
+"resolves" and that proves nothing).
+
+> **Why this was not submitted for you.** The registry's own README says: *"Do
+> not use AI to generate your request, it WILL always get it wrong and will
+> delay you getting a domain."* That is an instruction from the people who
+> review it, and it is worth more than the two minutes it saves. Write the file
+> yourself — it is eight lines — and the merge usually comes within a day.
+
+Create `domains/icejarvis.json` **in your own fork** of
+[is-a-dev/register](https://github.com/is-a-dev/register) and open the pull
+request:
+
+```json
+{
+  "owner": {
+    "username": "idkunknown657-cell",
+    "email": "your-real-email@example.com"
+  },
+  "records": {
+    "CNAME": "idkunknown657-cell.github.io"
+  }
+}
+```
+
+The `owner` block is required and the email must be one you actually read — the
+maintainers use it if something is wrong with the request. (`username` is your
+GitHub handle exactly as it appears in your profile URL.) Do not add anything
+else: extra fields are the most common reason a request is sent back.
+
+### After the pull request is merged
+
+1. Repo → *Settings → Pages → Custom domain* → type `icejarvis.is-a.dev` and
+   **Save**. (Do this only after the merge; before it, DNS does not point here
+   and GitHub will refuse the domain.)
+2. Tick **Enforce HTTPS** once the certificate is issued — usually a few
+   minutes.
+3. Add a file named `CNAME` in this folder containing **just** the domain
+   (`icejarvis.is-a.dev`, no protocol, no trailing slash) so the origin of the
+   site is recorded in the repository too.
+4. Update the site's own idea of its address — every page, the sitemap and
+   robots.txt — with the command in the next section.
+5. Optional: GitHub → *Settings → Pages → Add a domain* gives you a TXT
+   verification string. That is only needed for domains GitHub thinks are
+   claimed elsewhere; the is-a.dev guide has the file to add if it comes up.
 
 ### The honest catch
 
 A free subdomain is **cosmetic only**. It does not unlock advertising: AdSense
 rejects `*.github.io`, `*.is-a.dev` and every other domain you do not own,
 because you cannot serve `/ads.txt` from its root and cannot prove you control
-it. If the goal is to earn, a free subdomain does not get you there.
+it. That is precisely why the plan below pairs the free address with
+sponsorship rather than ads.
 
 ## Buying a domain (about $8–15 a year)
 
@@ -144,22 +191,34 @@ nobody. Before you enable it, also:
   its cookies, as that page promises,
 - adjust the "No ads, no analytics" note in `index.html#support`.
 
-### 2. Sponsors and donations (no domain needed)
+### 2. Sponsors and donations — **the chosen route**
 
-Fits the project's promise, and works today:
+No domain, no tracking, and it does not require softening a single claim the
+site makes. What it does require is a human with a bank account:
 
 1. **GitHub Sponsors**: <https://github.com/sponsors/accounts> — needs your
    identity, a payout method (Stripe) and tax details; GitHub takes 0% for
    individuals. The profile page `https://github.com/sponsors/idkunknown657-cell`
    currently redirects to the profile, which means it is **not enabled yet**.
 2. **Ko-fi** or **Buy Me a Coffee** — faster to set up, no review, takes ~5%.
-   Create the page, then add the link to `index.html#support`.
-3. PayPal.me as a last resort.
+   Create the page and you are done; there is nothing to review.
 
-When one exists, replace the "Donations are not set up yet" sentence in
-`index.html#support` with a button in `.support-cta`. Until then the section
-asks only for the things that actually help a small project: a star, a clear bug
-report, and word of mouth.
+Then it is **one line** in the page head — no HTML editing, no design work:
+
+```html
+<script>window.ICE_SUPPORT = { sponsors: "https://github.com/sponsors/idkunknown657-cell" };</script>
+```
+
+`site.js`'s `support()` puts a *Sponsor on GitHub* button at the front of the
+support row and rewords the paragraph underneath. Recognised keys:
+`sponsors`, `kofi`, `bmc` (Buy Me a Coffee), `paypal`. Add the ones you have.
+Without that line nothing is drawn — deliberately, because a sponsor button
+that leads to a profile instead of a sponsor page is worse than no button, and
+`tests/test_website.py` fails if a donation link appears before the account
+exists.
+
+Until then the section asks only for the things that actually help a small
+project: a star, a clear bug report, and word of mouth.
 
 ### 3. Selling something
 
@@ -174,12 +233,11 @@ paywalling a fix.
 
 ## What I would actually do, in order
 
-1. **Buy a cheap domain** (~$10/yr) — not for ads, but because the name is the
-   product, and `github.io/ICE-JARVIS` will not survive being written on a
-   sticky note.
+1. **Submit the `is-a.dev` request** (eight lines, above) — a short, memorable
+   address costs nothing but a pull request.
 2. **Enable GitHub Sponsors** — five minutes, no domain, no tracking, and it
    converts a little interest into a little money without changing what the
-   site is.
+   site is. Then add the one-line `window.ICE_SUPPORT` switch.
 3. **Let the site be found** — the site is already indexed-ready (canonical URLs,
    sitemap, structured data). Real traffic for a tool like this comes from a
    demo people can try without installing: the live demo on the landing page,
