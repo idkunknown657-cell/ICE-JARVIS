@@ -103,9 +103,9 @@ A traceback used to be something the user read out of `logs/jarvis.log`.
   says whether the result is good — plus the first self-taught-style capability
   shipped as a real plugin, using nothing but `requests`.
 
-### Tests: 1307 → 1628
+### Tests: 1307 → 1655
 
-321 new tests, all of them about the refusals rather than the happy path. The
+348 new tests, all of them about the refusals rather than the happy path. The
 crucible has one test per banned capability. The forge is tested against a model
 that writes destructive code, a model that writes code twice as broken as the
 first time, and a name collision — which must never overwrite a plugin that
@@ -124,6 +124,37 @@ install itself on the install page, and a start sequence in the app: the moment
 the exe opens, a boot screen walks the milestones the startup actually reaches
 (bridge, interface, online) and steps aside on its own even if the backend never
 comes up, so it can decorate a launch but never trap one.
+
+## Unreleased — it notices what you keep asking for
+
+The skill forge waits to be told *"learn how to do X"*. Most people never say
+that, even the tenth time they have asked for the same thing by hand. So now the
+assistant keeps its own count.
+
+- **`core/skill_discovery.py`** watches two signals: what you actually say
+  (main.py records each completed utterance) and tool names the model reaches
+  for that do not exist — the model wishing a capability existed is a signal in
+  its own right. The counting is private, local and quiet: nothing is said,
+  sent or written anywhere but one JSON file.
+- **Repeats ripen into an offer.** When the same wish crosses three (two if it
+  was phrased as a wish — *"I wish you could…"*), the next session's system
+  instruction carries one line the model can act on naturally: it may offer,
+  once, to learn to do the thing itself. Making the offer is the act of reading
+  the candidate, so it can never nag — and the wording tells the model to stay
+  quiet when its existing tools already cover it. Questions are never recorded
+  (they are answers, not tasks), and anything a taught skill already does is
+  ignored, by name.
+- **"Yes, learn it" runs the real pipeline.** The `skill_discovery` tool
+  (list / forge / dismiss / forget / clear) hands the stored goal to the same
+  forge the spoken request uses, and a successful forge retires the candidate —
+  matched by wording overlap, so it works even when the model rephrases. A
+  failed forge leaves the candidate for a retry, and "no" only silences it.
+- **Secrets are refused**, with the same shapes as the standing instructions —
+  a candidate rides into a prompt, so a credential pasted as a "request" must
+  never be stored. The watch file is stripped from every payload build like the
+  other user state, and the switch (`skill_discovery_enabled`, on by default) is
+  outranked by the memory switch, like every other thing the assistant
+  accumulates.
 
 ## Unreleased — a website, and downloads you can prove
 

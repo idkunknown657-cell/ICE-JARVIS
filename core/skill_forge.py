@@ -529,6 +529,15 @@ def forge(goal: str, name: str = "", context: str = "",
 
     _note_improvement(chosen, goal, description, verdict)
 
+    # If this capability was learned because the watch list offered it, retire
+    # the candidate so it is never offered again. Lazy import: discovery reads
+    # the registry, the registry's records flow from here.
+    try:
+        from core import skill_discovery
+        skill_discovery.mark_forged(goal, chosen)
+    except Exception:
+        pass
+
     print(f"{_TAG} live: {chosen} -> {live}")
     return {
         "ok": True, "activated": True, "name": chosen, "goal": goal,

@@ -1020,6 +1020,22 @@ def save_self_forge_auto(enabled: bool) -> None:
     _save_flag("self_forge_auto", enabled)
 
 
+def get_skill_discovery_enabled() -> bool:
+    """Whether repeated requests are counted to offer learning one.
+
+    On by default and gated by memory like the forge it feeds: the counting is
+    local and quiet (nothing is recorded, said or sent), and the offer it
+    eventually makes still goes through skill_forge's own switch. A user who
+    turned memory off has said no to exactly this kind of accumulation.
+    """
+    return bool(load_api_keys().get("skill_discovery_enabled", True)) \
+        and get_memory_enabled()
+
+
+def save_skill_discovery_enabled(enabled: bool) -> None:
+    _save_flag("skill_discovery_enabled", enabled)
+
+
 # ── Self-repair (fixing its own crashes) ─────────────────────────────────────
 # core/self_heal.py can rewrite a line of JARVIS's own code when a traceback
 # identifies a real bug. Unlike the other learning switches this one is OFF by

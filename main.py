@@ -92,6 +92,7 @@ from core.viseme               import VisemeStream
 from core.language             import language_directive, strip_transient_prefix
 from core.persona              import build_persona_block
 from core import learned_rules
+from core import skill_discovery
 from core                      import learning as learning_mod
 from core                      import self_training
 from core                      import usage as usage_mod
@@ -1594,6 +1595,15 @@ class JarvisLive:
                 parts.append(rules_block)
         except Exception as e:
             print(f"[JARVIS] standing instructions skipped: {e}")
+        # A request the user keeps making by hand, once it has repeated enough
+        # to be worth offering to learn. Reading this IS the offer (see
+        # core/skill_discovery.py), so it is built once per session at most.
+        try:
+            watch_block = skill_discovery.prompt_block()
+            if watch_block:
+                parts.append(watch_block)
+        except Exception as e:
+            print(f"[JARVIS] skill watch skipped: {e}")
         parts.append(sys_prompt)
 
         cfg = dict(
@@ -1875,6 +1885,13 @@ class JarvisLive:
                     result = r or "Done."
                 else:
                     result = f"Unknown tool: {name}"
+                    # The model reaching for a tool that does not exist is the
+                    # clearest wish for one — recorded as its own signal so a
+                    # gap the user never puts into words can still surface.
+                    try:
+                        skill_discovery.note(name, source="tool")
+                    except Exception:
+                        pass
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
@@ -2258,6 +2275,13 @@ class JarvisLive:
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self._last_out_logged = ""   # new exchange
+                                # Notice repeats quietly — the counter is local,
+                                # and one day it can offer to learn the task
+                                # instead of doing it by hand again.
+                                try:
+                                    skill_discovery.note(full_in)
+                                except Exception:
+                                    pass
                                 self.ui.write_log(f"You: {strip_transient_prefix(full_in)}")
                                 self._session_log.append(
                                     f"User: {strip_transient_prefix(full_in)}")

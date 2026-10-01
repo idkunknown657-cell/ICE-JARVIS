@@ -270,7 +270,8 @@ def clean_payload(version: str, audit: dict) -> None:
                 # this is the belt under those braces).
                 "config/skills.json", "config/patches.json",
                 "config/patch_watch.json", "config/patch_backups",
-                "config/forge_staging", "config/learned_rules.json"):
+                "config/forge_staging", "config/learned_rules.json",
+                "config/skill_watch.json"):
         target = PAYLOAD / rel
         try:
             if target.is_dir():
