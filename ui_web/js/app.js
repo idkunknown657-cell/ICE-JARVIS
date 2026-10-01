@@ -3552,9 +3552,37 @@
     });
   }
 
+  // ── the start sequence ──────────────────────────────────────────────
+  // The boot veil in index.html is the first thing painted; this moves it
+  // through the same milestones boot() actually passes — bridge, settings,
+  // ready — and then dismisses it. Nothing here is a timer pretending work:
+  // a stage only advances when its milestone really happened, and the escape
+  // timer below means a hung backend can never trap the app behind the veil.
+  const BootSeq = (() => {
+    const veil = $("bootVeil");
+    if (!veil) return { stage() {}, done() {} };
+    const stageEl = $("bootStage");
+    const steps = [...veil.querySelectorAll("[data-boot-step]")];
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let i = 0;
+    const escape = setTimeout(done, 15000);
+    function stage(text) {
+      if (i < steps.length) steps[i++].classList.add("is-on");
+      if (stageEl) { stageEl.textContent = text; stageEl.classList.remove("is-done"); }
+    }
+    function done() {
+      clearTimeout(escape);
+      if (stageEl) { stageEl.textContent = "Online"; stageEl.classList.add("is-done"); }
+      steps.forEach(el => el.classList.add("is-on"));
+      setTimeout(() => veil.classList.add("is-gone"), reduced ? 150 : 650);
+    }
+    return { stage, done };
+  })();
+
   async function boot() {
     const real = await whenBridge(4000);
     if (!real && window.__installMock) window.__installMock();
+    BootSeq.stage(real ? "Connected to systems" : "Demo mode");
 
     buildSetup();
     buildRail();
@@ -3589,6 +3617,8 @@
     if (init.avatar) applyAvatarMode(init.avatar);
     if (init.compact) { S.compact = true; document.body.classList.add("compact"); }
     if (typeof init.muted === "boolean") applyMuted(init.muted);
+    $("bootName").textContent = S.assistantName.toUpperCase();
+    BootSeq.stage("Interface ready");
     applyState("LISTENING");
     startParticles();
     refreshHomeTiles();
@@ -3598,6 +3628,7 @@
     // missed (backend restart, tab asleep) without any real cost.
     setInterval(loadPc, 20000);
     api.window("announce_ready").catch(() => {});
+    BootSeq.done();
     if (!S.configured) {
       $("setupVeil").hidden = false;
     } else if (!init.guide_seen) {

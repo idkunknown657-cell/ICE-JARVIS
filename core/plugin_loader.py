@@ -59,6 +59,51 @@ class PluginRegistry:
         # the user has to know about are sent to it. Defaults to dropping them,
         # which keeps every existing single-sink caller working unchanged.
         self._notify = notify or (lambda _msg: None)
+        # Remembered so reload() can re-scan the same place under the same rules
+        # without main.py having to pass anything back in. See reload().
+        self._plugins_dir: Optional[Path] = None
+        self._core_tool_names: set[str] = set()
+
+    # -- introspection --
+    def plugins(self) -> dict[str, PluginRecord]:
+        """The valid plugins, by name. A snapshot copy: callers (the skill
+        registry's matcher, the settings UI) must not be able to mutate the live
+        table by accident."""
+        return dict(self._plugins)
+
+    def reload(self) -> int:
+        """Re-scan the plugin folder and swap the results in place.
+
+        This is what makes a newly forged skill usable in the same session that
+        created it. The registry object identity is preserved on purpose: main.py
+        holds this instance, references it from the UI hooks
+        (get_plugins / get_plugin_settings) and reads it on every tool call, so
+        replacing the object would leave those holding a stale table. Mutating it
+        in place means the next `get_tool_declarations()` and the next `run()`
+        both see the new plugin — no restart, no re-import of main.
+
+        Returns the number of valid plugins now known. Never raises: a folder that
+        has gone missing leaves the previous table intact, because losing every
+        tool is a far worse outcome than not gaining one.
+        """
+        if self._plugins_dir is None:
+            return len(self._plugins)
+        try:
+            fresh = discover_plugins(
+                plugins_dir=self._plugins_dir,
+                core_tool_names=self._core_tool_names,
+                logger=self._logger,
+                notify=self._notify,
+                _register=False,     # this IS the registration; do not recurse
+            )
+        except Exception as e:
+            self._logger(f"Plugin reload failed, keeping the current set: {e}")
+            return len(self._plugins)
+        self._plugins = fresh._plugins
+        self._all_records = fresh._all_records
+        self._plugins_dir = fresh._plugins_dir
+        self._core_tool_names = fresh._core_tool_names
+        return len(self._plugins)
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
@@ -137,6 +182,18 @@ class PluginRegistry:
                 "enabled": get_plugin_enabled(rec.name) if rec.valid else False,
             })
         return out
+
+
+# The registry main.py built at startup. Held here so modules that are not
+# handed a reference — the forge, the skill matcher — can still see (and, after
+# a forge, refresh) the live tool table without main.py growing a parameter for
+# every new caller.
+_active_registry: Optional["PluginRegistry"] = None
+
+
+def active_registry() -> Optional["PluginRegistry"]:
+    """The live plugin registry, or None in tests / headless use."""
+    return _active_registry
 
 
 def _call_run(run_fn, parameters, player, session_memory):
@@ -220,14 +277,19 @@ def _load_error(path: Path, plugins_dir: Path, exc: Exception) -> str:
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
                       logger: Callable[[str], None] = print,
-                      notify: Callable[[str], None] | None = None) -> PluginRegistry:
+                      notify: Callable[[str], None] | None = None,
+                      _register: bool = True) -> PluginRegistry:
     """
     Scans plugins_dir for *.py files (skips files starting with '_', e.g. __init__.py,
     _template.py, and any shared-helper modules an author prefixes with '_').
     Import errors, validation errors, and name collisions are logged and the offending
     file is skipped — they NEVER raise out of this function and never abort the scan
     of remaining files.
+
+    The first registry built becomes the process-wide `active_registry()`; a
+    reload() passes _register=False so that re-scanning never moves the handle.
     """
+    global _active_registry
     plugins_dir.mkdir(parents=True, exist_ok=True)
     valid: dict[str, PluginRecord] = {}
     all_records: list[PluginRecord] = []
@@ -274,6 +336,10 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
     notify = notify or (lambda _msg: None)
     registry = PluginRegistry(valid, logger, notify)
     registry._all_records = all_records
+    registry._plugins_dir = plugins_dir
+    registry._core_tool_names = set(core_tool_names)
+    if _register:
+        _active_registry = registry
     rejected = len(all_records) - len(valid)
     logger(f"Plugin discovery complete: {len(valid)} active, "
            f"{rejected} rejected, {len(all_records)} total.")

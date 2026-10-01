@@ -2084,7 +2084,7 @@ body[data-training="1"] .fx-aurora { filter: blur(1.6px) saturate(1.25) hue-rota
    (70) and the toasts (65, raised on the next line) so a toast about a real
    event is never hidden by a tutorial. */
 .guide-veil {
-  position: fixed; inset: 0; z-index: 68;
+  position: fixed; inset: 0; z-index: 80;
   display: grid; place-items: center; padding: 22px;
   background: rgba(2, 4, 9, 0.74); backdrop-filter: blur(9px);
   animation: guideVeil .26s ease both;
@@ -2309,4 +2309,82 @@ body.guiding #app { filter: blur(1.4px) saturate(0.85); transform: scale(0.996);
   .guide-card, .guide-veil { animation: none !important; }
   .dock-mic .dock-ring { transition: none; transform: none; }
   body.guiding #app { filter: none; transform: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BOOT SEQUENCE — the start animation between the click and the workspace.
+   It reads like the rest of the HUD: one core that breathes, a name, and a
+   stage line that only ever shows a milestone the boot actually reached.
+   app.js dismisses it on a timer no matter what, so nothing here can trap
+   the app; under reduced motion the rings hold still and every word stays. */
+.boot-veil {
+  position: fixed; inset: 0; z-index: 90;
+  display: grid; place-items: center; align-content: center; gap: 14px;
+  background:
+    radial-gradient(520px 340px at 50% 44%, rgba(var(--pri-rgb), 0.05), transparent 70%),
+    var(--bg);
+  transition: opacity .5s var(--out, ease), visibility 0s linear .5s;
+}
+.boot-veil.is-gone { opacity: 0; visibility: hidden; pointer-events: none; }
+
+.boot-core {
+  position: relative; width: 96px; height: 96px;
+  display: grid; place-items: center;
+}
+.boot-core b {
+  width: 30px; height: 30px; border-radius: var(--r-full, 50%);
+  background: radial-gradient(circle at 38% 32%,
+              rgba(255, 255, 255, 0.85), var(--pri) 46%, var(--pri-dim) 100%);
+  box-shadow: 0 0 34px rgba(var(--pri-rgb), 0.55);
+  animation: bootBreathe 1.9s ease-in-out infinite;
+}
+.boot-core i {
+  position: absolute; inset: 0; border-radius: var(--r-full, 50%);
+  border: 1.5px solid rgba(var(--pri-rgb), 0.4);
+  animation: bootRing 2.6s cubic-bezier(.22, 1, .36, 1) infinite;
+}
+.boot-core i:nth-child(2) { animation-delay: .85s; }
+.boot-core i:nth-child(3) { animation-delay: 1.7s; }
+@keyframes bootRing {
+  from { transform: scale(.42); opacity: .9; }
+  to   { transform: scale(1.02); opacity: 0; }
+}
+@keyframes bootBreathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.12); }
+}
+
+.boot-name {
+  font-size: 15px; font-weight: 750; letter-spacing: 6px;
+  color: var(--text); text-indent: 6px;   /* balance the tracking */
+}
+.boot-stage {
+  min-height: 18px; font-size: 11px; letter-spacing: 2.2px;
+  color: var(--text-med); text-transform: uppercase;
+  transition: color .3s ease;
+}
+.boot-stage.is-done { color: var(--green); }
+
+.boot-steps {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: flex; gap: 10px;
+}
+.boot-steps li {
+  width: 26px; height: 3px; border-radius: 2px;
+  background: rgba(var(--pri-rgb), 0.14);
+  overflow: hidden; position: relative;
+}
+.boot-steps li::after {
+  content: ""; position: absolute; inset: 0;
+  background: var(--pri);
+  transform: translateX(-101%);
+  transition: transform .5s var(--out, ease);
+}
+.boot-steps li.is-on::after { transform: translateX(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-core b, .boot-core i { animation: none; }
+  .boot-core i { opacity: 0; }
+  .boot-core i:first-child { opacity: 0.55; }
+  .boot-veil { transition: opacity .2s ease; }
 }

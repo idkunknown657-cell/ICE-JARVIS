@@ -420,6 +420,86 @@
     });
   }
 
+  /* The install walkthrough on install.html. Four stages light up in order,
+     each with one line of what is happening at that moment.
+
+     Everything it reveals is already written on the page: the stages, their
+     descriptions and the note text all live in the markup, so a reader with
+     scripting off — or with reduced motion on, in which case this returns
+     immediately — sees the same four stages fully legible. Nothing here is
+     load-bearing, which is why it is allowed to be pretty. */
+  function installRun() {
+    var root = document.querySelector("[data-install-run]");
+    if (!root || calm) return;
+
+    var stages = [].slice.call(root.querySelectorAll("[data-install-stage]"));
+    var fill = root.querySelector("[data-install-fill]");
+    var play = root.querySelector("[data-install-play]");
+    if (!stages.length || !play) return;
+
+    var timers = [];
+    var running = false;
+
+    function reset() {
+      timers.forEach(clearTimeout);
+      timers = [];
+      stages.forEach(function (stage) {
+        stage.classList.remove("done", "active");
+        var note = stage.querySelector("[data-install-note]");
+        if (note) note.textContent = "";
+      });
+      if (fill) fill.style.width = "0%";
+      root.classList.remove("is-armed");
+    }
+
+    function play_() {
+      if (running) return;
+      running = true;
+      reset();
+      root.classList.add("is-armed");
+      play.disabled = true;
+
+      stages.forEach(function (stage, i) {
+        var notes = (stage.getAttribute("data-notes") || "").split("|");
+        var note = stage.querySelector("[data-install-note]");
+
+        timers.push(setTimeout(function () {
+          stage.classList.add("active");
+          if (note && notes[0]) note.textContent = notes[0];
+        }, i * 900));
+
+        timers.push(setTimeout(function () {
+          stage.classList.remove("active");
+          stage.classList.add("done");
+          if (note && notes[1]) note.textContent = notes[1];
+          if (fill) fill.style.width = ((i + 1) / stages.length) * 100 + "%";
+        }, i * 900 + 620));
+      });
+
+      timers.push(setTimeout(function () {
+        running = false;
+        play.disabled = false;
+        play.textContent = "Play it again";
+      }, stages.length * 900 + 200));
+    }
+
+    play.addEventListener("click", play_);
+
+    // Play itself the first time the block is actually looked at, because a
+    // walkthrough nobody notices may as well not be there. Once only: an
+    // animation that restarts every time you scroll past it is a nuisance.
+    if ("IntersectionObserver" in window) {
+      var once = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          once.unobserve(entry.target);
+          play_();
+        });
+      }, { threshold: 0.4 });
+      once.observe(root);
+    }
+  }
+
   /* ── boot ────────────────────────────────────────────────────────── */
   function boot() {
     revealScan(document);
@@ -427,6 +507,7 @@
     progressBar();
     countUp();
     demoTools();
+    installRun();
     support();
     ads();
   }

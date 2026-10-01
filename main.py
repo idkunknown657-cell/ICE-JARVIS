@@ -91,6 +91,7 @@ from core.emotion              import delivery_tag as _emotion_delivery
 from core.viseme               import VisemeStream
 from core.language             import language_directive, strip_transient_prefix
 from core.persona              import build_persona_block
+from core import learned_rules
 from core                      import learning as learning_mod
 from core                      import self_training
 from core                      import usage as usage_mod
@@ -766,6 +767,38 @@ TOOL_DECLARATIONS = [
     },
 ]
 
+class _SkillPackages:
+    """A skill package in skills/<name>/ presented as one more tool source.
+
+    Same three methods the action and plugin registries expose, so the dispatch
+    branch and the declaration list do not need to know which kind of tool they
+    are looking at. The real work lives in core/skill_registry.py; this exists
+    only so that "a package I dropped in" and "a plugin I dropped in" are the
+    same thing as far as main.py is concerned.
+
+    Reads the folder fresh on each call rather than caching: packages are user
+    data that can be added while JARVIS is running, and a scan of a usually-empty
+    directory is far cheaper than making someone restart to see their own skill.
+    """
+
+    def __init__(self, skills_dir=None):
+        self._dir = skills_dir
+
+    def _registry(self):
+        from core import skill_registry
+        return skill_registry
+
+    def get_tool_declarations(self) -> list:
+        return self._registry().vault_declarations()
+
+    def has(self, name: str) -> bool:
+        registry = self._registry()
+        return any(skill.name == name for skill in registry.active_vault_skills())
+
+    def run(self, name: str, parameters: dict, player=None) -> str:
+        return self._registry().run_vault_skill(name, parameters or {})
+
+
 class _ReconnectSignal(Exception):
     """Raised inside the session TaskGroup to force a clean, voluntary reconnect
     (e.g. the user picked a new voice — the voice is fixed at connect time, so
@@ -986,6 +1019,10 @@ class JarvisLive:
             logger=lambda msg: print(f"[Plugins] {msg}"),
             notify=lambda msg: self.ui.write_log(f"SYS: {msg}"),
         )
+        # Skill packages: a thin façade over core/skill_registry.py that exposes
+        # exactly the three things main.py needs — declarations, membership and
+        # dispatch — so a package in skills/ behaves like any other tool.
+        self._skill_registry = _SkillPackages()
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
@@ -1485,10 +1522,19 @@ class JarvisLive:
         # the host, the capability list from the registries that were just
         # discovered. Rename the assistant, add a plugin or move to another OS
         # and this follows without anyone editing a prompt.
+        # Skill packages (skills/<name>/ with a manifest) are a third source of
+        # tools, alongside the inline ones, actions/ and plugins/. They are added
+        # last so a bundle can never shadow a bundled tool with the same name.
+        try:
+            _vault_decls = self._skill_registry.get_tool_declarations()
+        except Exception as _vault_err:
+            print(f"[JARVIS] skill packages unavailable: {_vault_err}")
+            _vault_decls = []
         _all_decls = _sanitize_tool_declarations(
             TOOL_DECLARATIONS
             + self._action_registry.get_tool_declarations()
-            + self._plugin_registry.get_tool_declarations())
+            + self._plugin_registry.get_tool_declarations()
+            + _vault_decls)
         _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
@@ -1539,6 +1585,15 @@ class JarvisLive:
                 parts.append(digest)
         except Exception as e:
             print(f"[JARVIS] training digest skipped: {e}")
+        # Standing instructions the user set on purpose ("always open links in
+        # Chrome"). Kept separate from the inferred lessons above because these
+        # are rules, not guesses — see core/learned_rules.py.
+        try:
+            rules_block = learned_rules.prompt_block()
+            if rules_block:
+                parts.append(rules_block)
+        except Exception as e:
+            print(f"[JARVIS] standing instructions skipped: {e}")
         parts.append(sys_prompt)
 
         cfg = dict(
@@ -1812,12 +1867,26 @@ class JarvisLive:
                         lambda: self._plugin_registry.run(name, args, player=self.ui, session_memory=None)
                     )
                     result = r or "Done."
+                elif self._skill_registry.has(name):
+                    r = await loop.run_in_executor(
+                        None,
+                        lambda: self._skill_registry.run(name, args, player=self.ui)
+                    )
+                    result = r or "Done."
                 else:
                     result = f"Unknown tool: {name}"
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
+            # Hand the traceback to the self-repair engine while it is still
+            # fresh. This is the path most real failures come down, so without
+            # this line "fix that" would have nothing to work from.
+            try:
+                from core import self_heal as _heal
+                _heal.note_error(traceback.format_exc(), context=f"tool {name}")
+            except Exception:
+                pass
             self.speak_error(name, e)
 
         if not self.ui.muted:
@@ -3291,6 +3360,17 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print("[JARVIS] Connected.")
+                    # A working session is the proof a self-patch did not break
+                    # the boot: core/boot_sentry.py undoes the last patch at
+                    # startup if the run that carried it never got this far, so
+                    # this is the line that retires the watch. Silent when there
+                    # is nothing pending, which is almost always.
+                    try:
+                        from core import boot_sentry as _sentry
+                        if _sentry.mark_healthy():
+                            self.ui.write_log("SYS: Self-repair patch confirmed good.")
+                    except Exception as _sentry_err:
+                        print(f"[JARVIS] boot sentry: {_sentry_err}")
                     if _resumed_with:
                         # Say it plainly: the difference between "it reconnected"
                         # and "it reconnected and still knows what we were doing"
@@ -3454,6 +3534,16 @@ class JarvisLive:
 
 def main():
     _enable_file_log()
+    # Before anything else loads: if a self-patch stopped the last run from
+    # starting, put the previous version back now (core/boot_sentry.py). Silent
+    # when nothing is pending.
+    try:
+        from core import boot_sentry
+        recovery = boot_sentry.check_and_recover()
+        if recovery.get("recovered"):
+            print(f"[JARVIS] {recovery.get('message', '')}")
+    except Exception as _recovery_error:
+        print(f"[JARVIS] boot sentry unavailable: {_recovery_error}")
     ui = JarvisUI("face.png")
 
     def runner():
@@ -3467,6 +3557,13 @@ def main():
             # Never die silently: full traceback goes to logs/jarvis.log
             # (stdout/stderr are redirected there by _enable_file_log).
             traceback.print_exc()
+            # Keep the traceback in memory too, so the next run can offer to fix
+            # it rather than making the user read logs/jarvis.log out loud.
+            try:
+                from core import self_heal as _heal
+                _heal.note_error(traceback.format_exc(), context="fatal")
+            except Exception:
+                pass
             try:
                 ui.write_log("ERR: JARVIS stopped unexpectedly — see logs/jarvis.log")
                 ui.set_state("SLEEPING")

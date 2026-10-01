@@ -1,6 +1,129 @@
 # Changelog — ICE JARVIS
 
-All notable changes to **ICE JARVIS**, the real-time voice AI assistant.
+All notable changes to **ICE JARVIS**, the real-time voice assistant.
+
+## 1.2.0 — it can teach itself a new skill, and repair its own crashes
+
+Until now every kind of self-improvement in JARVIS reacted to *what the user
+said*: it inferred preferences, wrote lessons after a conversation, drilled its
+weakest capabilities while idle. All of that remains. This release adds the two
+things that were missing, and they are the two the assistant notices most.
+
+### It can write itself a new tool
+
+Ask for a capability it does not have — *"learn how to check my internet
+speed"* — and it writes the tool, proves it works, and answers the original
+request with it in the same breath. No restart, no plugin to find.
+
+- **`core/skill_forge.py`** runs the pipeline: the reasoning model writes one
+  plugin, it lands in `config/forge_staging/` (**never** straight into
+  `plugins/`, where a half-written file would be imported at the next boot),
+  and it is only moved live once every gate has passed. A candidate that fails
+  gets up to two repair rounds, each told exactly what the previous attempt did
+  wrong.
+- **`core/skill_crucible.py`** is the gate, and it is four checks in cheapest
+  order: **shape** (does it declare a tool contract at all), **safety** (a
+  documented screen for the handful of things model-written code must never do —
+  repartition a disk, touch System32, rewrite JARVIS's own source, read the API
+  key store, install itself at login), **imports** (everything it needs must
+  already be installed — nothing is ever `pip install`ed on the user's behalf),
+  and **behaviour** (executed once in a fresh interpreter with a trimmed
+  environment and a hard timeout, so nothing it does can reach the running
+  assistant). Two shipped plugins are verified by this gate in the test suite, so
+  it is a description of the real contract rather than an aspiration.
+- **`core/skill_registry.py`** keeps the record: what was written, when, the
+  verdict that let it through, how often it has been used, how it last failed.
+  It also loads **skill packages** — the folder layout in the new
+  [`skills/`](skills/README.md) — and routes a spoken sentence to the right skill
+  with no model call at all: triggers, aliases, names and descriptions are scored
+  deterministically, with a threshold high enough that a weak match returns
+  nothing rather than running the wrong tool silently.
+- **Two switches, because "may it write code" and "may that code go live
+  unwatched" are different questions.** Both default to on, and both are gated by
+  the memory switch — someone who has turned memory off has said they do not want
+  the assistant accumulating things on its own, and writing executable code is
+  the largest version of that.
+
+### It can repair its own crashes
+
+A traceback used to be something the user read out of `logs/jarvis.log`.
+
+- **`core/self_heal.py`** finds the innermost frame that belongs to this
+  installation (frames in libraries are skipped — the right answer to a bug in
+  someone else's package is to work around it, never to edit it), shows the
+  reasoning model the code around the failing line, and asks for the *smallest*
+  replacement. The result has to parse *and* compile before a byte is written, a
+  timestamped backup is taken first, and a write that fails to compile is rolled
+  back on the spot.
+- **It proposes rather than acts.** By default a validated patch goes behind the
+  same on-screen confirmation every irreversible action uses, so the person sees
+  what is about to change. `self_heal_auto` in settings turns that off for a
+  fully hands-off repair; both paths run identical validation.
+- **A hardcoded list is never patched by anyone** — the updater, the rollback
+  machinery itself, the permission gate, the tool loaders and `main.py`. A patch
+  engine that can edit the thing that would undo it is not a safety feature, and
+  "why won't you fix that one" now has a real answer.
+- **`core/boot_sentry.py`** closes the one hole self-repair cannot: a patch that
+  stops JARVIS from *starting*. Applying a patch arms a watch; reaching a working
+  session retires it; starting with the watch still armed means the patched run
+  never came up, so the backup is restored before anything else loads and the
+  patch log stops claiming the patch is live.
+- **`core/error_recovery.py`** decides what to do about a failed step — retry,
+  skip, replan or abort — from the actual error text, which is the difference
+  between a network blip and a request that cannot be met. Three invariants hold
+  whatever the model says: nothing critical is skipped, nothing is retried past
+  the attempt budget, and anything touching money, passwords or credentials
+  aborts. The unsafe-phrase list is deliberately made of phrases rather than
+  words, because the first draft aborted a task on *"failed in order to parse the
+  response"* and *"invalid format string"*.
+
+### Standing instructions it actually keeps
+
+- **`core/learned_rules.py`** stores the instructions a user states on purpose —
+  *"always open links in Chrome"*, *"reply in Hindi"*, *"never move files out of
+  my Downloads folder"* — and puts them into the system instruction of every
+  session. They are separate from the inferred preferences in `memory/` for a
+  reason: an inferred style note that turns out wrong should fade, while an
+  explicit rule that turns out wrong has to be **visible**, with an id, so
+  *"forget rule 3"* is a thing that can be said. Add, list, switch off, delete.
+- **Secrets are refused.** Rules ride into every prompt and are written to a plain
+  JSON file, so a password or API key pasted here would be echoed to the model on
+  every turn and left sitting in `config/`. The refusal says why and points at the
+  API key settings. A rule *about* passwords (*"never type my password into a
+  form"*) is still allowed — it is describing an action, not carrying a secret.
+
+### Two smaller ones
+
+- **`core/window_context.py`** answers "which window is in front, and where" —
+  title, process, rectangle — and can capture just that window. It is what makes
+  *"summarise this"* specific instead of a screenshot of the whole desktop. It
+  returns a full empty shape on any platform it cannot read, so callers never
+  branch and nothing raises on a headless machine.
+- **`plugins/internet_speed_test.py`** measures latency, download and upload and
+  says whether the result is good — plus the first self-taught-style capability
+  shipped as a real plugin, using nothing but `requests`.
+
+### Tests: 1307 → 1628
+
+321 new tests, all of them about the refusals rather than the happy path. The
+crucible has one test per banned capability. The forge is tested against a model
+that writes destructive code, a model that writes code twice as broken as the
+first time, and a name collision — which must never overwrite a plugin that
+already works. The patch engine is tested against a target that appears twice, a
+patch that will not compile and a missing backup, each asserting the original file
+comes out byte-identical. The boot sentry is tested for the false positive it must
+never have. Two of these tests found real bugs while being written: a forged skill
+taking a name the loader reserves would have been published but never loadable,
+and the word `order` in an error message would have aborted a task.
+
+Also in this release: the previous website work (a landing page with the real
+interface on it, an install guide, a downloads page that reads the release API, a
+light theme, motion that cannot hide content without JavaScript, a privacy policy
+and 33 tests holding all of it honest) — plus a four-stage walkthrough of the
+install itself on the install page, and a start sequence in the app: the moment
+the exe opens, a boot screen walks the milestones the startup actually reaches
+(bridge, interface, online) and steps aside on its own even if the backend never
+comes up, so it can decorate a launch but never trap one.
 
 ## Unreleased — a website, and downloads you can prove
 

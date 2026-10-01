@@ -397,6 +397,25 @@
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </div>
 
+<!-- ══════════════ BOOT ══════════════
+     The start sequence between the click and the workspace. Every stage it
+     shows is a milestone the boot actually reached (bridge, systems, ready),
+     lit by app.js — it is a status readout, not a decorative bar pretending
+     time is passing. It clears itself on a timer no matter what, so a stuck
+     backend can never trap the app behind it, and with reduced motion the
+     words remain, only the animation stops. Outside #app, like the tour
+     below, because the tour blurs that whole subtree. -->
+<div class="boot-veil" id="bootVeil" role="status" aria-live="polite">
+  <div class="boot-core" aria-hidden="true"><i></i><i></i><i></i><b></b></div>
+  <div class="boot-name" id="bootName">JARVIS</div>
+  <div class="boot-stage" id="bootStage">Waking up…</div>
+  <ol class="boot-steps" aria-hidden="true">
+    <li data-boot-step></li>
+    <li data-boot-step></li>
+    <li data-boot-step></li>
+  </ol>
+</div>
+
 <!-- ══════════════ FIRST-RUN TOUR ══════════════
      Deliberately a SIBLING of #app, not a child. `body.guiding #app` applies a
      filter to push the app back while the tour is up, and a CSS filter blurs

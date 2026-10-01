@@ -55,7 +55,7 @@ BUILD_META = INSTALLER / "build"
 # scanning that folder for *.py files, baking it in as compiled modules leaves it
 # empty. (dashboard/ is not here: its pages are resolved relative to the module,
 # so jarvis.spec ships them inside the package instead.)
-DATA_DIRS = ("ui_web", "assets", "plugins", "actions")
+DATA_DIRS = ("ui_web", "assets", "plugins", "actions", "skills")
 DATA_FILES = ("VERSION", "readme.md", "LICENSE", "CHANGELOG.md")
 
 # Paths that must never reach a user's download.
@@ -262,7 +262,15 @@ def clean_payload(version: str, audit: dict) -> None:
                 pass
     for rel in ("config/api_keys.json", "config/certs", "logs", "update_staging",
                 ".autostart_flag", "apply_update.bat", "JARVIS-build.json",
-                "preview_bundle.html"):
+                "preview_bundle.html",
+                # state the self-forge / self-repair systems write at runtime:
+                # skills the forge published, patches it applied, boot-sentry
+                # watches, learned rules — all of it is per-user, none of it
+                # belongs in a download (config/*.json never travels anyway;
+                # this is the belt under those braces).
+                "config/skills.json", "config/patches.json",
+                "config/patch_watch.json", "config/patch_backups",
+                "config/forge_staging", "config/learned_rules.json"):
         target = PAYLOAD / rel
         try:
             if target.is_dir():

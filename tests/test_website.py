@@ -477,5 +477,118 @@ class DemoIsGeneratedTest(unittest.TestCase):
         self.assertIn("real interface", html)
 
 
+class InstallAnimationTest(unittest.TestCase):
+    """The walkthrough on install.html, and the rules it has to obey.
+
+    This is the one piece of the site that exists to be watched, so the risk is
+    specific: an animation is the easiest place to accidentally hide content
+    from a reader who cannot or will not run it. Every check below is about that
+    — the four stages must be legible with scripting off, must not move for
+    someone who asked for reduced motion, and must describe the install that
+    actually happens rather than a prettier one.
+    """
+
+    def setUp(self):
+        self.html = read(DOCS / "install.html")
+        self.js = read(DOCS / "site.js")
+        self.css = read(DOCS / "style.css")
+
+    def test_the_walkthrough_is_on_the_install_page(self):
+        self.assertIn("data-install-run", self.html)
+        self.assertEqual(len(re.findall(r"<li[^>]*data-install-stage", self.html)), 4,
+                         "the walkthrough needs exactly its four stages")
+
+    def test_the_four_stages_are_the_four_real_stages(self):
+        """If the install changes, this page is a lie, so the stages are pinned
+        by name."""
+        for word in ("Download", "Verify", "Install", "First run"):
+            with self.subTest(stage=word):
+                self.assertIn(">%s<" % word, self.html)
+
+    def test_it_names_the_verification_it_claims_to_do(self):
+        """An "install" animation that skipped the checksum step would be a
+        nicer story than the true one."""
+        self.assertIn("SHA-256", self.html)
+        self.assertIn("SHA256SUMS.txt", self.html)
+
+    def test_the_stages_are_readable_with_scripting_off(self):
+        """Every stage and its description must be in the markup, not written
+        in by the script. The animation only adds a class."""
+        section = re.search(r'<div class="install-run".*?</div>\s*</section>',
+                            self.html, re.S)
+        self.assertIsNotNone(section, "the walkthrough block is not in the page")
+        body = section.group(0)
+        self.assertEqual(len(re.findall(r"<b>[^<]+</b>", body)), 4,
+                         "each stage needs its name in the markup")
+        self.assertGreaterEqual(body.count("<span>"), 4,
+                                "each stage needs its explanation in the markup")
+
+    def test_nothing_is_dimmed_or_hidden_unless_the_script_is_running(self):
+        """The dimming rule has to be scoped to html.js — that class is only
+        added by JS, so a reader without it can never receive a half-faded list."""
+        for rule in re.findall(r"[^{}]*install-run[^{}]*\{[^}]*\}", self.css):
+            if "opacity" in rule and "html.js" not in rule:
+                self.fail("an opacity rule on the walkthrough is not scoped to "
+                          "html.js, so it dims content with scripting off: %s" % rule)
+        self.assertIn("html.js .install-run.is-armed", self.css)
+
+    def test_the_note_line_is_empty_in_the_markup(self):
+        """The live "what is happening now" line is filled in by the script.
+        Shipping it pre-filled with "waiting" would show a no-JS reader a state
+        that is not real."""
+        notes = re.findall(r'<span class="note" data-install-note>([^<]*)</span>',
+                           self.html)
+        self.assertTrue(notes, "the per-stage note element is missing")
+        for value in notes:
+            with self.subTest(value=value):
+                self.assertEqual(value.strip(), "")
+        self.assertIn(".install-stages li .note:empty", self.css,
+                      "an empty note must not leave a gap")
+
+    def test_the_script_does_nothing_when_motion_is_reduced(self):
+        body = self.js[self.js.index("function installRun"):]
+        body = body[:body.index("function boot")]
+        self.assertIn("if (!root || calm) return;", body,
+                      "the walkthrough must bail out for reduced motion before "
+                      "it touches the DOM")
+
+    def test_reduced_motion_leaves_the_stages_fully_opaque(self):
+        block = self.css[self.css.index("@media (prefers-reduced-motion: reduce)"):]
+        self.assertIn("html.js .install-run.is-armed .install-stages li { opacity: 1; }",
+                      block)
+        self.assertIn(".btn-sheen::after { display: none; }", block)
+
+    def test_the_control_is_a_real_button(self):
+        """It changes no navigation and must not be reachable as a link."""
+        self.assertIn('<button class="btn btn-ghost" type="button" data-install-play>',
+                      self.html)
+
+    def test_the_play_button_is_useless_under_reduced_motion_so_it_is_hidden(self):
+        block = self.css[self.css.index("@media (prefers-reduced-motion: reduce)"):]
+        self.assertIn(".install-actions button { display: none; }", block)
+
+    def test_it_plays_once_and_stops(self):
+        """An animation that restarts on every scroll past is a nuisance, so
+        the observer unobserves itself after the first run."""
+        body = self.js[self.js.index("function installRun"):]
+        body = body[:body.index("function boot")]
+        self.assertIn("once.unobserve(entry.target)", body)
+
+    def test_the_download_button_gets_the_sheen(self):
+        html = read(DOCS / "download.html")
+        self.assertIn("btn-sheen", html)
+        sheen = re.search(r"\.btn-sheen::after\s*\{[^}]*\}", self.css)
+        self.assertIsNotNone(sheen, "the sheen has no styling")
+        self.assertIn("animation", sheen.group(0))
+
+    def test_the_walkthrough_adds_no_third_party_resource(self):
+        """Links out are fine and several are useful; *fetching* from elsewhere
+        is not, because this page is the one that explains the installer."""
+        for attr, url in re.findall(r'\b(src)="((?:https?:)?//[^"]+)"', self.html):
+            with self.subTest(attr=attr, url=url[:60]):
+                self.fail("the install page now loads %s over the network" % url)
+        self.assertNotIn("@import", self.css)
+
+
 if __name__ == "__main__":
     unittest.main()

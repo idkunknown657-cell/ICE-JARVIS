@@ -982,6 +982,61 @@ def save_memory_enabled(enabled: bool) -> None:
     _save_flag("memory_enabled", enabled)
 
 
+# ── Self-forge (writing a new tool for itself) ────────────────────────────────
+# The largest kind of self-improvement: on "learn how to do X", JARVIS writes a
+# new plugin, proves it in the crucible sandbox (core/skill_crucible.py) and —
+# once it passes — can use it in the same conversation. Two switches, because
+# "may it write code" and "may that code go live unwatched" are different
+# questions, and a user can reasonably answer yes to the first and no to the
+# second.
+
+def get_self_forge_enabled() -> bool:
+    """Whether JARVIS may write a brand-new tool for itself.
+
+    On by default and gated by memory, like every other learning feature: a user
+    who switched memory off has said they do not want the assistant
+    accumulating things on its own, and writing executable code is the largest
+    version of that.
+    """
+    return bool(load_api_keys().get("self_forge_enabled", True)) \
+        and get_memory_enabled()
+
+
+def save_self_forge_enabled(enabled: bool) -> None:
+    _save_flag("self_forge_enabled", enabled)
+
+
+def get_self_forge_auto() -> bool:
+    """Whether a skill that passed the crucible goes live immediately.
+
+    True (the default) is the whole feature: verified means usable. False holds
+    it in staging behind the on-screen confirmation gate instead, for anyone who
+    wants to read the generated code before it is allowed to run.
+    """
+    return bool(load_api_keys().get("self_forge_auto", True))
+
+
+def save_self_forge_auto(enabled: bool) -> None:
+    _save_flag("self_forge_auto", enabled)
+
+
+# ── Self-repair (fixing its own crashes) ─────────────────────────────────────
+# core/self_heal.py can rewrite a line of JARVIS's own code when a traceback
+# identifies a real bug. Unlike the other learning switches this one is OFF by
+# default, and that is the point: it is the only feature that can change the
+# program while it is running, so it proposes and waits rather than acting. Turn
+# it on and a validated patch is applied the moment it is ready.
+
+def get_self_heal_auto() -> bool:
+    """True = apply a validated self-patch immediately. False (default) = put it
+    behind the on-screen confirmation and change nothing until it is accepted."""
+    return bool(load_api_keys().get("self_heal_auto", False))
+
+
+def save_self_heal_auto(enabled: bool) -> None:
+    _save_flag("self_heal_auto", enabled)
+
+
 # ── Action verification ───────────────────────────────────────────────────────
 # After an AI-driven screen action (screen_click etc.) take a fresh screenshot
 # and ask the model whether the click actually achieved its goal, instead of
