@@ -296,14 +296,6 @@ These feeds are owned by their providers and remain under their own terms; ICE
 JARVIS neither bundles nor redistributes their data. Orbit figures (period,
 altitude, inclination) are derived from the published elements in your machine.
 
-**Credit.** The idea of gathering these particular public signals, and the shape
-of the questions worth asking them, comes from **[God's Eye View](https://github.com/bilawalsidhu/gods-eye-view)**
-by Bilawal Sidhu (MIT — © 2026 Bilawal Sidhu), which puts the same public data
-onto a browser globe. This is an independent Python implementation that talks to
-the providers directly; no code, UI, assets or bundled datasets from that project
-are copied or redistributed here. (Note that its bundled datasets carry separate,
-sometimes non-commercial licences — which is one reason none of them are used.)
-
 ## 📄 License
 
 See [LICENSE](LICENSE).
