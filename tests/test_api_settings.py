@@ -6,7 +6,6 @@ and PyQt6 can abort the whole process on that. These tests pin the hardened
 behaviour: nothing may raise for any garbage config.
 """
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -16,10 +15,10 @@ from unittest import mock
 TESTS_DIR = Path(__file__).resolve().parent
 ROOT = TESTS_DIR.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(TESTS_DIR))
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import ui  # noqa: E402  (needs sys.path + platform env first)
+import qt_env  # noqa: E402,F401  (platform + COM pinned before Qt loads)
+import ui  # noqa: E402  (needs sys.path + the Qt bootstrap first)
 import core.api_verify as api_verify  # noqa: E402,F401
 
 

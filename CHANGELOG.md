@@ -156,6 +156,28 @@ assistant keeps its own count.
   outranked by the memory switch, like every other thing the assistant
   accumulates.
 
+### Tests: 1655 → 1667
+
+Twelve of them guard [`tests/qt_env.py`](tests/qt_env.py), the bootstrap the
+widget tests now share, and they exist because of a crash that had nothing to
+read. A `tests` run on Python 3.13 died mid-suite with a bare *"Process
+completed with exit code 1"*: no traceback, no failing test, and 156 tests that
+never ran. Reproducing it by hand took faulthandler, because that is the only
+thing that can name a native fault.
+
+The cause was a COM apartment. PyQt6 releases its Windows objects while the
+garbage collector runs, and a release on a thread where COM was never
+initialized raises `0x800401F0` (`CO_E_NOTINITIALIZED`) — a Windows fatal
+exception with no Python frame to blame, raised at whatever moment the
+collector happens to run, which is why it looked like an unrelated test
+failing. Qt's Windows platform plugin calls `OleInitialize()` as it loads; the
+offscreen plugin the test suite uses never does, and nothing else in a headless
+test process did either. The bootstrap pins `QT_QPA_PLATFORM` for a machine
+with no display and opens an apartment before Qt is imported — and never calls
+`CoUninitialize()`, which would be the same crash one step later. The tests
+workflow now runs the suite with `faulthandler` enabled, so the next native
+fault prints where it happened instead of costing a run to find.
+
 ## Unreleased — a website, and downloads you can prove
 
 Until now the only way to get JARVIS was to find the right page on GitHub. Now

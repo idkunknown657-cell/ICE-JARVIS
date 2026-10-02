@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+TESTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS_DIR.parent))
+sys.path.insert(0, str(TESTS_DIR))
+
+import qt_env  # noqa: E402,F401  (platform + COM pinned before Qt loads)
 
 
 class CustomizeOverlayTest(unittest.TestCase):

@@ -27,7 +27,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      # Without this a native fault on the runner is a bare "exit code 1":
+      # no traceback, no failing test, nothing to read.  That is exactly how
+      # a Qt/COM crash was once reported, and it cost a whole run to find.
       - name: Run unit tests
         env:
           PYTHONIOENCODING: utf-8
+          PYTHONFAULTHANDLER: "1"
         run: python -m unittest discover -s tests -v
