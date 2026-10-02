@@ -2,6 +2,70 @@
 
 All notable changes to **ICE JARVIS**, the real-time voice assistant.
 
+## 1.2.1 — it notices what you keep asking for
+
+The skill forge waits to be told *"learn how to do X"*. Most people never say
+that, even the tenth time they have asked for the same thing by hand. So now the
+assistant keeps its own count.
+
+- **`core/skill_discovery.py`** watches two signals: what you actually say
+  (main.py records each completed utterance) and tool names the model reaches
+  for that do not exist — the model wishing a capability existed is a signal in
+  its own right. The counting is private, local and quiet: nothing is said,
+  sent or written anywhere but one JSON file.
+- **Repeats ripen into an offer.** When the same wish crosses three (two if it
+  was phrased as a wish — *"I wish you could…"*), the next session's system
+  instruction carries one line the model can act on naturally: it may offer,
+  once, to learn to do the thing itself. Making the offer is the act of reading
+  the candidate, so it can never nag — and the wording tells the model to stay
+  quiet when its existing tools already cover it. Questions are never recorded
+  (they are answers, not tasks), and anything a taught skill already does is
+  ignored, by name.
+- **"Yes, learn it" runs the real pipeline.** The `skill_discovery` tool
+  (list / forge / dismiss / forget / clear) hands the stored goal to the same
+  forge the spoken request uses, and a successful forge retires the candidate —
+  matched by wording overlap, so it works even when the model rephrases. A
+  failed forge leaves the candidate for a retry, and "no" only silences it.
+- **Secrets are refused**, with the same shapes as the standing instructions —
+  a candidate rides into a prompt, so a credential pasted as a "request" must
+  never be stored. The watch file is stripped from every payload build like the
+  other user state, and the switch (`skill_discovery_enabled`, on by default) is
+  outranked by the memory switch, like every other thing the assistant
+  accumulates.
+
+### Tests: 1655 → 1667
+
+Twelve of them guard [`tests/qt_env.py`](tests/qt_env.py), the bootstrap the
+widget tests now share, and they exist because of a crash that had nothing to
+read. A `tests` run on Python 3.13 died mid-suite with a bare *"Process
+completed with exit code 1"*: no traceback, no failing test, and 156 tests that
+never ran. Reproducing it by hand took faulthandler, because that is the only
+thing that can name a native fault.
+
+The cause was a COM apartment. PyQt6 releases its Windows objects while the
+garbage collector runs, and a release on a thread where COM was never
+initialized raises `0x800401F0` (`CO_E_NOTINITIALIZED`) — a Windows fatal
+exception with no Python frame to blame, raised at whatever moment the
+collector happens to run, which is why it looked like an unrelated test
+failing. Qt's Windows platform plugin calls `OleInitialize()` as it loads; the
+offscreen plugin the test suite uses never does, and nothing else in a headless
+test process did either. The bootstrap pins `QT_QPA_PLATFORM` for a machine
+with no display and opens an apartment before Qt is imported — and never calls
+`CoUninitialize()`, which would be the same crash one step later. The tests
+workflow now runs the suite with `faulthandler` enabled, so the next native
+fault prints where it happened instead of costing a run to find.
+
+A second native fault turned up while this release was being cut, and it was
+the other half of the same story: an access violation *inside the avatar's
+painter*, mid-suite. The widget tests build one full window per test and left
+each one to the garbage collector, so a collection could land while Qt was
+dispatching events to another window — and the avatar's painter is what
+triggers one, because it allocates numpy arrays on every frame. Each test now
+hides and deletes the window it made, flushing the deferred delete between
+tests with nothing painting. The suite got four times faster as a side effect
+(two hundred and five seconds to fifty-eight on this machine): most of that
+time was the undisposed windows, not the tests.
+
 ## 1.2.0 — it can teach itself a new skill, and repair its own crashes
 
 Until now every kind of self-improvement in JARVIS reacted to *what the user
@@ -116,69 +180,15 @@ never have. Two of these tests found real bugs while being written: a forged ski
 taking a name the loader reserves would have been published but never loadable,
 and the word `order` in an error message would have aborted a task.
 
-Also in this release: the previous website work (a landing page with the real
-interface on it, an install guide, a downloads page that reads the release API, a
-light theme, motion that cannot hide content without JavaScript, a privacy policy
-and 33 tests holding all of it honest) — plus a four-stage walkthrough of the
-install itself on the install page, and a start sequence in the app: the moment
-the exe opens, a boot screen walks the milestones the startup actually reaches
-(bridge, interface, online) and steps aside on its own even if the backend never
-comes up, so it can decorate a launch but never trap one.
+Also in this release: everything in the website section below, and two things on
+top of it. A four-stage walkthrough of the install itself on the install page —
+download, verify, install, first run, with the note that matters at each step.
+And a start sequence in the app: the moment the exe opens, a boot screen walks
+the milestones the startup actually reaches (bridge, interface, online) and steps
+aside on its own even if the backend never comes up, so it can decorate a launch
+but never trap one.
 
-## Unreleased — it notices what you keep asking for
-
-The skill forge waits to be told *"learn how to do X"*. Most people never say
-that, even the tenth time they have asked for the same thing by hand. So now the
-assistant keeps its own count.
-
-- **`core/skill_discovery.py`** watches two signals: what you actually say
-  (main.py records each completed utterance) and tool names the model reaches
-  for that do not exist — the model wishing a capability existed is a signal in
-  its own right. The counting is private, local and quiet: nothing is said,
-  sent or written anywhere but one JSON file.
-- **Repeats ripen into an offer.** When the same wish crosses three (two if it
-  was phrased as a wish — *"I wish you could…"*), the next session's system
-  instruction carries one line the model can act on naturally: it may offer,
-  once, to learn to do the thing itself. Making the offer is the act of reading
-  the candidate, so it can never nag — and the wording tells the model to stay
-  quiet when its existing tools already cover it. Questions are never recorded
-  (they are answers, not tasks), and anything a taught skill already does is
-  ignored, by name.
-- **"Yes, learn it" runs the real pipeline.** The `skill_discovery` tool
-  (list / forge / dismiss / forget / clear) hands the stored goal to the same
-  forge the spoken request uses, and a successful forge retires the candidate —
-  matched by wording overlap, so it works even when the model rephrases. A
-  failed forge leaves the candidate for a retry, and "no" only silences it.
-- **Secrets are refused**, with the same shapes as the standing instructions —
-  a candidate rides into a prompt, so a credential pasted as a "request" must
-  never be stored. The watch file is stripped from every payload build like the
-  other user state, and the switch (`skill_discovery_enabled`, on by default) is
-  outranked by the memory switch, like every other thing the assistant
-  accumulates.
-
-### Tests: 1655 → 1667
-
-Twelve of them guard [`tests/qt_env.py`](tests/qt_env.py), the bootstrap the
-widget tests now share, and they exist because of a crash that had nothing to
-read. A `tests` run on Python 3.13 died mid-suite with a bare *"Process
-completed with exit code 1"*: no traceback, no failing test, and 156 tests that
-never ran. Reproducing it by hand took faulthandler, because that is the only
-thing that can name a native fault.
-
-The cause was a COM apartment. PyQt6 releases its Windows objects while the
-garbage collector runs, and a release on a thread where COM was never
-initialized raises `0x800401F0` (`CO_E_NOTINITIALIZED`) — a Windows fatal
-exception with no Python frame to blame, raised at whatever moment the
-collector happens to run, which is why it looked like an unrelated test
-failing. Qt's Windows platform plugin calls `OleInitialize()` as it loads; the
-offscreen plugin the test suite uses never does, and nothing else in a headless
-test process did either. The bootstrap pins `QT_QPA_PLATFORM` for a machine
-with no display and opens an apartment before Qt is imported — and never calls
-`CoUninitialize()`, which would be the same crash one step later. The tests
-workflow now runs the suite with `faulthandler` enabled, so the next native
-fault prints where it happened instead of costing a run to find.
-
-## Unreleased — a website, and downloads you can prove
+### The website, and downloads you can prove
 
 Until now the only way to get JARVIS was to find the right page on GitHub. Now
 there is a site beside the repository — and it is built so that it can be wrong

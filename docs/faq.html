@@ -242,6 +242,14 @@
     </details>
 
     <details class="qa">
+      <summary>Can it add tools by itself, without me writing anything?</summary>
+      <div class="body">
+        <p>Yes. Ask for something it cannot do — <i>"learn how to check my internet speed"</i> — and it writes a plugin, screens it for the things model-written code must never do, runs it once in a separate interpreter with a trimmed environment and a hard timeout, and only then uses it to answer you. Nothing is installed on your behalf, and the file it wrote sits in <code>plugins/</code>, so you can read exactly what it did.</p>
+        <p>It also keeps a private, local count of what you keep asking for: cross the same request three times — twice if you phrase it as a wish — and it may offer, once, to learn it. Saying <i>"no"</i> silences that one for good, questions are never recorded, password-shaped text is refused, and the whole thing is off when memory is off.</p>
+      </div>
+    </details>
+
+    <details class="qa">
       <summary>Why is it called ICE?</summary>
       <div class="body">
         <p>Because a companion that is calm, clear and quietly capable felt like ice rather than fire — and because the core on the home screen looks better frozen than burning.</p>

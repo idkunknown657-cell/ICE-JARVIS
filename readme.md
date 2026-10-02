@@ -126,6 +126,9 @@ ICE is a full desktop AI assistant — conversational first, capable underneath.
 | **Email** | Reads and sends your real mail over IMAP/SMTP — inbox, unread, search, full message text, replies. No browser needed, and sending always waits for your confirmation |
 | **Microphone diagnostics** | Measures real input (not just "device exists"), checks Windows privacy gates, diagnoses the full chain — device → permission → capture → signal — with plain-language fixes |
 | **Self-training** | Keeps score of how its own clicks, keys and reads land, then practises the weakest one while you are quiet |
+| **Skills it writes itself** | Ask for something it cannot do — *"learn how to check my internet speed"* — and it writes the tool, screens it, proves it in a throwaway interpreter, and answers your request with it. It also keeps a private count of what you keep asking for and offers, once, to learn it |
+| **Self-repair** | Reads its own traceback, finds the failing line in its own files, and puts the smallest fix on screen for you to approve — a backup first, a compile check before anything is written, and a boot watch that restores the previous version if the fix stops it starting |
+| **Standing instructions** | *"Always open links in Chrome"*, *"reply in Hindi"*, *"never move files out of my Downloads folder"* — stated once, followed from then on, listed with ids so any one can be forgotten or switched off |
 | **Memory** | Remembers what matters locally, across sessions |
 | **Privacy** | Keys, memory and data stay on your machine — nothing leaves your PC |
 

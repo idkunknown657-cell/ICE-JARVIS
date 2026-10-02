@@ -57,7 +57,7 @@
     <a class="btn btn-main" href="https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe">⬇ Download ICE-Setup.exe</a>
     <a class="btn btn-ghost" href="https://github.com/idkunknown657-cell/ICE-JARVIS">★ Star on GitHub</a>
   </div>
-  <p class="ver">Latest release <b data-latest-tag>v1.2.0</b> · Windows 10/11 · no admin rights · no Python needed</p>
+  <p class="ver">Latest release <b data-latest-tag>v1.2.1</b> · Windows 10/11 · no admin rights · no Python needed</p>
 
   <div class="demo">
     <div class="demo-frame">
@@ -67,7 +67,7 @@
   </div>
 
   <div class="stats">
-    <div><b data-latest-version>1.2.0</b><span>latest release</span></div>
+    <div><b data-latest-version>1.2.1</b><span>latest release</span></div>
     <div><b>1667</b><span>tests passing</span></div>
     <div><b>3</b><span>languages spoken</span></div>
     <div><b>0</b><span>data leaves your PC</span></div>
@@ -77,32 +77,32 @@
 <main class="wrap" id="main">
 
   <section id="new">
-    <h2>What changed in <span data-latest-tag>v1.2.0</span></h2>
-    <p class="sub">Every release is built by GitHub Actions from a tagged commit, then verified before it is published. This one teaches JARVIS two things it could not do before: write itself a new tool, and repair its own crashes.</p>
+    <h2>What changed in <span data-latest-tag>v1.2.1</span></h2>
+    <p class="sub">Every release is built by GitHub Actions from a tagged commit, then verified before it is published. This one notices the things you keep asking for — and offers, once, to learn them.</p>
     <div class="grid">
       <div class="card">
-        <h4>It can learn a skill you ask for</h4>
-        <p>Ask for something it cannot do — <em>“learn how to check my internet speed”</em> — and it writes the tool, proves it works, and answers your original request with it. No restart, no plugin hunting. You can also just ask <em>“what have you taught yourself?”</em>.</p>
+        <h4>It keeps count, privately</h4>
+        <p>Ask for the same thing three times by hand and JARVIS notices; two is enough when you phrase it as a wish — <em>“I wish you could…”</em>. The count lives in one local file, and nothing is said, sent or uploaded because of it.</p>
       </div>
       <div class="card">
-        <h4>Nothing runs until it passes the gate</h4>
-        <p>Generated code is screened for the things it must never do — repartition a disk, touch System32, read your API keys, install itself at login — then executed once in a separate interpreter with a trimmed environment and a hard timeout. It never touches the running app until that passes. It also never installs packages on your behalf.</p>
+        <h4>Then it offers, once</h4>
+        <p>When a repeated request ripens, the next session carries one line the model may act on: an offer to learn the thing itself. Making the offer is what retires it, so it cannot nag — and a <em>“no”</em> silences that candidate for good.</p>
       </div>
       <div class="card">
-        <h4>A crash becomes a fix you approve</h4>
-        <p>When something breaks, it reads the traceback, finds the failing line <em>in its own files</em>, writes the smallest fix and puts it on screen for you to confirm. Library frames are skipped, a backup is taken first, and a patch that does not compile is rolled back on the spot. You can switch off the asking — or never allow it at all.</p>
+        <h4>“Yes, learn it” runs the real pipeline</h4>
+        <p>Saying yes hands your original request to the same forge that writes, screens, executes and proves a new tool — then answers the thing you actually asked for. A skill that lands retires the candidate even when the wording changed.</p>
       </div>
       <div class="card">
-        <h4>It survives its own mistakes</h4>
-        <p>The one failure it cannot repair from inside is a patch that stops it starting. So applying a patch arms a watch that is only retired once a session actually comes up — if it never does, the previous version is restored before anything else loads.</p>
+        <h4>Questions are not tasks</h4>
+        <p><em>“What is my battery at?”</em> is an answer you wanted, not a capability to learn, so questions are never recorded — and neither is anything an existing skill already does. Credential-shaped text is refused outright, because a candidate rides into a prompt.</p>
       </div>
       <div class="card">
-        <h4>Instructions it actually keeps</h4>
-        <p>“Always open links in Chrome”, “reply in Hindi”, “never move files out of my Downloads folder” — stated once, followed from then on, and listed so they can be switched off or deleted by name. Password-shaped text is refused outright, because these ride in every prompt.</p>
+        <h4>The same gate as everything else</h4>
+        <p>A discovered skill goes through the same screen as a hand-written one: no destructive capability, nothing installed on your behalf, one run in a throwaway interpreter with a hard timeout, and a timestamped backup before a single byte changes.</p>
       </div>
       <div class="card">
-        <h4>348 new tests, all about the refusals</h4>
-        <p>1667 tests on Python 3.13 and 3.14, plus a smoke test of the packaged <code>JARVIS.exe</code> before anything ships. The new ones are mostly about what must <em>not</em> happen: a destructive skill, a patch whose target appears twice, a name collision that must never overwrite a working plugin.</p>
+        <h4>1667 tests, and a crash that had no traceback</h4>
+        <p>1667 tests on Python 3.13 and 3.14, plus a smoke test of the packaged <code>JARVIS.exe</code> before a release is allowed out. The newest ones guard the fix for a run that kept dying mid-suite with no failing test at all — a Windows COM apartment — and CI now runs with <code>faulthandler</code> on, so a native fault names itself.</p>
       </div>
     </div>
     <p class="sub" style="margin-top:16px">
@@ -237,7 +237,7 @@ setup.bat        <span class="c"># Windows — installs everything and starts IC
   "description": "A local-first open-source voice assistant for Windows: natural English, Hindi and Hinglish conversation, full PC control by voice, local memory, and no telemetry.",
   "url": "https://idkunknown657-cell.github.io/ICE-JARVIS/",
   "downloadUrl": "https://github.com/idkunknown657-cell/ICE-JARVIS/releases/latest/download/ICE-Setup.exe",
-  "softwareVersion": "1.2.0",
+  "softwareVersion": "1.2.1",
   "license": "https://github.com/idkunknown657-cell/ICE-JARVIS/blob/main/LICENSE",
   "isAccessibleForFree": true,
   "author": { "@type": "Person", "name": "FatihMakes" },

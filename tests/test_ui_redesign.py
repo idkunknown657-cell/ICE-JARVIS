@@ -96,6 +96,26 @@ class MainWindowRedesignTest(unittest.TestCase):
             self.win._summon_hotkey.release()
         except Exception:
             pass
+        # One full window per test, and the old one is destroyed here rather
+        # than left to the garbage collector.  A collection that runs while Qt
+        # is dispatching events — the avatar's painter allocates numpy arrays
+        # every frame, which is what triggers one — took the process down with
+        # an access violation inside paintEvent, with no traceback and nothing
+        # failing.  Same family as the COM fault in tests/qt_env.py: what
+        # matters is *when* the object dies, not which object it is.  The
+        # deferred delete is flushed here, between tests, with nothing painting.
+        from PyQt6.QtCore import QEvent
+        from PyQt6.QtWidgets import QApplication
+        try:
+            # hide(), not close(): closeEvent quits the application when no
+            # tray icon exists, which is the case on every headless run.
+            self.win.hide()
+            self.win.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            QApplication.processEvents()
+        except Exception:
+            pass
+        self.wrap = None
 
     def test_two_view_workspace(self):
         self.assertEqual(self.win._app_stack.count(), 2)
